@@ -6,6 +6,8 @@ venv/
 
 # Environment variables / secrets
 .env
+instance/
+.pytest_cache/
 
 # IDE / OS
 .vscode/
