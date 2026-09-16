@@ -5,7 +5,6 @@ __pycache__/
 venv/
 
 # Environment variables / secrets
-.env
 instance/
 .pytest_cache/
 
