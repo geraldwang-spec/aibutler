@@ -9,7 +9,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from smartlife import create_app
+from app import create_app
 from records import CATALOG
 
 
@@ -125,7 +125,12 @@ class AppTests(unittest.TestCase):
     def test_quiz_ownership_scoring_and_snapshots(self):
         self.register(); self.login()
         sid,cid=self.create_question()
-        response=self.post('/quiz',{'subject_id':sid,'count':10,'mode':'模擬考'})
+        # 題目不足時必須阻擋，不可用實際題數縮水開考
+        shortage=self.post('/quiz',{'subject_id':sid,'count':10,'mode':'模擬考'})
+        self.assertEqual(shortage.status_code,200)
+        self.assertIn('只有 1 題',shortage.get_data(as_text=True))
+        self.assertEqual(len(self.sql('SELECT * FROM quiz_sessions')),0)
+        response=self.post('/quiz',{'subject_id':sid,'count':1,'mode':'模擬考'})
         location=response.location
         self.assertNotIn('only-after-submit',self.client.get(location).get_data(as_text=True))
         aid=self.sql('SELECT id FROM quiz_answers')[0]['id']

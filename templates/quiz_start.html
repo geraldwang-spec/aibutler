@@ -1,1 +1,68 @@
-{% extends 'live_base.html' %}{% block content %}<section class="panel-card"><h2>從自己的題庫開始練習</h2><p>只抽取所選科目的既有題目；不使用 AI 出題。題目不足時以實際題數開始。</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="form-grid"><label>科目<select name="subject_id" required><option value="">請選擇</option>{% for id,name in subjects %}<option value="{{ id }}">{{ name }}</option>{% endfor %}</select></label><label>模式<select name="mode"><option>練習</option><option>模擬考</option><option>錯題複習</option></select></label><label>題數<input type="number" name="count" value="10" min="1" max="100" required></label></div><button class="action">開始作答</button></form></section><section class="panel-card"><h2>測驗紀錄</h2>{% for row in sessions %}<div class="record-item"><a href="{{ url_for('quiz_take',sid=row.id) }}">#{{ row.id }} · {{ row.mode }} · {{ row.total_count }} 題 · {{ '查看成績' if row.finished_at else '繼續作答' }}</a></div>{% else %}<p>尚無測驗。</p>{% endfor %}</section>{% endblock %}
+{% extends 'live_base.html' %}
+{% block content %}
+<section class="panel-card">
+  <h2>模擬考設定</h2>
+  <p>依科目、章節與題型從既有題庫建立固定考卷；題目不足時不會縮水開考。</p>
+  {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
+  <form method="post">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <label>科目
+        <select name="subject_id" required>
+          <option value="">請選擇</option>
+          {% for id,name in subjects %}
+          <option value="{{ id }}" {% if selected.subject_id|string == id|string %}selected{% endif %}>{{ name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>模式
+        <select name="mode">
+          {% for mode in ['模擬考','練習','錯題複習'] %}
+          <option {% if selected.mode == mode %}selected{% endif %}>{{ mode }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>題數
+        <input type="number" name="count" value="{{ selected.count or 10 }}" min="1" max="100" required>
+      </label>
+      <label>出題順序
+        <select name="random_order">
+          <option value="1" {% if selected.random_order != '0' %}selected{% endif %}>隨機抽題</option>
+          <option value="0" {% if selected.random_order == '0' %}selected{% endif %}>依題庫順序</option>
+        </select>
+      </label>
+    </div>
+
+    <h3>章節範圍</h3>
+    <p><small>不勾選代表該科目全部章節；後端仍會驗證章節是否屬於所選科目。</small></p>
+    <div class="choice-grid">
+      {% for chapter in chapters %}
+      <label class="answer-choice">
+        <input type="checkbox" name="chapter_ids" value="{{ chapter.id }}" {% if chapter.id|string in selected.chapter_ids %}checked{% endif %}>
+        {{ chapter.subject_name }} / {{ chapter.chapter_name }}
+      </label>
+      {% else %}<p>尚無章節。</p>{% endfor %}
+    </div>
+
+    <h3>題型</h3>
+    <p><small>不勾選代表不限題型。</small></p>
+    <div class="choice-grid">
+      {% for q_type in question_types %}
+      <label class="answer-choice">
+        <input type="checkbox" name="q_types" value="{{ q_type }}" {% if q_type in selected.q_types %}checked{% endif %}>{{ q_type }}
+      </label>
+      {% endfor %}
+    </div>
+    <button class="action">建立考卷並開始作答</button>
+  </form>
+</section>
+
+<section class="panel-card">
+  <h2>測驗紀錄</h2>
+  {% for row in sessions %}
+  <div class="record-item">
+    <a href="{{ url_for('quiz_take',sid=row.id) }}">#{{ row.id }} · {{ row.subject_name }} · {{ row.mode }} · {{ row.total_count }} 題 · {{ '查看成績' if row.finished_at else '繼續作答' }}</a>
+  </div>
+  {% else %}<p>尚無測驗。</p>{% endfor %}
+</section>
+{% endblock %}
