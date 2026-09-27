@@ -74,10 +74,20 @@ def _question_to_percent(sql: str) -> str:
 
 
 class MariaCursor:
-    def __init__(self, cursor):
+    def __init__(self, cursor, connection=None):
         self._cursor = cursor
-        self.lastrowid = cursor.lastrowid
-        self.rowcount = cursor.rowcount
+        # PyMySQL Cursor implementations differ slightly across versions.
+        # Some expose ``lastrowid`` directly, while others only expose the
+        # connection's latest insert id.  Keep a SQLite-compatible attribute
+        # for existing application modules without assuming either shape.
+        lastrowid = getattr(cursor, "lastrowid", None)
+        if lastrowid is None and connection is not None:
+            try:
+                lastrowid = connection.insert_id()
+            except (AttributeError, TypeError):
+                lastrowid = None
+        self.lastrowid = lastrowid or 0
+        self.rowcount = getattr(cursor, "rowcount", -1)
 
     def _convert(self, row):
         if row is None:
@@ -107,12 +117,12 @@ class MariaConnection:
         # the actual writes.
         if sql.strip().upper() == "BEGIN IMMEDIATE":
             self._connection.begin()
-            return MariaCursor(self._connection.cursor())
+            return MariaCursor(self._connection.cursor(), self._connection)
 
         cursor = self._connection.cursor()
         try:
             cursor.execute(_question_to_percent(sql), tuple(params or ()))
-            return MariaCursor(cursor)
+            return MariaCursor(cursor, self._connection)
         except self._pymysql.err.IntegrityError as exc:
             cursor.close()
             raise StorageIntegrityError(str(exc)) from exc
