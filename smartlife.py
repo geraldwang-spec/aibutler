@@ -16,23 +16,37 @@ from werkzeug.security import generate_password_hash
 
 from auth import auth, login_required
 from records import CATALOG, PROFILE_FIELDS, options, ownership
-from storage import db, init_storage
+from storage import db, init_storage, StorageIntegrityError
 
 
 def create_app(test_config=None):
     root = Path(__file__).parent
     load_dotenv(root / '.env')
     app = Flask(__name__)
-    app.config.update(DATABASE=str(root/'instance'/'smartlife.db'), SECRET_KEY=os.getenv('SECRET_KEY',''),
-                      MAX_CONTENT_LENGTH=5*1024*1024, SESSION_COOKIE_HTTPONLY=True,
-                      SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE')=='true',
-                      PERMANENT_SESSION_LIFETIME=timedelta(hours=8))
+    app.config.update(
+        DATABASE=str(root/'instance'/'smartlife.db'),
+        DB_TYPE=os.getenv('DB_TYPE','sqlite').lower(),
+        DB_HOST=os.getenv('DB_HOST','127.0.0.1'),
+        DB_PORT=int(os.getenv('DB_PORT','3306')),
+        DB_USER=os.getenv('DB_USER',''),
+        DB_PASSWORD=os.getenv('DB_PASSWORD',''),
+        DB_NAME=os.getenv('DB_NAME',''),
+        DB_CHARSET=os.getenv('DB_CHARSET','utf8mb4'),
+        SECRET_KEY=os.getenv('SECRET_KEY',''),
+        MAX_CONTENT_LENGTH=5*1024*1024,
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+        SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE')=='true',
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    )
     for key in ('SMTP_HOST','SMTP_PORT','SMTP_USERNAME','SMTP_PASSWORD','SMTP_FROM_EMAIL'):
         app.config[key] = os.getenv(key,'')
     app.config['SMTP_FROM_NAME'] = os.getenv('SMTP_FROM_NAME','考試智伴')
     app.config['SMTP_SECURITY'] = os.getenv('SMTP_SECURITY','starttls')
     if test_config:
         app.config.update(test_config)
+        if 'DATABASE' in test_config and 'DB_TYPE' not in test_config:
+            app.config['DB_TYPE'] = 'sqlite'
     if not app.config['SECRET_KEY']:
         secret_file = root/'instance'/'session.key'
         secret_file.parent.mkdir(exist_ok=True)
@@ -111,18 +125,31 @@ def create_app(test_config=None):
                 if data['birth_date'] > date.today().isoformat():
                     raise ValueError('生日不可晚於今天。')
                 columns = ','.join(data)
-                updates = ','.join(k+'=excluded.'+k for k in data)
-                db().execute(f'INSERT INTO user_profiles (user_id,{columns},onboarded_at) VALUES (?,{",".join("?" for _ in data)},CURRENT_TIMESTAMP) ON CONFLICT(user_id) DO UPDATE SET {updates},onboarded_at=CURRENT_TIMESTAMP',(g.user['id'],*data.values()))
+                existing_profile = db().execute('SELECT 1 FROM user_profiles WHERE user_id=?',(g.user['id'],)).fetchone()
+                if existing_profile:
+                    db().execute(
+                        f'UPDATE user_profiles SET '+','.join(k+'=?' for k in data)+',onboarded_at=CURRENT_TIMESTAMP WHERE user_id=?',
+                        (*data.values(), g.user['id'])
+                    )
+                else:
+                    db().execute(
+                        f'INSERT INTO user_profiles (user_id,{columns},onboarded_at) VALUES (?,{",".join("?" for _ in data)},CURRENT_TIMESTAMP)',
+                        (g.user['id'],*data.values())
+                    )
                 initial_weight = request.form.get('initial_weight','').strip()
                 if initial_weight:
                     weight = float(initial_weight)
                     if not math.isfinite(weight) or not 1<=weight<=600:
                         raise ValueError('體重須介於 1–600 kg。')
-                    db().execute('INSERT INTO body_metrics (user_id,record_date,weight_kg) VALUES (?,?,?) ON CONFLICT(user_id,record_date) DO UPDATE SET weight_kg=excluded.weight_kg',(g.user['id'],date.today().isoformat(),weight))
+                    metric = db().execute('SELECT id FROM body_metrics WHERE user_id=? AND record_date=?',(g.user['id'],date.today().isoformat())).fetchone()
+                    if metric:
+                        db().execute('UPDATE body_metrics SET weight_kg=? WHERE id=?',(weight,metric['id']))
+                    else:
+                        db().execute('INSERT INTO body_metrics (user_id,record_date,weight_kg) VALUES (?,?,?)',(g.user['id'],date.today().isoformat(),weight))
                 db().commit()
                 flash('個人資料已儲存。','success')
                 return redirect(url_for('dashboard'))
-            except (ValueError,sqlite3.IntegrityError) as exc:
+            except (ValueError,sqlite3.IntegrityError,StorageIntegrityError) as exc:
                 db().rollback()
                 error = str(exc) if isinstance(exc,ValueError) else '資料格式錯誤，請重新檢查。'
         return render_template('profile.html',title='個人資料與目標',fields=PROFILE_FIELDS,values=values,error=error,choices={})
@@ -182,7 +209,7 @@ def create_app(test_config=None):
                 db().commit()
                 flash('資料已儲存。','success')
                 return redirect(url_for('records',table=table))
-            except (ValueError,sqlite3.IntegrityError) as exc:
+            except (ValueError,sqlite3.IntegrityError,StorageIntegrityError) as exc:
                 db().rollback()
                 error = str(exc) if isinstance(exc,ValueError) else '資料重複或關聯不正確；同一天的體重請編輯原紀錄。'
         rows = db().execute(f'SELECT * FROM {table} WHERE {ownership(table)} ORDER BY id DESC',(g.user['id'],)).fetchall()
@@ -205,7 +232,7 @@ def create_app(test_config=None):
             refresh_stats(commit=False)
             db().commit()
             flash('資料已刪除。','success')
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError,StorageIntegrityError):
             db().rollback()
             flash('此資料仍被其他紀錄使用，請先處理相關資料；已有作答的題目會保留。','error')
         return redirect(url_for('records',table=table))

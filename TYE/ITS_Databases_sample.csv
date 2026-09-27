@@ -1,0 +1,2 @@
+chapter_name,q_type,content,answer_key,explanation,difficulty,option_A,option_B,option_C,option_D
+預存程序,單選,您希望能夠在需要時隨時手動呼叫程式碼。請問您可以使用哪一個資料庫物件來儲存程式碼？,B,預存程序可將 SQL 程式碼儲存在資料庫中並由使用者或應用程式主動呼叫。,1,函式,預存程序,觸發程序,檢視表

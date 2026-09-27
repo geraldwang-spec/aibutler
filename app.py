@@ -55,6 +55,12 @@ def check_environment():
     print("SMTP_SECURITY：", app.config.get("SMTP_SECURITY") or "未設定")
     print("COOKIE_SECURE：", app.config.get("SESSION_COOKIE_SECURE"))
     print("TYE 模組：已註冊")
+    print("DB_TYPE：", app.config.get("DB_TYPE"))
+    if app.config.get("DB_TYPE") == "mariadb":
+        print("DB_HOST：", app.config.get("DB_HOST"))
+        print("DB_PORT：", app.config.get("DB_PORT"))
+        print("DB_NAME：", app.config.get("DB_NAME"))
+        print("DB_USER：", app.config.get("DB_USER"))
     print("=" * 50)
 
 
