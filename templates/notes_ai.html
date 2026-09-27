@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>重點筆記與 AI 問答 - SMARTLIFE AI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-100 h-screen flex flex-col font-sans">
+
+    <!-- 頂部導覽列 -->
+    <header class="bg-indigo-700 text-white px-6 py-3 flex justify-between items-center shadow-md shrink-0">
+        <div class="flex items-center space-x-3">
+            <i class="fa-solid fa-brain text-xl"></i>
+            <h1 class="text-lg font-bold tracking-wide">SMARTLIFE AI | 複習筆記 & 提問助手</h1>
+        </div>
+        <div class="text-sm">
+            <span>登入身分：<strong class="underline">{{ username }}</strong></span>
+            <a href="/" class="ml-4 bg-indigo-800 hover:bg-indigo-900 px-3 py-1 rounded text-xs">回首頁</a>
+        </div>
+    </header>
+
+    <!-- 主工作區：左右雙欄整合面板 -->
+    <main class="flex-1 flex overflow-hidden p-4 gap-4">
+
+        <!-- 左側欄：重點摘要筆記庫 (40%) -->
+        <section class="w-5/12 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <div>
+                    <h2 class="font-bold text-slate-800 text-base"><i class="fa-regular fa-bookmark text-indigo-600 mr-2"></i>章節重點筆記</h2>
+                    <p class="text-xs text-slate-500">考前複習卡片與核心觀念</p>
+                </div>
+                <button onclick="loadSummaries()" class="text-xs text-indigo-600 hover:underline">
+                    <i class="fa-solid fa-rotate-right mr-1"></i>重載
+                </button>
+            </div>
+
+            <!-- 筆記卡片清單列表 -->
+            <div id="notes-list" class="flex-1 overflow-y-auto p-4 space-y-3">
+                <div class="text-center text-slate-400 py-8 text-sm">正在載入筆記...</div>
+            </div>
+        </section>
+
+        <!-- 右側欄：AI 問答與提問紀錄 (60%) -->
+        <section class="w-7/12 bg-white rounded-xl shadow-sm border border-slate-200 flex flex-col">
+            <div class="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <div>
+                    <h2 class="font-bold text-slate-800 text-base"><i class="fa-solid fa-robot text-emerald-600 mr-2"></i>AI 助教問答記事</h2>
+                    <p class="text-xs text-slate-500">遇到不懂的重點可隨時提問，自動記錄對話</p>
+                </div>
+                <span class="text-xs px-2 py-1 bg-emerald-100 text-emerald-700 rounded-full font-medium">連線正常</span>
+            </div>
+
+            <!-- 聊天訊息展示區 -->
+            <div id="chat-box" class="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50">
+                <!-- 預設歡迎訊息 -->
+                <div class="flex items-start gap-3">
+                    <div class="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center text-sm shrink-0">AI</div>
+                    <div class="bg-white border border-slate-200 p-3 rounded-2xl rounded-tl-none shadow-sm max-w-[85%] text-sm text-slate-700 leading-relaxed">
+                        你好！我是你的 AI 學習管家。你可以點擊左側筆記卡片上的「💡 詢問 AI」，或者直接在下方輸入想了解的考題觀念！
+                    </div>
+                </div>
+            </div>
+
+            <!-- 參考依據標籤 (由左側筆記點擊觸發) -->
+            <div id="context-badge" class="hidden px-4 py-1.5 bg-indigo-50 border-t border-indigo-100 text-xs text-indigo-700 flex justify-between items-center">
+                <span><i class="fa-solid fa-paperclip mr-1"></i>已帶入筆記脈絡：<strong id="context-title"></strong></span>
+                <button onclick="clearContext()" class="text-slate-400 hover:text-slate-600">&times;</button>
+            </div>
+
+            <!-- 下方輸入框 -->
+            <div class="p-3 border-t border-slate-100 bg-white rounded-b-xl flex gap-2">
+                <input type="text" id="user-input" placeholder="請輸入問題（例如：請用生活例子解釋什麼是第 3 正規化？）..." 
+                       class="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                       onkeypress="if(event.key === 'Enter') sendMessage()">
+                <button onclick="sendMessage()" class="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-lg text-sm font-medium transition flex items-center gap-1">
+                    <span>發送</span>
+                    <i class="fa-solid fa-paper-plane text-xs"></i>
+                </button>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- 前端互動邏輯 (JavaScript) -->
+    <script>
+        let currentContextNote = "";
+
+        // 1. 載入左側重點筆記 (先打 Mock API)
+        async function loadSummaries() {
+            const listContainer = document.getElementById('notes-list');
+            try {
+                const res = await fetch('/api/summaries');
+                const result = await res.json();
+                
+                if (result.status === 'success') {
+                    listContainer.innerHTML = '';
+                    result.data.forEach(note => {
+                        const masteryBadge = note.mastery === '已熟' 
+                            ? '<span class="bg-green-100 text-green-700 text-[10px] px-2 py-0.5 rounded-full font-medium">已熟</span>'
+                            : '<span class="bg-amber-100 text-amber-700 text-[10px] px-2 py-0.5 rounded-full font-medium">複習中</span>';
+
+                        const card = document.createElement('div');
+                        card.className = "p-3 border border-slate-200 rounded-lg hover:border-indigo-300 hover:shadow-sm transition bg-white";
+                        card.innerHTML = `
+                            <div class="flex justify-between items-start mb-1">
+                                <span class="text-[11px] font-semibold text-indigo-600">${note.chapter_name}</span>
+                                ${masteryBadge}
+                            </div>
+                            <h3 class="font-bold text-slate-800 text-sm mb-1">${note.title}</h3>
+                            <p class="text-xs text-slate-600 line-clamp-2 leading-relaxed mb-3">${note.content}</p>
+                            <div class="flex justify-end gap-2 border-t pt-2 border-slate-50">
+                                <button onclick="askAboutNote('${note.title}', '${note.content}')" 
+                                        class="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-2.5 py-1 rounded flex items-center gap-1 font-medium transition">
+                                    <i class="fa-solid fa-lightbulb"></i> 詢問 AI
+                                </button>
+                            </div>
+                        `;
+                        listContainer.appendChild(card);
+                    });
+                }
+            } catch (err) {
+                listContainer.innerHTML = '<div class="text-xs text-red-500">載入失敗，請確認後端是否啟動</div>';
+            }
+        }
+
+        // 2. 點擊左側筆記一鍵關聯到右側提問
+        function askAboutNote(title, content) {
+            currentContextNote = `${title} - ${content}`;
+            document.getElementById('context-title').innerText = title;
+            document.getElementById('context-badge').classList.remove('hidden');
+            document.getElementById('user-input').value = `請針對「${title}」做更詳細的觀念延伸與舉例說明。`;
+            document.getElementById('user-input').focus();
+        }
+
+        function clearContext() {
+            currentContextNote = "";
+            document.getElementById('context-badge').classList.add('hidden');
+        }
+
+        // 3. 發送問題到後端
+        async function sendMessage() {
+            const input = document.getElementById('user-input');
+            const chatBox = document.getElementById('chat-box');
+            const prompt = input.value.trim();
+            if (!prompt) return;
+
+            // 渲染使用者訊息
+            appendMessage('user', prompt);
+            input.value = '';
+
+            // 建立載入中的 AI 訊息氣泡
+            const loadingId = appendMessage('ai', '思考中...');
+
+            try {
+                const res = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        context_note: currentContextNote
+                    })
+                });
+                const data = await res.json();
+                
+                // 更新 AI 訊息
+                const loadingBubble = document.getElementById(loadingId);
+                if (data.status === 'success') {
+                    loadingBubble.innerText = data.reply;
+                } else {
+                    loadingBubble.innerText = "抱歉，發生錯誤：" + data.message;
+                }
+            } catch (err) {
+                document.getElementById(loadingId).innerText = "無法連接伺服器，請稍後再試。";
+            }
+
+            clearContext();
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        function appendMessage(role, text) {
+            const chatBox = document.getElementById('chat-box');
+            const id = 'msg-' + Date.now();
+            const wrapper = document.createElement('div');
+            wrapper.className = role === 'user' ? "flex justify-end" : "flex items-start gap-3";
+
+            if (role === 'user') {
+                wrapper.innerHTML = `
+                    <div class="bg-indigo-600 text-white p-3 rounded-2xl rounded-tr-none shadow-sm max-w-[85%] text-sm leading-relaxed">
+                        ${text}
+                    </div>
+                `;
+            } else {
+                wrapper.innerHTML = `
+                    <div class="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center text-sm shrink-0">AI</div>
+                    <div id="${id}" class="bg-white border border-slate-200 p-3 rounded-2xl rounded-tl-none shadow-sm max-w-[85%] text-sm text-slate-700 leading-relaxed">
+                        ${text}
+                    </div>
+                `;
+            }
+            chatBox.appendChild(wrapper);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            return id;
+        }
+
+        // 頁面初始化自動載入筆記
+        window.onload = loadSummaries;
+    </script>
+</body>
+</html>
