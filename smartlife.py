@@ -15,6 +15,7 @@ from flask import Flask, abort, flash, g, jsonify, redirect, render_template, re
 from werkzeug.security import generate_password_hash
 
 from auth import auth, login_required
+from body.body_route import body
 from records import CATALOG, PROFILE_FIELDS, options, ownership
 from storage import db, init_storage
 
@@ -45,6 +46,7 @@ def create_app(test_config=None):
     app.config['DUMMY_PASSWORD_HASH'] = generate_password_hash(secrets.token_hex(16))
     init_storage(app)
     app.register_blueprint(auth)
+    app.register_blueprint(body)
 
     @app.before_request
     def security():
@@ -57,8 +59,9 @@ def create_app(test_config=None):
                 session.clear()
         if 'csrf_token' not in session:
             session['csrf_token'] = secrets.token_hex(32)
-        if request.method == 'POST' and not secrets.compare_digest(request.form.get('csrf_token',''), session['csrf_token']):
-            if request.path == '/send-verification':
+        token = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token','')
+        if request.method == 'POST' and not secrets.compare_digest(token, session['csrf_token']):
+            if request.path == '/send-verification' or request.path.startswith('/body/api/'):
                 return jsonify(ok=False,message='頁面已過期，請重新整理後再試。'),400
             abort(400, '頁面已過期，請重新整理後再試。')
 

@@ -5,6 +5,7 @@
 <li><a href="{{ url_for('profile') }}" {% if request.endpoint=='profile' %}class="active"{% endif %}><i class="fa fa-user fa-fw" aria-hidden="true"></i>個人資料與目標</a></li>
 {% for key,(label,icon,fields) in catalog.items() %}
 {% if key in ['subjects','body_metrics','chat_sessions'] %}<li class="nav-group">{{ {'subjects':'學習與考試','body_metrics':'健康與運動','chat_sessions':'問答與教材'}[key] }}</li>{% endif %}
+{% if key=='body_metrics' %}<li><a href="{{ url_for('body.index') }}" {% if request.blueprint=='body' %}class="active"{% endif %}><i class="fa fa-line-chart fa-fw" aria-hidden="true"></i>體重與訓練</a></li>{% endif %}
 <li><a href="{{ url_for('records',table=key) }}" {% if request.view_args and request.view_args.get('table')==key %}class="active"{% endif %}><i class="fa fa-{{ icon }} fa-fw" aria-hidden="true"></i>{{ label }}</a></li>
 {% if key=='questions' %}<li><a href="{{ url_for('imports') }}"><i class="fa fa-upload fa-fw" aria-hidden="true"></i>CSV / Excel 匯入</a></li><li><a href="{{ url_for('quiz_start') }}"><i class="fa fa-pencil-square-o fa-fw" aria-hidden="true"></i>模擬考與練習</a></li><li><a href="{{ url_for('results') }}"><i class="fa fa-check-square-o fa-fw" aria-hidden="true"></i>成績與錯題簿</a></li><li><a href="{{ url_for('analysis') }}"><i class="fa fa-bar-chart fa-fw" aria-hidden="true"></i>章節弱項分析</a></li>{% endif %}
 {% endfor %}<li><a href="{{ url_for('materials') }}"><i class="fa fa-database fa-fw" aria-hidden="true"></i>教材與 RAG（待串接）</a></li></ul></nav>
