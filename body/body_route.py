@@ -65,6 +65,7 @@ api = BodyApi.endpoint
 @login_required
 def index():
     tab = 'weight' if request.args.get('tab') == 'weight' else 'train'
+    BodyApi.service().ensure_default_exercises()   # 動作庫是空的就先放入預設動作
     state = BodyApi.service().state(Validator.day(request.args.get('d')), request.args.get('ex', type=int))
     return render_template('body/index.html', title='體重與訓練', tab=tab, state=state)
 
