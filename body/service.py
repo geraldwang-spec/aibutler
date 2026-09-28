@@ -102,7 +102,7 @@ class BodyService:
     def state(self, day, wanted=None):
         """某一天的完整畫面資料（只放原始數值，格式化交給前端）。"""
         monday = day - timedelta(days=day.weekday())
-        library = self._library()
+        library = self._library(day)
         workout, current = self._workout(day, wanted, {e['id']: e for e in library})
         return dict(
             d=day.isoformat(), today=self.today.isoformat(), is_future=day > self.today,
@@ -134,8 +134,12 @@ class BodyService:
         return dict(record=dict(record) if record else None, latest=dict(latest) if latest else None, delta=delta,
                     trend=[dict(d=r['record_date'], weight_kg=r['weight_kg']) for r in self.sql.recent_metrics(d)])
 
-    def _library(self):
-        return [dict(id=r['id'], name=r['exercise_name'], muscle_group=r['muscle_group'], equipment=r['equipment'])
+    def _library(self, day):
+        """動作庫；每個動作附上最近一次的各組（last），讓前端排課時預填重量與次數。"""
+        since = (day - timedelta(days=180)).isoformat()
+        sessions = self.sql.latest_sessions_before(day.isoformat(), since)
+        return [dict(id=r['id'], name=r['exercise_name'], muscle_group=r['muscle_group'], equipment=r['equipment'],
+                     last=[dict(set_no=x['set_no'], weight_kg=x['weight_kg'], reps=x['reps']) for x in sessions.get(r['id'], [])])
                 for r in self.sql.exercises()]
 
     @staticmethod
@@ -167,7 +171,7 @@ class BodyService:
             mine = [s for s in sets if s['exercise_id'] == ex_id]
             if mine and info['muscle_group'] and info['muscle_group'] not in groups:
                 groups.append(info['muscle_group'])
-            exercises.append(dict(info, done=len(mine), volume=self._volume(mine)))
+            exercises.append(dict({k: v for k, v in info.items() if k != 'last'}, done=len(mine), volume=self._volume(mine)))
             if ex_id == current_id:
                 current = self._current(info, mine, row)
 

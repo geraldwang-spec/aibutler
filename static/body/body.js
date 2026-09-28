@@ -46,31 +46,61 @@
     del(key) { try { window.localStorage.removeItem(key); } catch (e) { /* ignore */ } }
   };
 
-  // ------------------------------------------------------------ 今天要做的動作（開始前的草稿）
-  // 還沒記錄任何一組的動作不在資料庫裡，先存在這台瀏覽器；開始訓練時一起送到後端檢查。
+  // ------------------------------------------------------------ 今天要做的動作與每組的預計重量／次數（草稿）
+  // 還沒完成的組不在資料庫裡，先存在這台瀏覽器：[{id, sets: [{kg, reps}, ...]}, ...]
+  // 開始訓練時把動作清單送到後端檢查；每按一次 ✓ 才把那一組寫進 workout_sets。
   const planKey = (d) => `bdPlan:${root.dataset.user}:${d}`;
-  const libraryIds = () => new Set(state.library.map((e) => e.id));
-  function getPlan(d = state.d) {
-    let ids = [];
-    try { ids = JSON.parse(store.get(planKey(d)) || '[]'); } catch (e) { ids = []; }
-    const known = libraryIds();
-    return Array.isArray(ids) ? ids.map(Number).filter((id) => known.has(id)) : [];
+  const DEFAULT_SET_COUNT = 3;
+  const libById = (id) => state.library.find((e) => e.id === id);
+  const blankSet = () => ({ kg: '', reps: '' });
+
+  /** 新加入的動作預設幾組：有上次紀錄就照上次，沒有就 3 組空白 */
+  function defaultSets(id) {
+    const lib = libById(id);
+    if (lib && lib.last && lib.last.length) return lib.last.map((x) => ({ kg: num(x.weight_kg), reps: num(x.reps) }));
+    return Array.from({ length: DEFAULT_SET_COUNT }, blankSet);
   }
-  function setPlan(ids, d = state.d) {
-    const unique = [...new Set(ids)];
-    if (unique.length) store.set(planKey(d), JSON.stringify(unique)); else store.del(planKey(d));
+  function readPlan(d = state.d) {
+    let raw = [];
+    try { raw = JSON.parse(store.get(planKey(d)) || '[]'); } catch (e) { raw = []; }
+    if (!Array.isArray(raw)) return [];
+    const seen = new Set();
+    return raw
+      .map((item) => (typeof item === 'number' ? { id: item, sets: defaultSets(item) } : item))   // 舊格式只有 id
+      .filter((item) => item && libById(Number(item.id)) && !seen.has(Number(item.id)) && seen.add(Number(item.id)))
+      .map((item) => ({
+        id: Number(item.id),
+        sets: Array.isArray(item.sets) ? item.sets.map((x) => ({ kg: String(x.kg ?? ''), reps: String(x.reps ?? '') })) : defaultSets(Number(item.id))
+      }));
   }
+  function writePlan(plan, d = state.d) {
+    if (plan.length) store.set(planKey(d), JSON.stringify(plan)); else store.del(planKey(d));
+  }
+  const getPlan = () => readPlan().map((p) => p.id);
+  const planFor = (id) => readPlan().find((p) => p.id === id) || null;
+  function updatePlan(id, change) {
+    const plan = readPlan();
+    let entry = plan.find((p) => p.id === id);
+    if (!entry) { entry = { id, sets: [] }; plan.push(entry); }
+    change(entry);
+    writePlan(plan);
+  }
+  function addToPlan(id) {
+    if (!readPlan().some((p) => p.id === id)) updatePlan(id, (entry) => { entry.sets = defaultSets(id); });
+  }
+  function removeFromPlan(id) { writePlan(readPlan().filter((p) => p.id !== id)); }
+
   /** 畫面上的動作清單：已有組數的（伺服器）＋ 還沒記錄的（草稿） */
   function exerciseList() {
     const w = state.workout;
     const items = w ? w.exercises.map((e) => ({ ...e })) : [];
     const seen = new Set(items.map((e) => e.id));
-    const byId = new Map(state.library.map((e) => [e.id, e]));
-    getPlan().forEach((id) => {
-      if (!seen.has(id)) { items.push({ ...byId.get(id), done: 0, volume: 0 }); seen.add(id); }
+    readPlan().forEach((p) => {
+      if (!seen.has(p.id)) { items.push({ ...libById(p.id), done: 0, volume: 0 }); seen.add(p.id); }
     });
     return items;
   }
+  let planSel = null;   // 開始前正在設定哪個動作
   const canStart = () => !state.is_future && !state.workout && getPlan().length > 0;
 
   // ------------------------------------------------------------ JSON 通訊
@@ -269,14 +299,17 @@
   }
 
   function exerciseItem(e, cur, w) {
-    const on = Boolean(cur && cur.exercise_id === e.id);
-    const detail = w ? `${e.done} 組` + (e.volume ? `・${int(e.volume)} kg×次` : '') : [e.muscle_group, e.equipment].filter(Boolean).join('・');
+    const planned = planFor(e.id);
+    const plannedCount = planned ? planned.sets.length : 0;
+    const on = w ? Boolean(cur && cur.exercise_id === e.id) : planSel === e.id;
+    const detail = w
+      ? `${e.done}${plannedCount > e.done ? ` / ${plannedCount}` : ''} 組` + (e.volume ? `・${int(e.volume)} kg×次` : '')
+      : `${plannedCount} 組・` + [e.muscle_group, e.equipment].filter(Boolean).join('・');
     const text = h('span', { class: 'bd-ex__text' }, h('strong', { text: e.name }), h('small', { text: detail }));
-    const pick = w
-      ? h('button', {
-        type: 'button', class: 'bd-ex__pick', dataset: { action: 'pick', ex: e.id, key: `ex-${e.id}` }, 'aria-current': on ? 'true' : null
-      }, text, on ? chip('記錄中', 'warm') : icon('chevron-right'))
-      : h('div', { class: 'bd-ex__pick' }, text);
+    const pick = h('button', {
+      type: 'button', class: 'bd-ex__pick', 'aria-current': on ? 'true' : null,
+      dataset: { action: w ? 'pick' : 'plan-pick', ex: e.id, key: `ex-${e.id}` }
+    }, text, on ? chip(w ? '記錄中' : '設定中', 'warm') : icon('chevron-right'));
     // 還沒記錄任何一組的動作才能移除
     const remove = e.done ? null : h('button', {
       type: 'button', class: 'bd-ex__remove', dataset: { action: 'remove-plan', ex: e.id, key: `rm-${e.id}` }, 'aria-label': `移除 ${e.name}`
@@ -301,12 +334,7 @@
         h('div', { class: 'bd-section-head', id: 'bd-log' },
           h('h2', { text: '今天要做的動作' }),
           h('p', { text: '先加好動作，再開始訓練；開始後可以隨時再加。' })),
-        h('div', { class: 'bd-log' }, list,
-          h('section', { class: 'bd-card bd-current bd-ready', 'aria-label': '開始訓練' },
-            items.length
-              ? h('p', { text: `已排好 ${items.length} 個動作：${items.map((e) => e.name).join('、')}` })
-              : h('p', { class: 'bd-muted', text: '還沒有動作。從左邊的「加入動作」選擇今天要練的項目。' }),
-            startButton('start-plan'))));
+        h('div', { class: 'bd-log' }, list, planCard(items)));
       return;
     }
 
@@ -333,6 +361,51 @@
       h('button', { class: 'bd-btn', dataset: { key: 'add-exercise' }, text: '加入' }));
   }
 
+  const kgInput = (value, label, extra = {}) => h('input', {
+    class: 'bd-input', type: 'number', name: 'weight_kg', step: 'any', min: 0, max: 1000, inputmode: 'decimal',
+    value, placeholder: 'kg', 'aria-label': label, ...extra
+  });
+  const repsInput = (value, label, extra = {}) => h('input', {
+    class: 'bd-input', type: 'number', name: 'reps', step: 1, min: 1, max: 10000, inputmode: 'numeric',
+    value, placeholder: '次', 'aria-label': label, ...extra
+  });
+  const lastOf = (lib, no) => {
+    const x = lib && lib.last ? lib.last.find((r) => r.set_no === no) : null;
+    return x ? pair(x) : '';
+  };
+
+  /** 開始前：設定選中動作的每一組重量與次數 */
+  function planCard(items) {
+    if (!items.length) {
+      return h('section', { class: 'bd-card bd-current bd-ready', 'aria-label': '開始訓練' },
+        h('p', { class: 'bd-muted', text: '還沒有動作。從左邊的「加入動作」選擇今天要練的項目。' }),
+        startButton('start-plan'));
+    }
+    if (!items.some((e) => e.id === planSel)) planSel = items[0].id;
+    const lib = libById(planSel);
+    const entry = planFor(planSel) || { sets: [] };
+    const meta = [lib.muscle_group, lib.equipment].filter(Boolean);
+    if (lib.last && lib.last.length) meta.push(`上次 ${lib.last.map(pair).join('、')}`);
+    return h('section', { class: 'bd-card bd-current', 'aria-label': `設定 ${lib.name} 的每一組` },
+      h('header', { class: 'bd-current__head' }, h('h3', { text: lib.name }), h('p', { class: 'bd-muted', text: meta.join('・') })),
+      h('div', { class: 'bd-grid bd-grid--plan bd-grid--head', 'aria-hidden': 'true' },
+        ['組', '上次', 'kg', '次', ''].map((t) => h('span', { text: t }))),
+      entry.sets.map((x, i) => h('div', { class: 'bd-grid bd-grid--plan bd-row is-plan' },
+        h('span', { class: 'bd-row__no', text: i + 1 }),
+        h('span', { class: 'bd-row__last', text: lastOf(lib, i + 1) || '—' }),
+        kgInput(x.kg, `第 ${i + 1} 組預計重量 kg`, { dataset: { planEx: planSel, planIdx: i, planField: 'kg', key: `pkg-${i}` } }),
+        repsInput(x.reps, `第 ${i + 1} 組預計次數`, { dataset: { planEx: planSel, planIdx: i, planField: 'reps', key: `prp-${i}` } }),
+        h('button', {
+          type: 'button', class: 'bd-check bd-check--remove', dataset: { action: 'plan-del-set', ex: planSel, idx: i, key: `pdel-${i}` },
+          'aria-label': `刪除第 ${i + 1} 組`, title: '刪除這一組'
+        }, icon('times')))),
+      h('button', { type: 'button', class: 'bd-btn bd-btn--soft', dataset: { action: 'plan-add-set', ex: planSel, key: 'plan-add-set' } }, icon('plus'), ' 新增一組'),
+      h('div', { class: 'bd-ready__foot' },
+        h('p', { class: 'bd-muted', text: `已排好 ${items.length} 個動作，共 ${readPlan().reduce((n, p) => n + p.sets.length, 0)} 組` }),
+        startButton('start-plan')));
+  }
+
+  /** 開始後：已完成的組 ＋ 還沒做的預計組（每組都能改重量／次數，按 ✓ 完成） */
   function currentCard(cur, w) {
     if (!cur) {
       return h('section', { class: 'bd-card bd-current', 'aria-label': '逐組輸入' },
@@ -340,7 +413,15 @@
     }
     const meta = [cur.muscle_group, cur.equipment].filter(Boolean);
     if (cur.best) meta.push(`上次最佳 ${pair(cur.best)}`);
-    const n = cur.next.set_no;
+    const lib = libById(cur.exercise_id);
+    const planned = (planFor(cur.exercise_id) || { sets: [] }).sets;
+    const done = cur.sets.length;
+    // 還沒做的組：照預計的；預計的都做完了就給一列（預填剛做的那組）
+    const pending = planned.length > done
+      ? planned.slice(done).map((x, j) => ({ no: done + j + 1, kg: x.kg, reps: x.reps, planIdx: done + j }))
+      : [{ no: cur.next.set_no, kg: num(cur.next.weight_kg), reps: num(cur.next.reps), planIdx: null }];
+    const seed = { kg: num(cur.next.weight_kg), reps: num(cur.next.reps) };
+
     return h('section', { class: 'bd-card bd-current', 'aria-label': '逐組輸入' },
       h('header', { class: 'bd-current__head' }, h('h3', { text: cur.name }), h('p', { class: 'bd-muted', text: meta.join('・') })),
       h('div', { class: 'bd-grid bd-grid--head', 'aria-hidden': 'true' },
@@ -355,13 +436,24 @@
           type: 'button', class: 'bd-check is-done', title: '取消完成',
           dataset: { action: 'delete-set', id: s.id, key: `del-${s.id}` }, 'aria-label': `取消第 ${s.set_no} 組`
         }, icon('check')))),
-      h('form', { class: 'bd-grid bd-row is-next', dataset: { form: 'add-set', workout: w.id, exercise: cur.exercise_id } },
-        h('span', { class: 'bd-row__no', text: n }),
-        h('span', { class: 'bd-row__last', text: pair(cur.next.last) || '—' }),
-        h('input', { class: 'bd-input', type: 'number', name: 'weight_kg', step: 'any', min: 0, max: 1000, inputmode: 'decimal', required: true, value: num(cur.next.weight_kg), 'aria-label': `第 ${n} 組重量 kg` }),
-        h('input', { class: 'bd-input', type: 'number', name: 'reps', step: 1, min: 1, max: 10000, inputmode: 'numeric', required: true, value: num(cur.next.reps), 'aria-label': `第 ${n} 組次數` }),
-        h('input', { class: 'bd-input bd-input--sm', type: 'number', name: 'rpe', step: 1, min: 1, max: 10, inputmode: 'numeric', placeholder: '—', 'aria-label': `第 ${n} 組 RPE（選填）` }),
-        h('button', { class: 'bd-check', dataset: { key: 'next-check' }, 'aria-label': `完成第 ${n} 組` }, icon('check'))));
+      pending.map((row, j) => {
+        // 沒填的組沿用上一列的數字（第一列沿用剛做的那組）
+        const prev = j === 0 ? seed : pending[j - 1];
+        row.kg = row.kg || prev.kg;
+        row.reps = row.reps || prev.reps;
+        const planData = row.planIdx === null ? {} : { planEx: cur.exercise_id, planIdx: row.planIdx };
+        return h('form', {
+          class: 'bd-grid bd-row ' + (j === 0 ? 'is-next' : 'is-todo'),
+          dataset: { form: 'add-set', workout: w.id, exercise: cur.exercise_id }
+        },
+        h('span', { class: 'bd-row__no', text: row.no }),
+        h('span', { class: 'bd-row__last', text: lastOf(lib, row.no) || '—' }),
+        kgInput(row.kg, `第 ${row.no} 組重量 kg`, { required: true, dataset: { ...planData, planField: 'kg', key: `kg-${row.no}` } }),
+        repsInput(row.reps, `第 ${row.no} 組次數`, { required: true, dataset: { ...planData, planField: 'reps', key: `rp-${row.no}` } }),
+        h('input', { class: 'bd-input bd-input--sm', type: 'number', name: 'rpe', step: 1, min: 1, max: 10, inputmode: 'numeric', placeholder: '—', 'aria-label': `第 ${row.no} 組 RPE（選填）` }),
+        h('button', { class: 'bd-check', dataset: { key: j === 0 ? 'next-check' : `check-${row.no}` }, 'aria-label': `完成第 ${row.no} 組` }, icon('check')));
+      }),
+      h('button', { type: 'button', class: 'bd-btn bd-btn--soft', dataset: { action: 'plan-add-set', ex: cur.exercise_id, key: 'plan-add-set' } }, icon('plus'), ' 新增一組'));
   }
 
   // ------------------------------------------------------------ 事件
@@ -371,12 +463,29 @@
     const { action, d, id, ex } = target.dataset;
     if (action === 'goto') load(d);
     else if (action === 'pick') load(state.d, ex);
-    else if (action === 'start') {
+    else if (action === 'plan-pick') { planSel = Number(ex); render(); }
+    else if (action === 'plan-add-set') {
+      const id = Number(ex);
+      updatePlan(id, (entry) => {
+        // 新的一組照最後一組的數字；還沒有預計組時，接在已完成的組後面
+        const done = state.current && state.current.exercise_id === id ? state.current.sets : [];
+        while (entry.sets.length < done.length) {
+          const x = done[entry.sets.length];
+          entry.sets.push({ kg: num(x.weight_kg), reps: num(x.reps) });
+        }
+        const last = entry.sets[entry.sets.length - 1];
+        entry.sets.push(last ? { ...last } : blankSet());
+      });
+      render();
+    } else if (action === 'plan-del-set') {
+      updatePlan(Number(ex), (entry) => { entry.sets.splice(Number(target.dataset.idx), 1); });
+      render();
+    } else if (action === 'start') {
       if (!canStart()) { showMessage('請先加入至少一個動作，再開始訓練。', 'error'); return; }
       run('POST', '/workouts', { d: state.d, exercise_ids: getPlan() }, { history: 'replace' });
     } else if (action === 'remove-plan') {
       const id = Number(ex);
-      setPlan(getPlan().filter((x) => x !== id));
+      removeFromPlan(id);
       if (state.current && state.current.exercise_id === id) load(state.d, null, 'replace');
       else render();
     }
@@ -384,7 +493,7 @@
       if (window.confirm('結束並儲存這次訓練？')) {
         const d = state.d;
         run('POST', `/workouts/${id}/end`).then((data) => {
-          if (data && data.state.workout) setPlan([], d);   // 已儲存 → 清掉草稿；若因沒有組數被取消，保留清單方便重來
+          if (data && data.state.workout) writePlan([], d);   // 已儲存 → 清掉草稿；若因沒有組數被取消，保留清單方便重來
           if (data) render();
         });
       }
@@ -414,9 +523,20 @@
     } else if (form.dataset.form === 'add-exercise') {
       const ex = Number(form.elements.ex.value);
       if (!ex) return;
-      setPlan([...getPlan(), ex]);
+      addToPlan(ex);
+      planSel = ex;
       if (state.workout) load(state.d, ex); else render();
     }
+  });
+
+  root.addEventListener('input', (event) => {
+    const el = event.target;
+    if (!el.dataset || el.dataset.planIdx === undefined || !el.dataset.planEx) return;
+    const idx = Number(el.dataset.planIdx);
+    updatePlan(Number(el.dataset.planEx), (entry) => {
+      while (entry.sets.length <= idx) entry.sets.push(blankSet());
+      entry.sets[idx][el.dataset.planField] = el.value;
+    });
   });
 
   window.addEventListener('popstate', () => {

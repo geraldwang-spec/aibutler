@@ -60,6 +60,23 @@ class BodySqlProcess:
             f'SELECT * FROM exercises WHERE created_by=? ORDER BY CASE muscle_group {order} ELSE 99 END, muscle_group, id',
             (self.user_id,)).fetchall()
 
+    def latest_sessions_before(self, day, since):
+        """每個動作在 day 之前「最近一次」訓練的各組，回傳 {exercise_id: [row, ...]}。
+
+        只看 since 之後的紀錄，避免資料多了以後整張表掃過一遍。
+        """
+        rows = self.conn.execute(
+            'SELECT s.exercise_id, s.set_no, s.weight_kg, s.reps, w.id AS workout_id '
+            'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
+            'WHERE w.user_id=? AND w.workout_date<? AND w.workout_date>=? '
+            'ORDER BY w.workout_date DESC, w.id DESC, s.set_no, s.id', (self.user_id, day, since)).fetchall()
+        chosen, sessions = {}, {}
+        for r in rows:
+            chosen.setdefault(r['exercise_id'], r['workout_id'])
+            if chosen[r['exercise_id']] == r['workout_id']:
+                sessions.setdefault(r['exercise_id'], []).append(r)
+        return sessions
+
     def insert_default_exercises(self, exercises):
         """動作庫是空的才一次寫入預設動作；已經有任何動作就什麼都不做。
 

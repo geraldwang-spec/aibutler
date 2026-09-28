@@ -150,7 +150,11 @@
 .bd-grid--head { font-size: 12px; color: var(--bd-muted); padding: 4px 6px 0; }
 .bd-grid--head span { text-align: center; }
 .bd-grid--head span:nth-child(2) { text-align: left; }
+.bd-grid--plan { grid-template-columns: 40px 80px minmax(0, 1fr) minmax(0, 1fr) 48px; }
 .bd-row { padding: 5px 6px; border-radius: 8px; margin: 0; }
+.bd-row.is-plan { background: #f6f9f9; }
+.bd-row.is-todo { background: #fff; }
+.bd-row.is-todo .bd-input { box-shadow: inset 0 0 0 1px #dfe7e8; }
 .bd-row.is-done { background: var(--bd-teal-soft); }
 .bd-row.is-next { background: var(--bd-warm-soft); }
 .bd-row form { margin: 0; }
@@ -172,6 +176,12 @@
 .bd-check:hover { border-color: var(--bd-teal); color: var(--bd-teal); }
 .bd-check.is-done { border-color: var(--bd-teal); background: var(--bd-teal); color: #fff; }
 .bd-check.is-done:hover { background: #1a5e63; }
+.bd-check--remove { border-color: transparent; background: transparent; color: #7c8c90; }
+.bd-check--remove:hover { border-color: #f1c9c5; color: #b42318; background: #fff0ef; }
+.bd-check .fa { position: static; background: none; margin: 0; padding: 0; color: inherit; }
+.bd-btn--soft { border: 0; background: var(--bd-teal-soft); color: var(--bd-teal); margin-top: 4px; }
+.bd-btn--soft:hover { background: #dff0f0; }
+.bd-ready__foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--bd-line); }
 
 /* ---------- 休息計時列（貼在畫面底部） ---------- */
 .bd-rest {
@@ -203,7 +213,7 @@
   .bd-day { min-height: 58px; }
   .bd-day__tag { display: none; }
   .bd-tabs__bar, .bd-panel { padding-left: 14px; padding-right: 14px; }
-  .bd-grid { grid-template-columns: 30px minmax(0, 1fr) minmax(0, 1fr) 48px; gap: 8px; }
+  .bd-grid, .bd-grid--plan { grid-template-columns: 30px minmax(0, 1fr) minmax(0, 1fr) 48px; gap: 8px; }
   .bd-grid--head > :nth-child(2), .bd-grid--head > :nth-child(5),
   .bd-row__last, .bd-row__val--sm, .bd-input--sm { display: none; }
   .bd-current { padding: 14px 12px; }
