@@ -2,6 +2,8 @@
 """body 模組所有的資料庫存取。
 
 沿用既有資料表 body_metrics / exercises / workouts / workout_sets / daily_summary，不改 schema。
+連線由 storage.db() 提供，依 .env 的 DB_TYPE 連 SQLite 或 MariaDB；
+這裡的 SQL 都只用兩邊共通的語法（? 參數由 storage 自動轉成 MariaDB 的 %s）。
 每個查詢都限定在建構時傳入的 user_id，避免讀寫到別人的資料。
 這裡只做 SQL，不做驗證或商業規則（那些在 service.py）。
 """
@@ -39,15 +41,25 @@ class BodySqlProcess:
 
     def recent_metrics(self, until, limit=7):
         """最近 limit 筆（到 until 為止），依日期由舊到新。"""
+        # 子查詢要有別名（MariaDB 規定），SQLite 也能用
         return self.conn.execute(
-            'SELECT * FROM (SELECT record_date, weight_kg FROM body_metrics WHERE user_id=? AND record_date<=? '
-            'ORDER BY record_date DESC LIMIT ?) ORDER BY record_date', (self.user_id, until, limit)).fetchall()
+            'SELECT recent.record_date, recent.weight_kg FROM (SELECT record_date, weight_kg FROM body_metrics '
+            'WHERE user_id=? AND record_date<=? ORDER BY record_date DESC LIMIT ?) AS recent ORDER BY recent.record_date',
+            (self.user_id, until, limit)).fetchall()
 
     def upsert_metric(self, day, weight_kg, body_fat_pct):
-        self.conn.execute(
-            'INSERT INTO body_metrics (user_id,record_date,weight_kg,body_fat_pct) VALUES (?,?,?,?) '
-            'ON CONFLICT(user_id,record_date) DO UPDATE SET weight_kg=excluded.weight_kg, body_fat_pct=excluded.body_fat_pct',
-            (self.user_id, day, weight_kg, body_fat_pct))
+        """同一天只有一筆：有就更新、沒有就新增。
+
+        不用 SQLite 的 ON CONFLICT 或 MariaDB 的 ON DUPLICATE KEY，兩種資料庫都能用。
+        """
+        row = self.conn.execute('SELECT id FROM body_metrics WHERE user_id=? AND record_date=?',
+                                (self.user_id, day)).fetchone()
+        if row:
+            self.conn.execute('UPDATE body_metrics SET weight_kg=?, body_fat_pct=? WHERE id=?',
+                              (weight_kg, body_fat_pct, row['id']))
+        else:
+            self.conn.execute('INSERT INTO body_metrics (user_id,record_date,weight_kg,body_fat_pct) VALUES (?,?,?,?)',
+                              (self.user_id, day, weight_kg, body_fat_pct))
 
     # ------------------------------------------------------------ 動作庫 exercises
 
@@ -80,19 +92,20 @@ class BodySqlProcess:
     def insert_default_exercises(self, exercises):
         """動作庫是空的才一次寫入預設動作；已經有任何動作就什麼都不做。
 
-        用單一 INSERT ... SELECT ... WHERE NOT EXISTS，同時開兩個分頁也不會重複寫入。
+        用單一 INSERT ... SELECT ... WHERE NOT EXISTS，同時開兩個分頁也不會重複寫入；
+        預設動作用 UNION ALL 組成子查詢，SQLite 與 MariaDB 都能用。
         exercises: [(名稱, 部位, 器材, 是否有氧), ...]；回傳實際寫入的筆數。
         """
         if not exercises:
             return 0
-        values = ','.join(['(?,?,?,?)'] * len(exercises))
+        first = 'SELECT ? AS exercise_name, ? AS muscle_group, ? AS equipment, ? AS is_cardio'
+        rows = ' UNION ALL '.join([first] + ['SELECT ?, ?, ?, ?'] * (len(exercises) - 1))
         params = [v for row in exercises for v in row]
         cursor = self.conn.execute(
-            f'WITH defaults(exercise_name, muscle_group, equipment, is_cardio) AS (VALUES {values}) '
             'INSERT INTO exercises (exercise_name, muscle_group, equipment, is_cardio, created_by) '
-            'SELECT exercise_name, muscle_group, equipment, is_cardio, ? FROM defaults '
+            f'SELECT d.exercise_name, d.muscle_group, d.equipment, d.is_cardio, ? FROM ({rows}) AS d '
             'WHERE NOT EXISTS (SELECT 1 FROM exercises WHERE created_by=?)',
-            (*params, self.user_id, self.user_id))
+            (self.user_id, *params, self.user_id))
         return cursor.rowcount
 
     def exercise(self, exercise_id):

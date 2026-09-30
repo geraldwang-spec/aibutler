@@ -237,7 +237,7 @@
     const elapsed = h('span', { class: 'bd-stat__value bd-mono', text: hms(w.duration_min * 60) });
     if (w.in_progress && w.started_at) {
       // 補登過去日期時，後端也是用「開始的時刻 → 現在的時刻」算時長，這裡用同樣方式
-      const t = new Date(w.started_at);
+      const t = new Date(String(w.started_at).replace(' ', 'T'));   // MariaDB 回傳 'YYYY-MM-DD HH:MM:SS'，Safari 需要 T
       const now = new Date();
       const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), t.getHours(), t.getMinutes()).getTime();
       const tick = () => { elapsed.textContent = hms(Math.max(0, Math.floor((Date.now() - start) / 1000))); };
