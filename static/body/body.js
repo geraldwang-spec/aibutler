@@ -566,13 +566,12 @@
 
   // ------------------------------------------------------------ 組間休息計時
   const KEY = 'bdRest';            // {end, total}
-  const DEFAULT_KEY = 'bdRestDefault';
+  // 每一次休息都從這個秒數開始；休息中按 ±10 秒只影響這一次，不會變成下一次的預設
+  const REST_DEFAULT_SEC = 90;
   const bar = $('bd-rest');
   let restTimer = null;
-  const defaultRest = () => {
-    const value = parseInt(store.get(DEFAULT_KEY), 10);
-    return value >= 10 && value <= 600 ? value : 90;
-  };
+  const defaultRest = () => REST_DEFAULT_SEC;
+  store.del('bdRestDefault');   // 清掉舊版記住的秒數（已不再使用）
   const readRest = () => { try { return JSON.parse(store.get(KEY) || 'null'); } catch (e) { return null; } };
   const stopRest = (finished) => {
     clearInterval(restTimer);
@@ -615,7 +614,6 @@
       rest.end += (total - rest.total) * 1000;
       rest.total = total;
       store.set(KEY, JSON.stringify(rest));
-      store.set(DEFAULT_KEY, String(total));   // 記住偏好的休息秒數
       runRest();
     });
   });
