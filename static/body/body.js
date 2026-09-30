@@ -105,7 +105,7 @@
 
   // ------------------------------------------------------------ 預設休息時間（使用者可改，存在瀏覽器）
   const REST_SETTING_KEY = 'bdRestDefaultSec';
-  const REST_MIN = 15, REST_MAX = 600, REST_STEP = 15;
+  const REST_MIN = 10, REST_MAX = 600, REST_STEP = 10;   // 每次 ±10 秒，範圍 10 秒～10 分鐘
   function restSetting() {
     const value = parseInt(store.get(REST_SETTING_KEY), 10);
     return value >= REST_MIN && value <= REST_MAX ? value : 90;
@@ -496,7 +496,9 @@
     else if (action === 'plan-pick') { planSel = Number(ex); render(); }
     else if (action === 'rest-default') {
       // 只改之後每次休息的起始秒數；正在倒數的這一次不受影響
-      setRestSetting(restSetting() + Number(target.dataset.step));
+      // 對齊到 10 秒的倍數（舊版以 15 秒為單位存過的值，例如 105，會變成 110 / 100）
+      const step = Number(target.dataset.step);
+      setRestSetting((step > 0 ? Math.floor : Math.ceil)(restSetting() / REST_STEP) * REST_STEP + step);
       render();
     }
     else if (action === 'plan-add-set') {
