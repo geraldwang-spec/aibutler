@@ -11,7 +11,7 @@ from functools import wraps
 from email_validator import validate_email, EmailNotValidError
 from flask import Blueprint, current_app, flash, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
-from storage import db
+from storage import db, StorageIntegrityError
 
 auth = Blueprint('auth', __name__)
 
@@ -50,7 +50,8 @@ def limited(bucket, maximum, seconds):
         connection.rollback()
         return True
     if not row or now-row['started_at'] >= seconds:
-        connection.execute('INSERT OR REPLACE INTO rate_limits VALUES (?,1,?)', (bucket,now))
+        connection.execute('DELETE FROM rate_limits WHERE bucket=?', (bucket,))
+        connection.execute('INSERT INTO rate_limits (bucket,count,started_at) VALUES (?,1,?)', (bucket,now))
     else:
         connection.execute('UPDATE rate_limits SET count=count+1 WHERE bucket=?', (bucket,))
     connection.commit()
@@ -108,7 +109,8 @@ def send_verification():
     if old and now-old['sent_at'] < 60:
         connection.rollback()
         return jsonify(ok=False,message='請等待 60 秒後再重新發送。'), 429
-    connection.execute('INSERT OR REPLACE INTO registration_codes (email,code_hash,expires_at,sent_at,state,request_ip) VALUES (?,?,?,?,?,?)', (email,digest,now+1800,now,'sending',request.remote_addr))
+    connection.execute('DELETE FROM registration_codes WHERE email=?', (email,))
+    connection.execute('INSERT INTO registration_codes (email,code_hash,expires_at,sent_at,state,request_ip) VALUES (?,?,?,?,?,?)', (email,digest,now+1800,now,'sending',request.remote_addr))
     connection.commit()
     try:
         send_code(email,code)
@@ -154,7 +156,7 @@ def register():
             connection.commit()
             flash('註冊成功，信箱已驗證，請登入。','success')
             return redirect(url_for('auth.login'))
-        except sqlite3.IntegrityError:
+        except (sqlite3.IntegrityError,StorageIntegrityError):
             db().rollback()
             error = '帳號或電子信箱已被使用。'
         except ValueError as exc:
