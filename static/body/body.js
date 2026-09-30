@@ -103,6 +103,34 @@
   let planSel = null;   // 開始前正在設定哪個動作
   const canStart = () => !state.is_future && !state.workout && getPlan().length > 0;
 
+  // ------------------------------------------------------------ 預設休息時間（使用者可改，存在瀏覽器）
+  const REST_SETTING_KEY = 'bdRestDefaultSec';
+  const REST_MIN = 15, REST_MAX = 600, REST_STEP = 15;
+  function restSetting() {
+    const value = parseInt(store.get(REST_SETTING_KEY), 10);
+    return value >= REST_MIN && value <= REST_MAX ? value : 90;
+  }
+  function setRestSetting(seconds) {
+    const value = Math.min(REST_MAX, Math.max(REST_MIN, seconds));
+    if (value === 90) store.del(REST_SETTING_KEY); else store.set(REST_SETTING_KEY, String(value));
+    return value;
+  }
+  const restText = (s) => (s % 60 ? `${Math.floor(s / 60) ? `${Math.floor(s / 60)} 分 ` : ''}${s % 60} 秒` : `${s / 60} 分鐘`);
+  function restControl() {
+    const sec = restSetting();
+    return h('div', { class: 'bd-restset', role: 'group', 'aria-label': '預設休息時間' },
+      h('span', { class: 'bd-restset__label', text: '組間休息' }),
+      h('button', {
+        type: 'button', class: 'bd-restset__btn', disabled: sec <= REST_MIN,
+        dataset: { action: 'rest-default', step: -REST_STEP, key: 'rest-minus' }, 'aria-label': `預設休息時間減少 ${REST_STEP} 秒`
+      }, icon('minus')),
+      h('output', { class: 'bd-restset__value', 'aria-live': 'polite', text: restText(sec) }),
+      h('button', {
+        type: 'button', class: 'bd-restset__btn', disabled: sec >= REST_MAX,
+        dataset: { action: 'rest-default', step: REST_STEP, key: 'rest-plus' }, 'aria-label': `預設休息時間增加 ${REST_STEP} 秒`
+      }, icon('plus')));
+  }
+
   // ------------------------------------------------------------ JSON 通訊
   function showMessage(text, kind) {
     const box = $('bd-message');
@@ -332,16 +360,18 @@
     if (!w) {
       fill(wrap,
         h('div', { class: 'bd-section-head', id: 'bd-log' },
-          h('h2', { text: '今天要做的動作' }),
-          h('p', { text: '先加好動作，再開始訓練；開始後可以隨時再加。' })),
+          h('div', null, h('h2', { text: '今天要做的動作' }),
+            h('p', { text: '先加好動作，再開始訓練；開始後可以隨時再加。' })),
+          restControl()),
         h('div', { class: 'bd-log' }, list, planCard(items)));
       return;
     }
 
     fill(wrap,
       h('div', { class: 'bd-section-head', id: 'bd-log' },
-        h('h2', { text: '逐組紀錄' }),
-        h('p', { text: w.in_progress ? '點 ✓ 完成一組，會自動開始休息計時；再點一次可取消。' : '這次訓練已結束，仍可補登或取消組數。' })),
+        h('div', null, h('h2', { text: '逐組紀錄' }),
+          h('p', { text: w.in_progress ? '點 ✓ 完成一組，會自動開始休息計時；再點一次可取消。' : '這次訓練已結束，仍可補登或取消組數。' })),
+        restControl()),
       h('div', { class: 'bd-log' }, list, currentCard(cur, w)));
   }
 
@@ -464,6 +494,11 @@
     if (action === 'goto') load(d);
     else if (action === 'pick') load(state.d, ex);
     else if (action === 'plan-pick') { planSel = Number(ex); render(); }
+    else if (action === 'rest-default') {
+      // 只改之後每次休息的起始秒數；正在倒數的這一次不受影響
+      setRestSetting(restSetting() + Number(target.dataset.step));
+      render();
+    }
     else if (action === 'plan-add-set') {
       const id = Number(ex);
       updatePlan(id, (entry) => {
@@ -566,11 +601,12 @@
 
   // ------------------------------------------------------------ 組間休息計時
   const KEY = 'bdRest';            // {end, total}
-  // 每一次休息都從這個秒數開始；休息中按 ±10 秒只影響這一次，不會變成下一次的預設
+  // 每一次休息都從「預設休息時間」開始；休息中按 ±10 秒只影響這一次，不會變成下一次的預設
+  // 預設休息時間由使用者在「逐組紀錄」標題旁設定，存在這台瀏覽器（REST_SETTING_KEY）
   const REST_DEFAULT_SEC = 90;
   const bar = $('bd-rest');
   let restTimer = null;
-  const defaultRest = () => REST_DEFAULT_SEC;
+  const defaultRest = () => restSetting();
   store.del('bdRestDefault');   // 清掉舊版記住的秒數（已不再使用）
   const readRest = () => { try { return JSON.parse(store.get(KEY) || 'null'); } catch (e) { return null; } };
   const stopRest = (finished) => {
