@@ -1,0 +1,68 @@
+{% extends 'live_base.html' %}{% block content %}
+<section class="panel-card">
+  <div class="record-head"><div><h2>學習目標規劃</h2><p>以月曆追蹤每天的學習路線；真正進度由系統小考與階段 Checkpoint 成績判定，不再讓使用者自行點擊「完成」。</p></div></div>
+  {% if error %}<p class="form-error">{{error}}</p>{% endif %}
+  <form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}">
+    <div class="form-grid">
+      <label>學習目標<input name="goal_name" required maxlength="120" placeholder="例如：TQC Python 證照"></label>
+      <label>科目<select name="subject_id" required><option value="">請選擇</option>{% for s in subjects %}<option value="{{s.id}}">{{s.subject_name}}</option>{% endfor %}</select></label>
+      <label>考試日期<input type="date" name="exam_date" min="{{today}}" required></label>
+      <label>目前程度<select name="starting_level"><option value="auto">由測驗資料判斷</option><option value="beginner">初學</option><option value="intermediate">有基礎</option><option value="advanced">已有經驗</option></select></label>
+      <label>平日可學（分鐘）<input type="number" name="weekday_minutes" min="10" max="480" value="60"></label>
+      <label>假日可學（分鐘）<input type="number" name="weekend_minutes" min="10" max="720" value="90"></label>
+    </div>
+    <h3>考試範圍</h3><p><small>不勾選代表整科。系統會依 Concept、弱項與剩餘時間安排學習、小考、階段驗收及考前緩衝。</small></p>
+    <div class="choice-grid">{% for c in chapters %}<label class="answer-choice"><input type="checkbox" name="chapter_ids" value="{{c.id}}">{{c.chapter_name}}</label>{% endfor %}</div>
+    <button class="action">建立完整學習路線</button>
+  </form>
+</section>
+
+{% if goals %}<section class="panel-card"><h2>我的學習目標</h2><div class="choice-grid">{% for g0 in goals %}<a class="answer-choice {% if current and current.id==g0.id %}selected{% endif %}" href="{{url_for('personal_ai.adaptive_planner',goal_id=g0.id)}}"><strong>{{g0.goal_name}}</strong><br><small>{{g0.subject_name}} · 考試 {{g0.exam_date}}</small></a>{% endfor %}</div></section>{% endif %}
+
+{% if current %}
+<section class="panel-card">
+  <div class="record-head"><div><h2>{{current.goal_name}}</h2><p>{{current.subject_name}} · 考試 {{current.exam_date}}</p></div><span class="pill">驗收進度 {{progress.percent}}%</span></div>
+  <div class="planner-summary">
+    <div class="planner-stat"><small>階段 Checkpoint</small><strong>{{progress.passed}} / {{progress.total}}</strong><span>通過才推進正式進度</span></div>
+    <div class="planner-stat"><small>系統測驗</small><strong>{{progress.quiz_passed}} / {{progress.quiz_total}}</strong><span>包含小測、模擬考與 Checkpoint</span></div>
+    <div class="planner-stat"><small>最後重新規劃</small><strong class="planner-replan-time">{{current.last_replanned_at or '尚未重新規劃'}}</strong><span>可依最新成績重新排未來內容</span></div>
+  </div>
+  <p class="notice info">閱讀、練習與複習只是學習安排，不會因為按一下按鈕就算掌握。只有系統建立的測驗達到門檻，才會標記為通過。</p>
+  <form method="post" action="{{url_for('personal_ai.adaptive_plan_replan',goal_id=current.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="secondary-button">依目前測驗成績重新規劃</button></form>
+</section>
+
+<section class="panel-card"><h2>階段與里程碑</h2>
+  {% for p in phases %}<article class="record-item milestone {{'passed' if p.status=='passed' else ('review' if p.status=='needs_review' else '')}}"><div class="record-head"><strong>第 {{p.phase_no}} 階段 · {{p.name}}</strong><span class="pill">{{'已通過' if p.status=='passed' else ('需補強' if p.status=='needs_review' else '目標 ' ~ (p.target_mastery|int) ~ '%')}}</span></div><p>{{p.start_date}} ～ {{p.end_date}}</p><p>{{p.objective}}</p>
+    {% for m in milestones %}{% if m.phase_id==p.id %}<p><strong>Checkpoint：</strong>{{m.title}} · {{m.target_date}} · 門檻 {{m.target_mastery|int}}% · {{m.checkpoint_question_count}} 題 · <strong>{{'已通過' if m.status=='achieved' else ('未達標，需重測' if m.status=='needs_review' else '尚未驗收')}}</strong></p>{% endif %}{% endfor %}
+  </article>{% endfor %}
+</section>
+
+<section class="panel-card">
+  <div class="calendar-head">
+    <a class="outline-button" href="{{url_for('personal_ai.adaptive_planner',goal_id=current.id,month=calendar_view.prev)}}">← 上個月</a>
+    <div><h2>{{calendar_view.label}}</h2><small>一天一天查看學習內容、系統小考與驗收結果</small></div>
+    <a class="outline-button" href="{{url_for('personal_ai.adaptive_planner',goal_id=current.id,month=calendar_view.next)}}">下個月 →</a>
+  </div>
+  <div class="calendar-wrap"><div class="calendar-grid">
+    {% for w in ['日','一','二','三','四','五','六'] %}<div class="calendar-weekday">週{{w}}</div>{% endfor %}
+    {% for week in calendar_view.weeks %}{% for cell in week %}
+      <div class="calendar-day {{'outside' if not cell.in_month else ''}} {{'today' if cell.is_today else ''}}">
+        <div class="calendar-date">{{cell.day}}{% if cell.is_today %} · 今天{% endif %}</div>
+        {% for t in cell.tasks %}
+          {% set assessed = t.question_count and t.question_count > 0 %}
+          <div class="calendar-task {{'assessment' if assessed else ''}} {{'passed' if t.status=='done' else ('failed' if t.status=='failed' else '')}}">
+            <span class="calendar-task-kind">{{t.task_type}}</span><strong class="calendar-task-title">{{t.title}}</strong>
+            <small>{{t.target_minutes}} 分鐘{% if assessed %} · {{t.question_count}} 題 · 通過門檻 {{t.required_score|round(0)|int}}%{% endif %}</small>
+            {% if t.attempt and t.attempt.score is not none %}<small>最近成績：{{t.attempt.score|round(1)}} 分 · {{'通過' if t.attempt.passed else '未通過'}}</small>{% endif %}
+            {% if assessed and t.status!='done' %}
+              <form method="post" action="{{url_for('personal_ai.adaptive_plan_checkpoint_start',task_id=t.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="checkpoint-button {{'retry' if t.status=='failed' else ''}}">{{'重新挑戰' if t.status=='failed' else '開始系統測驗'}}</button></form>
+            {% elif assessed and t.status=='done' %}<small><strong>✓ 系統評分已達標</strong></small>
+            {% else %}<small>學習安排 · 後續由系統測驗驗收</small>{% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% endfor %}{% endfor %}
+  </div></div>
+</section>
+{% endif %}
+{% endblock %}

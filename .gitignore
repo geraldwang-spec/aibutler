@@ -13,3 +13,7 @@ instance/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local secrets / downloaded model weights
+.env
+models/

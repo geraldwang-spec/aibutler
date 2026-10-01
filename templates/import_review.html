@@ -1,1 +1,28 @@
-{% extends 'live_base.html' %}{% block content %}<p class="notice info">{{ batch.file_name }} · {{ batch.status }} · {{ items|length }} 題。請確認題目、選項、答案與解析。</p>{% for item in items %}<article class="panel-card"><h2>{{ loop.index }}. {{ item.chapter_name }} · {{ item.q_type }}</h2><p class="prewrap">{{ item.content }}</p>{% for label in 'ABCD' %}{% if item.get('option_'+label) %}<p>{{ label }}. {{ item.get('option_'+label) }}</p>{% endif %}{% endfor %}<p>答案：{{ item.answer_key }}</p><p>解析：{{ item.explanation or '未提供' }}</p></article>{% endfor %}{% if batch.status=='待確認' %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="action">確認全部題目並匯入</button><a class="outline-button" href="{{ url_for('imports') }}">返回，暫不匯入</a></form>{% endif %}{% endblock %}
+{% extends 'live_base.html' %}{% block content %}
+{% set concept_mode = items and items[0].get('_import_strategy') == 'concept' %}
+{% if concept_mode %}
+<p class="notice info"><strong>概念型匯入：</strong>確認後，這些原始題目只會作為 Concept 的來源樣本，不會加入固定考題池。相同 Concept 會合併；之後由 LLM 依概念、技能與難度重新生成新題。</p>
+{% else %}
+<p class="notice info"><strong>傳統題庫匯入：</strong>確認後原題會直接加入正式題庫。</p>
+{% endif %}
+<p class="notice info">{{ batch.file_name }} · {{ batch.status }} · {{ items|length }} 題。請確認題目、答案與概念歸類。</p>
+{% for item in items %}
+<article class="panel-card">
+  <h2>{{ loop.index }}. {{ item.chapter_name }} · {{ item.q_type }}</h2>
+  {% if item.get('_concept_name') %}
+  <div class="concept-box">
+    <span class="pill">Concept：{{ item.get('_concept_name') }}</span>
+    <span class="pill">Skill：{{ item.get('_skill') or '未指定' }}</span>
+    <span class="pill">{{ item.get('_cognitive_level') or 'understand' }}</span>
+    <span class="pill">信心 {{ '%.0f'|format((item.get('_concept_confidence') or 0)*100) }}%</span>
+    {% if item.get('_concept_id') %}<span class="pill success">歸入既有 Concept #{{ item.get('_concept_id') }}</span>{% else %}<span class="pill">建議建立新 Concept</span>{% endif %}
+    {% if item.get('_classification_reason') %}<p class="muted">分類理由：{{ item.get('_classification_reason') }}</p>{% endif %}
+  </div>
+  {% endif %}
+  <p class="prewrap">{{ item.content }}</p>
+  {% for label in 'ABCD' %}{% if item.get('option_'+label) %}<p>{{ label }}. {{ item.get('option_'+label) }}</p>{% endif %}{% endfor %}
+  <p>答案：{{ item.answer_key }}</p><p>解析：{{ item.explanation or '未提供' }}</p>
+</article>
+{% endfor %}
+{% if batch.status=='待確認' %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="action">確認全部題目</button><a class="outline-button" href="{{ url_for('imports') }}">返回，暫不匯入</a></form>{% endif %}
+{% endblock %}

@@ -13,7 +13,7 @@ import json
 import random
 from collections import defaultdict
 
-from flask import abort, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 
 from auth import login_required
 from records import options
@@ -85,16 +85,32 @@ def _normalize_answer(q_type: str, form_key: str):
     return request.form.get(form_key, "").strip()
 
 
-def _question_snapshot(question):
-    snapshot = dict(question)
-    snapshot["options"] = [
-        dict(row)
-        for row in db().execute(
-            "SELECT * FROM question_options WHERE question_id=? ORDER BY order_no, id",
-            (question["id"],),
-        ).fetchall()
-    ]
-    return snapshot
+def _question_snapshots(questions):
+    """Build all question snapshots with one option query.
+
+    The previous implementation queried options once per question (N+1).
+    That is barely visible with local SQLite but becomes slow against a remote
+    MariaDB over Tailscale.
+    """
+    if not questions:
+        return []
+    question_ids = [question["id"] for question in questions]
+    placeholders = ",".join("?" for _ in question_ids)
+    option_rows = db().execute(
+        f"SELECT * FROM question_options WHERE question_id IN ({placeholders}) "
+        "ORDER BY question_id, order_no, id",
+        tuple(question_ids),
+    ).fetchall()
+    grouped = defaultdict(list)
+    for row in option_rows:
+        grouped[row["question_id"]].append(dict(row))
+
+    snapshots = []
+    for question in questions:
+        snapshot = dict(question)
+        snapshot["options"] = grouped.get(question["id"], [])
+        snapshots.append(snapshot)
+    return snapshots
 
 
 def _candidate_questions(subject_id: int, chapter_ids: list[int], q_types: list[str], mode: str):
@@ -106,6 +122,11 @@ def _candidate_questions(subject_id: int, chapter_ids: list[int], q_types: list[
         WHERE c.subject_id=? AND s.created_by=?
     """
     params = [subject_id, g.user["id"]]
+
+    # Fresh dynamic questions are historical snapshots, not a reusable fixed bank.
+    # Exception: wrong-answer review intentionally needs the exact question again.
+    if mode != "錯題複習":
+        sql += " AND COALESCE(q.source,'manual') <> 'concept_dynamic'"
 
     if chapter_ids:
         sql += f" AND c.id IN ({','.join('?' for _ in chapter_ids)})"
@@ -121,11 +142,131 @@ def _candidate_questions(subject_id: int, chapter_ids: list[int], q_types: list[
     return list(db().execute(sql, tuple(params)).fetchall())
 
 
+def _concept_source_count(subject_id: int, chapter_ids: list[int]) -> int:
+    sql = """
+        SELECT COUNT(*) AS n
+        FROM source_question_items si
+        WHERE si.user_id=? AND si.subject_id=?
+    """
+    params = [g.user["id"], subject_id]
+    if chapter_ids:
+        sql += f" AND si.chapter_id IN ({','.join('?' for _ in chapter_ids)})"
+        params.extend(chapter_ids)
+    row = db().execute(sql, tuple(params)).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def _materialize_dynamic_questions(subject_id: int, chapter_ids: list[int], q_types: list[str], count: int):
+    """Generate fresh Concept-based questions for one quiz and persist them only as history.
+
+    These rows are tagged ``concept_dynamic`` and are never reused by the normal
+    fixed-question sampler.  Persisting them gives grading/wrong-answer history a
+    stable question_id while every new quiz still receives newly generated wording.
+    """
+    from personal_ai.services import generate_question_drafts
+    from personal_ai.llm_provider import LLMError
+
+    requested_types = q_types or list(ALLOWED_TYPES)
+    created_questions = []
+    remaining = count
+    while remaining > 0:
+        batch_size = min(10, remaining)
+        try:
+            draft_ids = generate_question_drafts(
+                current_app.config, g.user["id"], subject_id, chapter_ids,
+                batch_size, requested_types, 3,
+                "本次模擬考：依 Concept/Skill 重新設計，不得只改數字或照抄來源題。",
+            )
+        except (LLMError, RuntimeError, ValueError) as exc:
+            if created_questions:
+                break
+            raise ValueError(f"Concept 動態出題失敗：{exc}") from exc
+
+        for draft_id in draft_ids:
+            d = db().execute(
+                "SELECT * FROM ai_question_drafts WHERE id=? AND user_id=?",
+                (draft_id, g.user["id"]),
+            ).fetchone()
+            if not d:
+                continue
+            chapter_id = d["chapter_id"]
+            if not chapter_id:
+                if chapter_ids:
+                    chapter_id = chapter_ids[0]
+                else:
+                    fallback = db().execute(
+                        "SELECT id FROM chapters WHERE subject_id=? ORDER BY order_no,id LIMIT 1",
+                        (subject_id,),
+                    ).fetchone()
+                    chapter_id = fallback["id"] if fallback else None
+            if not chapter_id:
+                raise ValueError("此科目尚無章節，無法建立動態考題。")
+
+            qid = _insert("questions", {
+                "chapter_id": chapter_id,
+                "q_type": d["q_type"],
+                "content": d["content"],
+                "answer_key": d["answer_key"],
+                "explanation": d["explanation"] or "",
+                "difficulty": d["difficulty"] or 3,
+                "source": "concept_dynamic",
+            })
+            opts = json.loads(d["options_json"] or "{}")
+            for n, (label, text) in enumerate(opts.items(), 1):
+                _insert("question_options", {
+                    "question_id": qid, "option_label": label,
+                    "option_text": text, "order_no": n,
+                })
+            _insert("question_metadata", {
+                "question_id": qid,
+                "source_type": "concept_dynamic",
+                "generation_model": d["model_name"] or "",
+                "evidence_chunk_ids": d["evidence_chunk_ids"] or "[]",
+                "concepts_json": d["concepts_json"] or "[]",
+                "skill": d["skill"] or "",
+                "is_verified": 1,
+            })
+            try:
+                concept_names = json.loads(d["concepts_json"] or "[]")
+            except json.JSONDecodeError:
+                concept_names = []
+            for concept_name in concept_names:
+                c = db().execute(
+                    "SELECT id FROM concepts WHERE subject_id=? AND lower(name)=lower(?)",
+                    (subject_id, str(concept_name)),
+                ).fetchone()
+                if c:
+                    linked = db().execute(
+                        "SELECT 1 FROM question_concepts WHERE question_id=? AND concept_id=?",
+                        (qid, c["id"]),
+                    ).fetchone()
+                    if not linked:
+                        db().execute(
+                            "INSERT INTO question_concepts(question_id,concept_id,weight) VALUES (?,?,1)",
+                            (qid, c["id"]),
+                        )
+            db().execute(
+                "UPDATE ai_question_drafts SET status='quiz_generated',approved_question_id=? WHERE id=?",
+                (qid, draft_id),
+            )
+            created_questions.append(db().execute("SELECT * FROM questions WHERE id=?", (qid,)).fetchone())
+            if len(created_questions) >= count:
+                break
+        remaining = count - len(created_questions)
+        if not draft_ids:
+            break
+
+    if len(created_questions) < count:
+        raise ValueError(f"模型只產生 {len(created_questions)} 題可用題目，未達本次設定的 {count} 題，請重試或降低題數。")
+    db().commit()
+    return created_questions
+
+
 def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], q_types: list[str], random_order: bool):
-    """依使用者設定建立固定題目快照；題目不足時拒絕建立。"""
+    """Create a quiz from Concept generation or, when unavailable, the legacy fixed bank."""
     _owned_subject(subject_id)
     if mode not in ALLOWED_MODES or not 1 <= count <= 100:
-        raise ValueError("請選擇有效模式與 1–100 題。")
+        raise ValueError("請選擇有效模式與 1–100 題；Concept 模式沒有固定題庫數量門檻。")
     if any(q_type not in ALLOWED_TYPES for q_type in q_types):
         raise ValueError("題型設定不正確。")
 
@@ -143,13 +284,39 @@ def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], 
         if {row["id"] for row in rows} != set(chapter_ids):
             raise ValueError("選取的章節不屬於目前科目，請重新設定。")
 
-    candidates = _candidate_questions(subject_id, chapter_ids, q_types, mode)
-    available = len(candidates)
-    if available < count:
-        label = "待複習錯題" if mode == "錯題複習" else "符合條件的題目"
-        raise ValueError(f"目前{label}只有 {available} 題，無法建立 {count} 題的模擬考。")
+    # Wrong-answer review intentionally reuses the exact question the learner got wrong.
+    # Normal practice/mock exams prefer Concept-based fresh generation whenever concept
+    # source samples exist in the selected scope.
+    if mode != "錯題複習" and _concept_source_count(subject_id, chapter_ids) > 0:
+        chosen = _materialize_dynamic_questions(subject_id, chapter_ids, q_types, count)
+    else:
+        candidates = _candidate_questions(subject_id, chapter_ids, q_types, mode)
+        available = len(candidates)
+        if available < count:
+            label = "待複習錯題" if mode == "錯題複習" else "固定題庫題目"
+            if mode == "錯題複習":
+                raise ValueError(f"目前{label}只有 {available} 題；錯題複習會保留原題，因此不能憑空補題。")
+            raise ValueError(
+                f"目前沒有可用的 Concept 來源樣本，且{label}只有 {available} 題。"
+                "請先用概念型匯入建立 Concept，或使用傳統題庫匯入。"
+            )
+        chosen = random.sample(candidates, count) if random_order else candidates[:count]
 
-    chosen = random.sample(candidates, count) if random_order else candidates[:count]
+    snapshots = _question_snapshots(chosen)
+
+    # Reject malformed imported questions before creating the exam.  Single and
+    # multiple choice questions must have at least two selectable options and
+    # every answer label must exist in those options.
+    malformed = []
+    for snapshot in snapshots:
+        if snapshot["q_type"] in ("單選", "多選"):
+            labels = {str(option["option_label"]).strip() for option in snapshot["options"]}
+            answers = {part.strip() for part in str(snapshot.get("answer_key", "")).split(",") if part.strip()}
+            if len(labels) < 2 or not answers or not answers.issubset(labels):
+                malformed.append(snapshot["id"])
+    if malformed:
+        raise ValueError("題庫資料不完整，請先修正題目 #" + ", #".join(map(str, malformed)) + " 的選項或答案。")
+
     session_id = _insert(
         "quiz_sessions",
         {
@@ -159,16 +326,13 @@ def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], 
             "total_count": count,
         },
     )
-    for question in chosen:
-        snapshot = _question_snapshot(question)
-        _insert(
-            "quiz_answers",
-            {
-                "session_id": session_id,
-                "question_id": question["id"],
-                "question_snapshot": json.dumps(snapshot, ensure_ascii=False),
-            },
-        )
+    db().executemany(
+        "INSERT INTO quiz_answers (session_id,question_id,question_snapshot) VALUES (?,?,?)",
+        [
+            (session_id, question["id"], json.dumps(snapshot, ensure_ascii=False))
+            for question, snapshot in zip(chosen, snapshots)
+        ],
+    )
     db().commit()
     return session_id
 
@@ -248,6 +412,19 @@ def grade_quiz(session_id: int):
         (correct, session_id, g.user["id"]),
     )
     db().commit()
+
+    # Planner-linked quizzes are scored gates. The learner cannot manually mark
+    # them complete; this hook decides pass/fail from the submitted quiz score.
+    try:
+        from personal_ai.coaching import apply_planner_quiz_result
+        outcome = apply_planner_quiz_result(g.user["id"], session_id)
+        if outcome:
+            if outcome['passed']:
+                flash(f"學習規劃驗收通過：{outcome['score']:.1f} 分（門檻 {outcome['required_score']:.0f} 分）。", "success")
+            else:
+                flash(f"本次尚未達標：{outcome['score']:.1f} 分（門檻 {outcome['required_score']:.0f} 分）。請補強後重新挑戰。", "error")
+    except Exception as exc:
+        current_app.logger.exception("Failed to apply planner checkpoint result: %s", exc)
     return True
 
 
@@ -265,21 +442,31 @@ def get_wrong_book(user_id: int):
         """,
         (user_id, user_id),
     ).fetchall()
+    if not rows:
+        return []
+
+    # One query for all historical wrong answers instead of one query per row.
+    question_ids = [row["question_id"] for row in rows]
+    placeholders = ",".join("?" for _ in question_ids)
+    history = db().execute(
+        f"""
+        SELECT a.question_id, a.user_answer, a.question_snapshot, a.answered_at, a.id
+        FROM quiz_answers a
+        JOIN quiz_sessions qs ON qs.id=a.session_id
+        WHERE qs.user_id=? AND a.is_correct=0
+          AND a.question_id IN ({placeholders})
+        ORDER BY a.question_id, a.answered_at DESC, a.id DESC
+        """,
+        (user_id, *question_ids),
+    ).fetchall()
+    latest_by_question = {}
+    for item in history:
+        latest_by_question.setdefault(item["question_id"], item)
 
     output = []
     for row in rows:
         item = dict(row)
-        latest = db().execute(
-            """
-            SELECT a.user_answer, a.question_snapshot
-            FROM quiz_answers a
-            JOIN quiz_sessions qs ON qs.id=a.session_id
-            WHERE qs.user_id=? AND a.question_id=? AND a.is_correct=0
-            ORDER BY a.answered_at DESC, a.id DESC
-            LIMIT 1
-            """,
-            (user_id, row["question_id"]),
-        ).fetchone()
+        latest = latest_by_question.get(row["question_id"])
         if latest:
             snapshot = json.loads(latest["question_snapshot"])
             item["last_wrong_answer"] = latest["user_answer"] or "未作答"
@@ -351,7 +538,7 @@ def register_tye_exam(app):
         selected = {
             "subject_id": request.form.get("subject_id", ""),
             "mode": request.form.get("mode", "模擬考"),
-            "count": request.form.get("count", "10"),
+            "count": request.form.get("count", "5"),
             "chapter_ids": request.form.getlist("chapter_ids"),
             "q_types": request.form.getlist("q_types"),
             "random_order": request.form.get("random_order", "1"),
@@ -359,7 +546,7 @@ def register_tye_exam(app):
         if request.method == "POST":
             try:
                 subject_id = int(request.form.get("subject_id", "0"))
-                count = int(request.form.get("count", "10"))
+                count = int(request.form.get("count", "5"))
                 chapter_ids = _parse_id_list(request.form.getlist("chapter_ids"))
                 q_types = request.form.getlist("q_types")
                 random_order = request.form.get("random_order", "1") == "1"
@@ -421,11 +608,15 @@ def register_tye_exam(app):
                 snapshot.pop("answer_key", None)
                 snapshot.pop("explanation", None)
             items.append((row, snapshot))
+        planner_attempt = db().execute("""SELECT lca.*,lt.goal_id,lt.title task_title
+            FROM learning_checkpoint_attempts lca JOIN learning_tasks lt ON lt.id=lca.task_id
+            WHERE lca.session_id=? AND lt.user_id=?""",(sid,g.user['id'])).fetchone()
         return render_template(
             "quiz_take.html",
             title="考試結果" if exam["finished_at"] else "作答中",
             exam=exam,
             items=items,
+            planner_attempt=planner_attempt,
         )
 
     @app.get("/results", endpoint="results")

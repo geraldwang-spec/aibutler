@@ -1,1 +1,37 @@
-{% extends 'live_base.html' %}{% block content %}<section class="panel-card"><h2>CSV / Excel 題庫匯入</h2><p>先下載 CSV 範本填寫，也可另存 XLSX。每批最多 500 題、檔案 5 MB，預覽確認後才寫入題庫。</p><a href="{{ url_for('import_template') }}">下載題庫範本</a><form method="post" enctype="multipart/form-data"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>匯入科目<select name="subject_id" required><option value="">請選擇</option>{% for id,name in subjects %}<option value="{{ id }}">{{ name }}</option>{% endfor %}</select></label><label>題庫檔案<input type="file" name="file" accept=".csv,.xlsx" required></label><button class="action">上傳並預覽</button></form></section><section class="panel-card"><h2>上傳批次</h2>{% for row in batches %}<div class="record-item"><a href="{{ url_for('import_review',batch=row.id) }}">{{ row.file_name }}</a> · {{ row.status }} · {{ row.imported_count }}/{{ row.total_rows }} 題</div>{% else %}<p>尚無上傳紀錄。</p>{% endfor %}</section>{% endblock %}
+{% extends 'live_base.html' %}{% block content %}
+<section class="panel-card">
+  <h2>通用題庫匯入</h2>
+  <p>支援 PDF、Word、Excel、CSV。所有格式都先解析成題目預覽，確認後才寫入系統。</p>
+  <p class="notice info"><strong>推薦：</strong>使用「概念型匯入」。系統會用 Embedding + Concept Classifier 判斷題目真正考的知識點；相同概念不會一直堆進固定題庫，原題只保留成來源樣本，之後由 LLM 依 Concept 重新設計新題。</p>
+  <a href="{{ url_for('import_template') }}">下載 CSV / Excel 題庫範本</a>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>匯入科目
+      <select name="subject_id" required><option value="">請選擇</option>{% for id,name in subjects %}<option value="{{ id }}">{{ name }}</option>{% endfor %}</select>
+    </label>
+    <label>PDF / Word 的預設章節
+      <input type="text" name="default_chapter" maxlength="120" placeholder="例如：二元一次方程式 / Chapter 3">
+    </label>
+    <label>匯入策略
+      <select name="import_strategy">
+        <option value="concept" selected>概念型匯入（推薦：原題不進固定考題池）</option>
+        <option value="question_bank">傳統題庫匯入（保留原題並可直接抽題）</option>
+      </select>
+    </label>
+    <p class="muted">概念型：題目 → bge-m3 找語意近鄰 → Classifier LLM 歸入 Concept / Skill → 保留來源樣本。模擬題由 Generator LLM 重新設計。</p>
+    <label>文件解析方式
+      <select name="parse_mode">
+        <option value="auto">自動（規則優先，必要時 LLM）</option>
+        <option value="rules">快速解析（不使用模型解析文件）</option>
+        <option value="llm">AI 強化解析（文字層失敗時自動 Vision）</option>
+      </select>
+    </label>
+    <label>題庫檔案
+      <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md" required>
+    </label>
+    <button class="action">上傳、判讀、概念歸類並預覽</button>
+  </form>
+  <p class="muted">注意：「快速解析」只代表不用 LLM 拆 PDF 題目；若選概念型匯入，仍會執行 Concept Classifier。Concept 分類目前預設使用本機 qwen3.5:4b；高成本生成任務可交由 Groq。</p>
+</section>
+<section class="panel-card"><h2>上傳批次</h2>{% for row in batches %}<div class="record-item"><a href="{{ url_for('import_review',batch=row.id) }}">{{ row.file_name }}</a> · {{ row.status }} · {{ row.imported_count }}/{{ row.total_rows }} 題{% if row.error_log %} · {{ row.error_log }}{% endif %}</div>{% else %}<p>尚無上傳紀錄。</p>{% endfor %}</section>
+{% endblock %}

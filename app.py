@@ -11,6 +11,7 @@ load_dotenv(dotenv_path=ENV_FILE)
 
 from smartlife import create_app as create_base_app
 from TYE import register_tye_exam
+from personal_ai import register_personal_ai
 
 
 def create_app(test_config=None):
@@ -21,6 +22,27 @@ def create_app(test_config=None):
     """
     flask_app = create_base_app(test_config)
     register_tye_exam(flask_app)
+    flask_app.config.update(
+        APP_MODE=os.getenv("APP_MODE", flask_app.config.get("APP_MODE", "dev")),
+        GROQ_API_KEY=os.getenv("GROQ_API_KEY", flask_app.config.get("GROQ_API_KEY", "")),
+        LLM_PROVIDER=os.getenv("LLM_PROVIDER", flask_app.config.get("LLM_PROVIDER", "ollama")),
+        LLM_BASE_URL=os.getenv("LLM_BASE_URL", flask_app.config.get("LLM_BASE_URL", "http://127.0.0.1:11434/v1")),
+        LLM_API_KEY=os.getenv("LLM_API_KEY", flask_app.config.get("LLM_API_KEY", "")),
+        LLM_MODEL=os.getenv("LLM_MODEL", flask_app.config.get("LLM_MODEL", "qwen3.5:4b")),
+        CLASSIFIER_PROVIDER=os.getenv("CLASSIFIER_PROVIDER", flask_app.config.get("CLASSIFIER_PROVIDER", "ollama")),
+        CLASSIFIER_BASE_URL=os.getenv("CLASSIFIER_BASE_URL", flask_app.config.get("CLASSIFIER_BASE_URL", "http://127.0.0.1:11434/v1")),
+        CLASSIFIER_API_KEY=os.getenv("CLASSIFIER_API_KEY", flask_app.config.get("CLASSIFIER_API_KEY", "")),
+        CLASSIFIER_MODEL=os.getenv("CLASSIFIER_MODEL", flask_app.config.get("CLASSIFIER_MODEL", "qwen3.5:4b")),
+        PARSER_PROVIDER=os.getenv("PARSER_PROVIDER", flask_app.config.get("PARSER_PROVIDER", "ollama")),
+        PARSER_BASE_URL=os.getenv("PARSER_BASE_URL", flask_app.config.get("PARSER_BASE_URL", "http://127.0.0.1:11434/v1")),
+        PARSER_API_KEY=os.getenv("PARSER_API_KEY", flask_app.config.get("PARSER_API_KEY", "")),
+        PARSER_MODEL=os.getenv("PARSER_MODEL", flask_app.config.get("PARSER_MODEL", "qwen3.5:4b")),
+    )
+    register_personal_ai(flask_app)
+    if str(flask_app.config.get('APP_MODE','dev')).lower() == 'dev' and flask_app.config.get('DB_TYPE') == 'sqlite':
+        from dev_seed import ensure_dev_seed
+        with flask_app.app_context():
+            ensure_dev_seed()
     return flask_app
 
 
@@ -55,12 +77,22 @@ def check_environment():
     print("SMTP_SECURITY：", app.config.get("SMTP_SECURITY") or "未設定")
     print("COOKIE_SECURE：", app.config.get("SESSION_COOKIE_SECURE"))
     print("TYE 模組：已註冊")
+    print("Personal AI 模組：已註冊")
+    print("APP_MODE：", app.config.get("APP_MODE"))
+    print("LLM_PROVIDER：", app.config.get("LLM_PROVIDER"))
+    print("LLM_MODEL：", app.config.get("LLM_MODEL") or "未設定")
+    print("CLASSIFIER_PROVIDER：", app.config.get("CLASSIFIER_PROVIDER"))
+    print("CLASSIFIER_MODEL：", app.config.get("CLASSIFIER_MODEL") or "未設定")
     print("DB_TYPE：", app.config.get("DB_TYPE"))
-    if app.config.get("DB_TYPE") == "mariadb":
+    if app.config.get('APP_MODE') == 'dev':
+        print("DEV 測試帳號：admin123 / 12345678")
+    if app.config.get("DB_TYPE") in ("postgresql", "postgres", "pg"):
         print("DB_HOST：", app.config.get("DB_HOST"))
         print("DB_PORT：", app.config.get("DB_PORT"))
         print("DB_NAME：", app.config.get("DB_NAME"))
         print("DB_USER：", app.config.get("DB_USER"))
+        print("EMBEDDING_PROVIDER：", app.config.get("EMBEDDING_PROVIDER"))
+        print("EMBEDDING_MODEL：", app.config.get("EMBEDDING_MODEL") or "未設定")
     print("=" * 50)
 
 

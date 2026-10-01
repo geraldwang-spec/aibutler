@@ -19,6 +19,7 @@
     <p>正確答案：{{ row.snapshot_answer_key }} · 最近錯誤答案：{{ row.last_wrong_answer }}</p>
     <p>累計答錯 {{ row.wrong_count }} 次 · 最近答錯：{{ row.last_wrong_at }} · 狀態：{{ row.status }}</p>
     <details><summary>查看題庫解析</summary><p class="prewrap">{{ row.explanation or '尚無可用解析。' }}</p></details>
+    <p><a class="action-link" href="{{ url_for('personal_ai.wrong_tutor', question_id=row.question_id) }}">用教材 RAG 解釋這題 →</a></p>
   </article>
   {% else %}<p>目前沒有錯題。</p>{% endfor %}
 </section>

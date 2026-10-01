@@ -1,4 +1,76 @@
-{% extends 'live_base.html' %}{% block content %}{% if exam.finished_at %}<section class="panel-card"><h2>答對 {{ exam.correct_count }} / {{ exam.total_count }} 題</h2><p>成績 {{ (exam.correct_count / exam.total_count * 100)|round(1) }} 分。以下解析來自題庫中儲存的內容。</p><a href="{{ url_for('quiz_start') }}">再練習一次 →</a></section>{% else %}<p class="notice info">共 {{ exam.total_count }} 題。交卷前不顯示答案；所有題目完成後才能交卷。填空會忽略前後空白，其餘文字需與標準答案完全一致。作答內容於交卷時儲存。</p>{% endif %}
-<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% for row,q in items %}<section class="panel-card"><h2>第 {{ loop.index }} 題 · {{ q.q_type }}</h2><p class="prewrap">{{ q.content }}</p>{% if exam.finished_at %}{% for option in q.options %}<p>{{ option.option_label }}. {{ option.option_text }}</p>{% endfor %}<p class="{{ 'success' if row.is_correct else 'error' }}">你的答案：{{ row.user_answer or '未作答' }} · 正確答案：{{ q.answer_key }}</p><h3>題庫解析</h3><p class="prewrap">{{ q.explanation or '此題尚無可用解析。' }}</p><small>來源：題庫 #{{ q.id }} · 使用本次開考時的題目快照</small>
-{% elif q.q_type in ['單選','多選'] %}{% for option in q.options %}<label class="answer-choice"><input type="{{ 'checkbox' if q.q_type=='多選' else 'radio' }}" name="answer_{{ row.id }}" value="{{ option.option_label }}">{{ option.option_label }}. {{ option.option_text }}</label>{% endfor %}
-{% elif q.q_type=='是非' %}{% for option in ['是','否'] %}<label class="answer-choice"><input type="radio" name="answer_{{ row.id }}" value="{{ option }}">{{ option }}</label>{% endfor %}{% else %}<label>你的答案<input name="answer_{{ row.id }}" maxlength="50"></label>{% endif %}</section>{% endfor %}{% if not exam.finished_at %}<button class="action">交卷並查看成績</button>{% endif %}</form>{% endblock %}
+{% extends 'live_base.html' %}
+{% block content %}
+{% if exam.finished_at %}
+<section class="panel-card">
+  <h2>答對 {{ exam.correct_count }} / {{ exam.total_count }} 題</h2>
+  <p>成績 {{ (exam.correct_count / exam.total_count * 100)|round(1) }} 分。以下解析來自題庫中儲存的內容。</p>
+  {% if planner_attempt %}
+    {% set planner_score = planner_attempt.score if planner_attempt.score is not none else (exam.correct_count / exam.total_count * 100) %}
+    <div class="notice {{ 'success' if planner_attempt.passed else 'error' }}">
+      <strong>學習規劃驗收：{{ '通過' if planner_attempt.passed else '未通過' }}</strong><br>
+      {{ planner_attempt.task_title }} · {{ planner_score|round(1) }} / 門檻 {{ planner_attempt.required_score|round(0)|int }} 分
+    </div>
+    <a href="{{ url_for('personal_ai.adaptive_planner',goal_id=planner_attempt.goal_id) }}">返回學習月曆 →</a>
+  {% else %}
+    <a href="{{ url_for('quiz_start') }}">再練習一次 →</a>
+  {% endif %}
+</section>
+{% else %}
+<p class="notice info">共 {{ exam.total_count }} 題。交卷前不顯示答案；所有題目完成後才能交卷。填空會忽略前後空白，其餘文字需與標準答案完全一致。</p>
+{% endif %}
+
+<form method="post" autocomplete="off">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% for row,q in items %}
+  {% set question_no = loop.index %}
+  <section class="panel-card">
+    <h2>第 {{ question_no }} 題 · {{ q.q_type }}</h2>
+    <p class="prewrap">{{ q.content }}</p>
+
+    {% if exam.finished_at %}
+      {% for option in q.options %}
+      <p>{{ option.option_label }}. {{ option.option_text }}</p>
+      {% endfor %}
+      <p class="{{ 'success' if row.is_correct else 'error' }}">你的答案：{{ row.user_answer or '未作答' }} · 正確答案：{{ q.answer_key }}</p>
+      <h3>題庫解析</h3>
+      <p class="prewrap">{{ q.explanation or '此題尚無可用解析。' }}</p>
+      <small>來源：{{ q.source or ('題庫 #' ~ q.id) }} · 使用本次開考時的題目快照</small>
+
+    {% elif q.q_type in ['單選','多選'] %}
+      {% for option in q.options %}
+      {% set input_id = 'answer_' ~ row.id ~ '_' ~ loop.index %}
+      <div class="answer-choice exam-answer-choice">
+        <input
+          id="{{ input_id }}"
+          type="{{ 'checkbox' if q.q_type=='多選' else 'radio' }}"
+          name="answer_{{ row.id }}"
+          value="{{ option.option_label }}"
+        >
+        <label for="{{ input_id }}">
+          <strong>{{ option.option_label }}.</strong> {{ option.option_text }}
+        </label>
+      </div>
+      {% else %}
+      <p class="notice error">此題沒有可用選項，請回題庫修正後重新建立考卷。</p>
+      {% endfor %}
+
+    {% elif q.q_type=='是非' %}
+      {% for option in ['是','否'] %}
+      {% set input_id = 'answer_' ~ row.id ~ '_' ~ loop.index %}
+      <div class="answer-choice exam-answer-choice">
+        <input id="{{ input_id }}" type="radio" name="answer_{{ row.id }}" value="{{ option }}">
+        <label for="{{ input_id }}">{{ option }}</label>
+      </div>
+      {% endfor %}
+
+    {% else %}
+      <label>你的答案<input name="answer_{{ row.id }}" maxlength="50"></label>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  {% if not exam.finished_at %}
+  <button class="action">交卷並查看成績</button>
+  {% endif %}
+</form>
+{% endblock %}

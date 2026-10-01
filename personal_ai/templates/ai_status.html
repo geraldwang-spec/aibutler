@@ -1,0 +1,42 @@
+{% extends 'live_base.html' %}
+{% block content %}
+<section class="panel-card"><h2>目前執行模式</h2><div class="stats-grid">
+<div class="stat-card"><strong>APP_MODE</strong><span>{{ app_mode }}</span></div>
+<div class="stat-card"><strong>Database</strong><span>{{ db_type }}</span></div>
+<div class="stat-card"><strong>Classifier</strong><span>{{ classifier_provider }} / {{ classifier_model or '未指定' }}</span></div>
+<div class="stat-card"><strong>Generator</strong><span>{{ generator_provider }} / {{ generator_model or '未指定' }}</span></div>
+<div class="stat-card"><strong>Reviewer</strong><span>{{ reviewer_provider }} / {{ reviewer_model or '未指定' }}</span></div>
+<div class="stat-card"><strong>Embedding</strong><span>{{ embedding_provider }} / {{ embedding_model or '未指定' }}</span></div>
+</div>
+<p class="notice {{'success' if groq_key_configured else 'info'}}"><strong>Groq API：</strong>{{'已設定 API Key，優先使用雲端高算力模型。' if groq_key_configured else '尚未設定 API Key；Generator / Reviewer / Course / Tutor 會自動改走本機 qwen3.5:4b fallback。'}}</p>
+</section>
+
+<section class="panel-card"><h2>模型分工（正式驗證設定）</h2><table class="data-table"><thead><tr><th>角色</th><th>Primary</th><th>Fallback / 本機</th><th>用途</th></tr></thead><tbody>
+<tr><td>Concept Classifier</td><td>{{ classifier_provider }} / {{ classifier_model }}</td><td>—</td><td>文件/題目概念、Skill、認知層次與 Concept 合併判斷。</td></tr>
+<tr><td>Question Generator</td><td>{{ generator_provider }} / {{ generator_model }}</td><td>{{ generator_fallback_model or '—' }}</td><td>依 Concept + RAG + 題目樣本建立全新考題。</td></tr>
+<tr><td>Question Reviewer</td><td>{{ reviewer_provider }} / {{ reviewer_model }}</td><td>{{ reviewer_fallback_model or '—' }}</td><td>答案一致性、歧義、超範圍與近似題檢查。</td></tr>
+<tr><td>Embedding</td><td>{{ embedding_provider }} / {{ embedding_model }}</td><td>—</td><td>Concept 相似度、教材 RAG、pgvector。</td></tr>
+<tr><td>Micro-course Builder</td><td>{{ course_provider }} / {{course_model}}</td><td>{{course_fallback_model or '—'}}</td><td>弱項 + 講義 RAG → 3～15 分鐘互動補強課。</td></tr>
+<tr><td>Interactive Tutor</td><td>{{ tutor_provider }} / {{tutor_model}}</td><td>{{tutor_fallback_model or '—'}}</td><td>課程/錯題追問、換例子、釐清誤解。</td></tr>
+<tr><td>Speech-to-Text</td><td>{{stt_model}}（{{stt_provider}}）</td><td>—</td><td>語音輸入；目前 {{'已啟用' if voice_enabled else '模型可先下載，UI 語音模式尚未啟用'}}。</td></tr>
+<tr><td>Text-to-Speech</td><td>{{tts_model}}（{{tts_provider}}）</td><td>—</td><td>中文 AI Tutor 語音輸出。</td></tr>
+</tbody></table><p class="muted">完整清單與報告說明：MODEL_INVENTORY.md</p></section>
+
+<section class="panel-card"><h2>連線測試</h2>
+{% for action,label,result in [('test_classifier','測試 Classifier',classifier_result),('test_generator','測試 Generator',generator_result),('test_reviewer','測試 Reviewer',reviewer_result),('test_course','測試 Course Builder',course_result),('test_tutor','測試 Tutor',tutor_result),('test_embedding','測試 Embedding',embedding_result)] %}
+<form method="post" style="display:inline-block;margin:4px"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="{{action}}"><button class="primary-button">{{label}}</button></form>
+{% if result %}<p class="notice {{'success' if result.ok else 'error'}}">{{label}}：{{result.message}}</p>{% endif %}
+{% endfor %}</section>
+
+<section class="panel-card"><h2>目前 Hybrid Routing</h2><pre>Local / Ollama
+  qwen3.5:4b      → Classifier + 所有雲端角色 fallback
+  bge-m3          → Embedding / RAG
+
+Groq (GROQ_API_KEY 設定後)
+  qwen/qwen3.8-27b    → Generator / Reviewer
+  openai/gpt-oss-120b → Micro-course / Tutor
+
+Voice (本機下載、後續啟用)
+  Whisper large-v3
+  Kokoro-82M-v1.1-zh</pre></section>
+{% endblock %}
