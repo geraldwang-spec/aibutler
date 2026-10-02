@@ -16,7 +16,7 @@ import math
 import re
 from datetime import date, datetime, time, timedelta
 
-from . import text_parser
+from . import analysis, text_parser
 from .errors import ApiError
 from .llm_client import LlmError
 from .prompts import parse_messages
@@ -311,6 +311,20 @@ class BodyService:
             item['name'] = names.get(item['exercise_id'])
             item['candidates'] = [dict(id=c, name=names[c]) for c in item['candidates'] if c in names]
         return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note, usage=llm_usage)
+
+    # ============================================================ 訓練分析（數字全部由程式計算）
+    def report(self, period, anchor):
+        """週／月分析：本期與上期比較、各部位組數、推拉比例、各動作進步、多久沒練、體重變化，以及規則產生的發現。"""
+        if period not in ('week', 'month'):
+            raise ApiError('period 只能是 week 或 month。')
+        start, end, prev_start, prev_end = analysis.period_range(period, anchor)
+        s, e, ps, pe = (x.isoformat() for x in (start, end, prev_start, prev_end))
+        reference = min(end, self.today).isoformat()
+        return analysis.build_report(
+            period, start, end, self.today,
+            sets=self.sql.sets_between(s, e), prev_sets=self.sql.sets_between(ps, pe),
+            workouts=self.sql.workouts_between(s, e), prev_workouts=self.sql.workouts_between(ps, pe),
+            metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference))
 
     # ============================================================ 寫入
     def _owned_workout(self, workout_id):

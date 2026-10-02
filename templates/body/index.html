@@ -31,6 +31,7 @@
       <div class="bd-tabs__list" role="tablist" aria-label="今日紀錄">
         <button type="button" class="bd-tab" role="tab" id="bd-tab-train" aria-controls="bd-panel-train" data-tab-target="train" aria-selected="true"><span id="bd-tab-train-label">訓練</span></button>
         <button type="button" class="bd-tab bd-tab--warm" role="tab" id="bd-tab-weight" aria-controls="bd-panel-weight" data-tab-target="weight" aria-selected="false" tabindex="-1">體重</button>
+        <button type="button" class="bd-tab" role="tab" id="bd-tab-analysis" aria-controls="bd-panel-analysis" data-tab-target="analysis" aria-selected="false" tabindex="-1">分析</button>
       </div>
       <div class="bd-tabs__meta" id="bd-tabs-meta"></div>
     </div>
@@ -47,6 +48,17 @@
           <button class="bd-btn bd-btn--primary" id="bd-weight-submit">儲存</button>
         </form>
       </div>
+    </div>
+
+    <div class="bd-panel" role="tabpanel" id="bd-panel-analysis" aria-labelledby="bd-tab-analysis" hidden>
+      <div class="bd-report__bar">
+        <div class="bd-seg" role="group" aria-label="分析期間">
+          <button type="button" class="bd-seg__btn" data-action="report-period" data-period="week" aria-pressed="true">週</button>
+          <button type="button" class="bd-seg__btn" data-action="report-period" data-period="month" aria-pressed="false">月</button>
+        </div>
+        <p class="bd-muted" id="bd-report-range"></p>
+      </div>
+      <div id="bd-report" aria-live="polite"></div>
     </div>
   </section>
 

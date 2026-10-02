@@ -3,6 +3,7 @@
 
   GET  /body/                         頁面外殼（內嵌第一份狀態 JSON；動作庫是空的會先寫入預設動作）
   GET  /body/api/state?d=&ex=         取得某天的完整狀態
+  GET  /body/api/report?period=week|month&d=   訓練分析（只讀）
   POST /body/api/parse                {text}               一句話輸入 → 草稿（不寫資料庫）
   POST /body/api/weight               {d, weight_kg, body_fat_pct?, ex?}
   POST /body/api/workouts             {d, exercise_ids}    開始訓練（須先加好動作）
@@ -104,7 +105,7 @@ api = BodyApi.endpoint
 @body.get('/')
 @login_required
 def index():
-    tab = 'weight' if request.args.get('tab') == 'weight' else 'train'
+    tab = request.args.get('tab') if request.args.get('tab') in ('weight', 'analysis') else 'train'
     BodyApi.service().ensure_default_exercises()   # 動作庫是空的就先放入預設動作
     state = BodyApi.service().state(Validator.day(request.args.get('d')), request.args.get('ex', type=int))
     return render_template('body/index.html', title='體重與訓練', tab=tab, state=state)
@@ -117,6 +118,14 @@ def index():
 def state():
     service = BodyApi.service()
     return dict(state=service.state(Validator.day(request.args.get('d')), request.args.get('ex', type=int)))
+
+
+@body.get('/api/report')
+@api
+def report():
+    """訓練分析（週／月）：只讀資料，不寫入。"""
+    period = request.args.get('period', 'week')
+    return dict(report=BodyApi.service().report(period, Validator.day(request.args.get('d'))))
 
 
 @body.post('/api/parse')

@@ -77,6 +77,34 @@ class BodySqlProcess:
             self.conn.execute('INSERT INTO body_metrics (user_id,record_date,weight_kg,body_fat_pct) VALUES (?,?,?,?)',
                               (self.user_id, day, weight_kg, body_fat_pct))
 
+    # ------------------------------------------------------------ 分析用（一次查出整段期間，不在迴圈裡逐筆查）
+    def sets_between(self, start, end):
+        """期間內每一組，附上日期、動作名稱與部位。"""
+        return [dict(r) for r in self.conn.execute(
+            'SELECT w.workout_date AS workout_date, w.id AS workout_id, s.exercise_id AS exercise_id, '
+            'e.exercise_name AS exercise_name, e.muscle_group AS muscle_group, s.set_no AS set_no, '
+            's.weight_kg AS weight_kg, s.reps AS reps '
+            'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
+            'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ? ORDER BY w.workout_date, w.id, s.id',
+            (self.user_id, start, end))]
+
+    def workouts_between(self, start, end):
+        return [dict(r) for r in self.conn.execute(
+            'SELECT id, workout_date, duration_min, ended_at FROM workouts '
+            'WHERE user_id=? AND workout_date BETWEEN ? AND ? ORDER BY workout_date, id', (self.user_id, start, end))]
+
+    def metrics_between(self, start, end):
+        return [dict(r) for r in self.conn.execute(
+            'SELECT record_date, weight_kg FROM body_metrics WHERE user_id=? AND record_date BETWEEN ? AND ? '
+            'ORDER BY record_date', (self.user_id, start, end))]
+
+    def last_trained_by_muscle(self, until):
+        """每個部位最後一次訓練的日期（到 until 為止），{部位: 日期}。"""
+        return {r['muscle_group']: r['last_date'] for r in self.conn.execute(
+            'SELECT e.muscle_group AS muscle_group, MAX(w.workout_date) AS last_date '
+            'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
+            'WHERE w.user_id=? AND w.workout_date<=? GROUP BY e.muscle_group', (self.user_id, until)) if r['muscle_group']}
+
     # ------------------------------------------------------------ 動作庫 exercises
 
     # 動作庫的部位排序（與 records.py 的選項順序一致），其他部位排最後

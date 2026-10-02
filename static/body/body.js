@@ -208,6 +208,7 @@
     renderWeight();
     renderLog();
     restLabel();
+    if (currentTab === 'analysis') loadReport();   // 換日期時重新分析（同一天、同期間不重複呼叫）
     if (focusKey) {
       const again = root.querySelector(`[data-key="${CSS.escape(focusKey)}"]`) || root.querySelector('[data-key="next-check"]');
       if (again) again.focus();
@@ -374,6 +375,87 @@
           h('p', { text: w.in_progress ? '點 ✓ 完成一組，會自動開始休息計時；再點一次可取消。' : '這次訓練已結束，仍可補登或取消組數。' })),
         restControl()),
       h('div', { class: 'bd-log' }, list, currentCard(cur, w)));
+  }
+
+  // ------------------------------------------------------------ 分析（數字都由後端程式計算）
+  const report = { period: 'week', key: null, data: null, busy: false };
+  const MUSCLES = ['胸', '背', '腿', '肩', '手臂', '核心'];
+  const fmtDate = (iso) => { const [, m, d] = iso.split('-').map(Number); return `${m}/${d}`; };
+  // 期間還沒結束時，跟上一期整段比較會偏低，所以不上顏色，避免看起來像退步
+  const delta = (pct, neutral) => (pct === null || pct === undefined ? null
+    : h('span', { class: 'bd-delta ' + (neutral ? '' : pct > 0 ? 'is-up' : pct < 0 ? 'is-down' : ''), text: `${pct > 0 ? '+' : ''}${pct}%` }));
+
+  async function loadReport(force) {
+    const key = `${report.period}:${state.d}`;
+    if (!force && (report.busy || report.key === key)) return;
+    report.busy = true; report.key = key;
+    fill($('bd-report'), h('p', { class: 'bd-muted', text: '分析中…' }));
+    try {
+      const data = await call('GET', `/report?period=${report.period}&d=${state.d}`);
+      if (data && report.key === key) { report.data = data.report; renderReport(); }
+    } catch (err) {
+      report.key = null;
+      fill($('bd-report'), h('p', { class: 'bd-empty', text: err.message }));
+    } finally {
+      report.busy = false;
+    }
+  }
+
+  function renderReport() {
+    root.querySelectorAll('[data-action="report-period"]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.period === report.period ? 'true' : 'false'));
+    const r = report.data;
+    if (!r) return;
+    const label = r.period === 'week' ? '本週' : '本月';
+    $('bd-report-range').textContent = `${fmtDate(r.start)}～${fmtDate(r.end)}${r.in_progress ? `・${label}進行中，與上一${r.period === 'week' ? '週' : '月'}整段比較` : ''}`;
+    const s = r.summary, p = r.previous;
+    const card = (title, value, unit, pct, prev) => h('div', { class: 'bd-stat' },
+      h('span', { class: 'bd-stat__label', text: title }),
+      h('span', { class: 'bd-stat__value bd-mono' }, value, unit ? h('small', { text: ` ${unit}` }) : null),
+      h('span', { class: 'bd-stat__sub' }, prev !== null && prev !== undefined ? `上期 ${prev}` : '　', delta(pct, r.in_progress)));
+    const maxSets = Math.max(1, ...MUSCLES.map((m) => (r.by_muscle[m] || {}).sets || 0));
+    const icon2 = { good: 'check-circle', warn: 'exclamation-triangle', info: 'info-circle' };
+
+    fill($('bd-report'),
+      h('div', { class: 'bd-stats bd-stats--4' },
+        card('訓練次數', s.sessions, '次', r.change.sessions, p.sessions),
+        card('總組數', s.sets, '組', r.change.sets, p.sets),
+        card('總訓練量', int(s.volume), 'kg×次', r.change.volume, int(p.volume)),
+        card('平均時長', s.avg_minutes ?? '—', s.avg_minutes ? '分' : '', null, p.avg_minutes ?? null)),
+
+      h('section', { class: 'bd-report__block' },
+        h('h3', { text: '重點發現' }),
+        h('ul', { class: 'bd-findings' }, r.findings.map((f) => h('li', { class: `bd-finding is-${f.level}` },
+          icon(icon2[f.level] || 'info-circle'), h('span', { text: f.text })))),
+        h('p', { class: 'bd-muted', text: '以上由程式依紀錄計算；之後會加上 AI 的建議。' })),
+
+      h('div', { class: 'bd-report__grid' },
+        h('section', { class: 'bd-report__block' },
+          h('h3', { text: '各部位組數' }),
+          h('ul', { class: 'bd-bars' }, MUSCLES.map((m) => {
+            const v = r.by_muscle[m] || { sets: 0, volume: 0 };
+            const since = r.days_since[m];
+            return h('li', { class: 'bd-bar' },
+              h('span', { class: 'bd-bar__label', text: m }),
+              h('progress', { class: 'bd-bar__meter', max: maxSets, value: v.sets, 'aria-label': `${m} ${v.sets} 組` }),
+              h('span', { class: 'bd-bar__value', text: `${v.sets} 組` }),
+              h('span', { class: 'bd-bar__since' + (since !== null && since >= 7 ? ' is-warn' : ''),
+                text: since === null ? '沒練過' : since === 0 ? (r.in_progress ? '今天' : '期末當天') : `${since} 天前` }));
+          })),
+          h('p', { class: 'bd-muted', text: `推 ${r.balance.push} 組・拉 ${r.balance.pull} 組${r.balance.push_pull ? `（推／拉 ${r.balance.push_pull}）` : ''}；上半身 ${r.balance.upper} 組・下半身 ${r.balance.lower} 組` })),
+
+        h('section', { class: 'bd-report__block' },
+          h('h3', { text: '動作進度' }),
+          r.progress.length ? h('div', { class: 'bd-table-wrap' }, h('table', { class: 'bd-table' },
+            h('thead', null, h('tr', null, ['動作', '組數', '本期', '上期', '變化'].map((t) => h('th', { scope: 'col', text: t })))),
+            h('tbody', null, r.progress.slice(0, 10).map((x) => h('tr', null,
+              h('th', { scope: 'row', text: x.name }),
+              h('td', { text: x.sets }),
+              h('td', { text: x.metric === 'e1rm' ? (x.value ? `${num(x.value)} kg` : '—') : `${x.value} 下` }),
+              h('td', { text: x.prev_value ? (x.metric === 'e1rm' ? `${num(x.prev_value)} kg` : `${x.prev_value} 下`) : '—' }),
+              h('td', null, delta(x.change_pct) || '—')))))) : h('p', { class: 'bd-muted', text: '這段期間沒有訓練紀錄。' }),
+          h('p', { class: 'bd-muted', text: '有負重的動作以估計 1RM（Epley 公式，12 下以內）比較；徒手動作以單組最多次數比較。' }),
+          r.weight ? h('p', { class: 'bd-report__weight' },
+            `體重 ${num(r.weight.start)} → ${num(r.weight.end)} kg（${r.weight.change > 0 ? '+' : ''}${r.weight.change}，${r.weight.records} 筆紀錄）`) : null)));
   }
 
   // ------------------------------------------------------------ 一句話輸入（解析結果只是草稿）
@@ -593,6 +675,7 @@
     if (action === 'goto') load(d);
     else if (action === 'pick') load(state.d, ex);
     else if (action === 'plan-pick') { planSel = Number(ex); render(); }
+    else if (action === 'report-period') { report.period = target.dataset.period; loadReport(true); }
     else if (action === 'quick-cancel') { quick = { text: quick.text, busy: false, result: null, picks: {}, use: {} }; render(); }
     else if (action === 'quick-apply') quickApply();
     else if (action === 'rest-default') {
@@ -692,13 +775,16 @@
 
   // ------------------------------------------------------------ 頁籤
   const tabs = Array.from(root.querySelectorAll('[data-tab-target]'));
+  let currentTab = 'train';
   const showTab = (name) => {
+    currentTab = name;
     tabs.forEach((tab) => {
       const on = tab.dataset.tabTarget === name;
       tab.setAttribute('aria-selected', on ? 'true' : 'false');
       tab.tabIndex = on ? 0 : -1;
       $(tab.getAttribute('aria-controls')).hidden = !on;
     });
+    if (name === 'analysis') loadReport();
   };
   tabs.forEach((tab, i) => {
     tab.addEventListener('click', () => showTab(tab.dataset.tabTarget));
@@ -768,7 +854,7 @@
 
   // ------------------------------------------------------------ 啟動
   render();
-  showTab(root.dataset.tab === 'weight' ? 'weight' : 'train');
+  showTab(['weight', 'analysis'].includes(root.dataset.tab) ? root.dataset.tab : 'train');
   syncUrl('replace');
   runRest();
 })();
