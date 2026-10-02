@@ -236,3 +236,25 @@
 @media (prefers-reduced-motion: no-preference) {
   .bd-day, .bd-ex, .bd-btn, .bd-check { transition: background-color .15s, border-color .15s, color .15s; }
 }
+
+/* ---------- 一句話輸入 ---------- */
+.bd-quick { background: #fff; border-radius: var(--bd-radius); padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+.bd-quick__form { display: flex; gap: 8px; margin: 0; }
+.bd-quick__input { flex: 1; min-width: 0; height: 44px; padding: 0 12px; border: 1px solid #d7dfe1; border-radius: 8px; font-size: 14px; }
+.bd-quick__input:focus { outline: 2px solid var(--bd-accent); outline-offset: 0; }
+.bd-quick__form .bd-btn { white-space: nowrap; }
+.bd-quick__result { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--bd-line); padding-top: 10px; }
+.bd-quick__item { display: flex; gap: 10px; align-items: flex-start; padding: 8px; border-radius: 8px; background: #f6f9f9; }
+.bd-quick__item.has-error { background: #fff4f2; }
+.bd-quick__use { margin: 0; padding-top: 10px; }
+/* 版型的 templatemo-style.css 把所有 checkbox 設成 display:none，這裡要明確顯示回來 */
+.bd .bd-quick__use input[type="checkbox"] { display: inline-block; width: 20px; height: 20px; margin: 0; accent-color: var(--bd-teal); cursor: pointer; }
+.bd-quick__body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.bd-quick__body small { font-size: 12px; color: var(--bd-muted); }
+.bd-quick__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bd-quick__said { font-size: 13px; color: var(--bd-muted); }
+.bd-quick__select { flex: 1; min-width: 140px; height: 40px; padding: 0 8px; border: 1px solid #d7dfe1; border-radius: 8px; background: #fff; font-size: 14px; }
+.bd .bd-quick__error { color: #b42318; }
+.bd-quick__warn { margin: 0; font-size: 12px; color: #8e4218; }
+.bd-quick__actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.bd-quick__actions .bd-muted { margin-right: auto; }

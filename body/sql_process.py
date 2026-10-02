@@ -108,6 +108,12 @@ class BodySqlProcess:
             (self.user_id, *params, self.user_id))
         return cursor.rowcount
 
+    def exercise_usage(self, since):
+        """since 之後每個動作做過幾組，{exercise_id: 組數}；一句話輸入時用來排序候選動作。"""
+        return {r['exercise_id']: r['n'] for r in self.conn.execute(
+            'SELECT s.exercise_id AS exercise_id, COUNT(*) AS n FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
+            'WHERE w.user_id=? AND w.workout_date>=? GROUP BY s.exercise_id', (self.user_id, since))}
+
     def exercise(self, exercise_id):
         return self.conn.execute(
             'SELECT * FROM exercises WHERE id=? AND created_by=?', (exercise_id, self.user_id)).fetchone()

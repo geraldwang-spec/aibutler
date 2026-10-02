@@ -3,6 +3,7 @@
 
   GET  /body/                         頁面外殼（內嵌第一份狀態 JSON；動作庫是空的會先寫入預設動作）
   GET  /body/api/state?d=&ex=         取得某天的完整狀態
+  POST /body/api/parse                {text}               一句話輸入 → 草稿（不寫資料庫）
   POST /body/api/weight               {d, weight_kg, body_fat_pct?, ex?}
   POST /body/api/workouts             {d, exercise_ids}    開始訓練（須先加好動作）
   POST /body/api/workouts/<id>/end    {}                   結束並儲存
@@ -77,6 +78,13 @@ def index():
 def state():
     service = BodyApi.service()
     return dict(state=service.state(Validator.day(request.args.get('d')), request.args.get('ex', type=int)))
+
+
+@body.post('/api/parse')
+@api
+def parse_text():
+    """一句話輸入：只回傳草稿，不寫資料庫。"""
+    return BodyApi.service().parse_text(BodyApi.payload())
 
 
 @body.post('/api/weight')

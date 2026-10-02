@@ -353,6 +353,7 @@
     const items = exerciseList();
 
     const list = h('div', { class: 'bd-exlist' },
+      state.library.length && !state.is_future ? quickPanel() : null,
       items.map((e) => exerciseItem(e, cur, w)),
       state.library.length ? addExerciseForm() : h('p', { class: 'bd-empty bd-empty--small' },
         '動作庫還是空的，先到 ', h('a', { href: root.dataset.recordsExercises, text: '運動動作庫' }), ' 新增動作。'));
@@ -373,6 +374,102 @@
           h('p', { text: w.in_progress ? '點 ✓ 完成一組，會自動開始休息計時；再點一次可取消。' : '這次訓練已結束，仍可補登或取消組數。' })),
         restControl()),
       h('div', { class: 'bd-log' }, list, currentCard(cur, w)));
+  }
+
+  // ------------------------------------------------------------ 一句話輸入（解析結果只是草稿）
+  // quick: {text, busy, result: {items, unparsed, note, source}, picks: {index: exercise_id}, use: {index: bool}}
+  let quick = { text: '', busy: false, result: null, picks: {}, use: {} };
+  const setsSummary = (sets) => {
+    if (!sets.length) return '沒有組數';
+    const same = sets.every((x) => x.weight_kg === sets[0].weight_kg && x.reps === sets[0].reps);
+    const one = (x) => (x.weight_kg ? `${num(x.weight_kg)} kg × ${x.reps}` : `徒手 × ${x.reps}`);
+    return same ? `${sets.length} 組・${one(sets[0])}` : sets.map(one).join('、');
+  };
+
+  function quickPanel() {
+    const r = quick.result;
+    return h('div', { class: 'bd-quick' },
+      h('form', { class: 'bd-quick__form', dataset: { form: 'quick-parse' } },
+        h('label', { class: 'bd-sr', for: 'bd-quick-text', text: '用一句話輸入訓練' }),
+        h('input', {
+          id: 'bd-quick-text', class: 'bd-quick__input', type: 'text', maxlength: 300, value: quick.text,
+          placeholder: '一句話輸入，例如：臥推 60公斤 5組8下，引體向上 3組10下', autocomplete: 'off',
+          dataset: { key: 'quick-text', quick: 'text' }
+        }),
+        h('button', { class: 'bd-btn bd-btn--primary', disabled: quick.busy, dataset: { key: 'quick-parse' } }, quick.busy ? '解析中…' : '解析')),
+      r ? quickResult(r) : null);
+  }
+
+  function quickResult(r) {
+    const options = (item) => {
+      const seen = new Set(item.candidates.map((c) => c.id).concat(item.exercise_id ? [item.exercise_id] : []));
+      return [
+        h('option', { value: '', text: item.candidates.length ? '請選擇動作…' : '從動作庫選擇…' }),
+        item.exercise_id ? h('option', { value: item.exercise_id, text: item.name }) : null,
+        item.candidates.length ? h('optgroup', { label: '可能是' }, item.candidates.map((c) => h('option', { value: c.id, text: c.name }))) : null,
+        h('optgroup', { label: '全部動作' }, state.library.filter((e) => !seen.has(e.id)).map((e) => h('option', { value: e.id, text: e.name })))
+      ];
+    };
+    return h('div', { class: 'bd-quick__result', role: 'region', 'aria-label': '解析結果（尚未寫入）' },
+      r.items.length ? r.items.map((item, i) => {
+        const pick = quick.picks[i] ?? item.exercise_id ?? '';
+        const select = h('select', { class: 'bd-quick__select', dataset: { quickPick: i, key: `qp-${i}` }, 'aria-label': `「${item.input_text}」對應的動作` }, options(item));
+        select.value = String(pick || '');
+        return h('div', { class: 'bd-quick__item' + (item.error ? ' has-error' : '') },
+          h('label', { class: 'bd-quick__use' },
+            h('input', { type: 'checkbox', checked: quick.use[i] ?? !item.error, dataset: { quickUse: i, key: `qu-${i}` } }),
+            h('span', { class: 'bd-sr', text: `加入「${item.input_text}」` })),
+          h('div', { class: 'bd-quick__body' },
+            h('div', { class: 'bd-quick__line' }, h('span', { class: 'bd-quick__said', text: `「${item.input_text}」` }), select),
+            h('small', { text: setsSummary(item.sets) }),
+            item.error ? h('small', { class: 'bd-quick__error', text: `${item.error}，預設不加入，可勾選後再到下方修改。` }) : null));
+      }) : h('p', { class: 'bd-muted', text: '沒有解析到訓練內容。' }),
+      r.unparsed.length ? h('p', { class: 'bd-quick__warn', text: `以下內容沒有被記錄：${r.unparsed.join('、')}` }) : null,
+      r.note ? h('p', { class: 'bd-quick__warn', text: r.note }) : null,
+      h('div', { class: 'bd-quick__actions' },
+        h('span', { class: 'bd-muted', text: r.source === 'llm' ? 'AI 解析・請確認後加入' : '規則解析・請確認後加入' }),
+        h('button', { type: 'button', class: 'bd-btn', dataset: { action: 'quick-cancel', key: 'quick-cancel' }, text: '取消' }),
+        r.items.length ? h('button', { type: 'button', class: 'bd-btn bd-btn--primary', dataset: { action: 'quick-apply', key: 'quick-apply' }, text: '加入預計組數' }) : null));
+  }
+
+  async function quickParse() {
+    const text = quick.text.trim();
+    if (!text || quick.busy) return;
+    quick.busy = true; render();
+    try {
+      const data = await call('POST', '/parse', { text });
+      if (data) quick = { text, busy: false, result: data, picks: {}, use: {} };
+      showMessage('');
+    } catch (err) {
+      showMessage(err.message, 'error');
+    } finally {
+      quick.busy = false; render();
+    }
+  }
+
+  /** 把解析結果填進預計組數（草稿）；已完成的組保留，後面接上解析出來的組 */
+  function quickApply() {
+    const r = quick.result;
+    const chosen = [];
+    r.items.forEach((item, i) => {
+      if (!(quick.use[i] ?? !item.error)) return;
+      const id = Number(quick.picks[i] ?? item.exercise_id);
+      if (!id || !item.sets.length) return;
+      chosen.push([id, item.sets]);
+    });
+    if (!chosen.length) { showMessage('請至少勾選一個動作，並選好對應的動作。', 'error'); return; }
+    chosen.forEach(([id, sets]) => {
+      const done = (state.workout && (state.workout.exercises.find((e) => e.id === id) || {}).done) || 0;
+      updatePlan(id, (entry) => {
+        const kept = entry.sets.slice(0, done);
+        while (kept.length < done) kept.push(blankSet());
+        entry.sets = kept.concat(sets.map((x) => ({ kg: num(x.weight_kg), reps: num(x.reps) })));
+      });
+    });
+    quick = { text: '', busy: false, result: null, picks: {}, use: {} };
+    showMessage(`已加入 ${chosen.length} 個動作的預計組數，請確認後再開始或逐組完成。`);
+    const first = chosen[0][0];
+    if (state.workout) load(state.d, first, 'replace'); else { planSel = first; render(); }
   }
 
   function addExerciseForm() {
@@ -408,7 +505,7 @@
   function planCard(items) {
     if (!items.length) {
       return h('section', { class: 'bd-card bd-current bd-ready', 'aria-label': '開始訓練' },
-        h('p', { class: 'bd-muted', text: '還沒有動作。從左邊的「加入動作」選擇今天要練的項目。' }),
+        h('p', { class: 'bd-muted', text: '還沒有動作。可以在左邊用一句話輸入，或用「加入動作」選擇今天要練的項目。' }),
         startButton('start-plan'));
     }
     if (!items.some((e) => e.id === planSel)) planSel = items[0].id;
@@ -494,6 +591,8 @@
     if (action === 'goto') load(d);
     else if (action === 'pick') load(state.d, ex);
     else if (action === 'plan-pick') { planSel = Number(ex); render(); }
+    else if (action === 'quick-cancel') { quick = { text: quick.text, busy: false, result: null, picks: {}, use: {} }; render(); }
+    else if (action === 'quick-apply') quickApply();
     else if (action === 'rest-default') {
       // 只改之後每次休息的起始秒數；正在倒數的這一次不受影響
       // 對齊到 10 秒的倍數（舊版以 15 秒為單位存過的值，例如 105，會變成 110 / 100）
@@ -541,6 +640,7 @@
   root.addEventListener('submit', (event) => {
     const form = event.target;
     event.preventDefault();
+    if (form.dataset.form === 'quick-parse') { quickParse(); return; }
     if (form.id === 'bd-weight-form') {
       run('POST', '/weight', {
         d: state.d,
@@ -566,8 +666,15 @@
     }
   });
 
+  root.addEventListener('change', (event) => {
+    const el = event.target;
+    if (el.dataset.quickPick !== undefined) quick.picks[el.dataset.quickPick] = el.value ? Number(el.value) : null;
+    if (el.dataset.quickUse !== undefined) quick.use[el.dataset.quickUse] = el.checked;
+  });
+
   root.addEventListener('input', (event) => {
     const el = event.target;
+    if (el.dataset.quick === 'text') { quick.text = el.value; return; }
     if (!el.dataset || el.dataset.planIdx === undefined || !el.dataset.planEx) return;
     const idx = Number(el.dataset.planIdx);
     updatePlan(Number(el.dataset.planEx), (entry) => {

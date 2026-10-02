@@ -13,9 +13,12 @@
 - 打開頁面時，如果使用者的動作庫是空的，先寫入 DEFAULT_EXERCISES。
 """
 import math
+import re
 from datetime import date, datetime, time, timedelta
 
+from . import text_parser
 from .errors import ApiError
+from .prompts import parse_messages
 from .sql_process import BodySqlProcess
 
 # 動作庫是空的時候預先放進去的常用動作：(名稱, 部位, 器材, 是否有氧)
@@ -142,9 +145,14 @@ class Validator:
 class BodyService:
     WEEKDAYS = '一二三四五六日'
 
-    def __init__(self, sql: BodySqlProcess, today=None):
+    def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None):
+        """llm_parse(messages) -> dict：規則解析不了時呼叫的 LLM（回傳解析後的 JSON）。
+
+        沒有傳入就只用規則解析；測試時可以傳入回傳固定 JSON 的假函式，不用真的呼叫 API。
+        """
         self.sql = sql
         self.today = today or date.today()
+        self.llm_parse = llm_parse
 
 
     # ============================================================ 預設動作
@@ -251,6 +259,43 @@ class BodyService:
                        last=self._pair(prev.get(s['set_no']))) for s in mine],
             next=dict(set_no=next_no, last=self._pair(prev.get(next_no)),
                       weight_kg=seed['weight_kg'] if seed else None, reps=seed['reps'] if seed else None))
+
+    # ============================================================ 一句話輸入（只產生草稿，不寫資料庫）
+    def parse_text(self, data):
+        """把一句話解析成草稿：先用規則；規則有看不懂、而且含數字的片段，才交給 LLM。
+
+        回傳 {items, unparsed, source}；items 只是草稿，前端填進預計組數，使用者逐組按 ✓ 才寫入。
+        """
+        text = data.get('text')
+        if not isinstance(text, str) or not text.strip():
+            raise ApiError('請輸入今天的訓練內容。')
+        if len(text) > text_parser.MAX_TEXT:
+            raise ApiError(f'內容太長，請在 {text_parser.MAX_TEXT} 字以內。')
+        library = [dict(id=r['id'], name=r['exercise_name']) for r in self.sql.exercises()]
+        if not library:
+            raise ApiError('動作庫是空的，請先新增動作。')
+        usage = self.sql.exercise_usage((self.today - timedelta(days=90)).isoformat())
+
+        result, source, note = text_parser.parse_rules(text, library, usage), 'rule', None
+        # 需要 LLM 的情況：有含數字但看不懂的片段，或動作名稱完全對不到（連候選都沒有）
+        needs_llm = any(re.search(r'\d', seg) for seg in result['unparsed']) or \
+            any(item['exercise_id'] is None and not item['candidates'] for item in result['items'])
+        if needs_llm and self.llm_parse:
+            try:
+                drafted = text_parser.validate_llm_draft(
+                    self.llm_parse(parse_messages(text, [e['name'] for e in library])), library, usage)
+                if drafted['items']:
+                    result, source = drafted, 'llm'
+            except Exception:                                   # LLM 失敗不影響規則解析的結果
+                note = 'AI 解析暫時無法使用，只顯示規則解析的結果。'
+        elif needs_llm:
+            note = '有部分內容需要 AI 解析，目前尚未啟用；請改用「動作 重量 組數 次數」的寫法。'
+
+        names = {e['id']: e['name'] for e in library}
+        for item in result['items']:
+            item['name'] = names.get(item['exercise_id'])
+            item['candidates'] = [dict(id=c, name=names[c]) for c in item['candidates'] if c in names]
+        return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note)
 
     # ============================================================ 寫入
     def _owned_workout(self, workout_id):
