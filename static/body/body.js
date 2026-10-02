@@ -427,7 +427,9 @@
       r.unparsed.length ? h('p', { class: 'bd-quick__warn', text: `以下內容沒有被記錄：${r.unparsed.join('、')}` }) : null,
       r.note ? h('p', { class: 'bd-quick__warn', text: r.note }) : null,
       h('div', { class: 'bd-quick__actions' },
-        h('span', { class: 'bd-muted', text: r.source === 'llm' ? 'AI 解析・請確認後加入' : '規則解析・請確認後加入' }),
+        h('span', { class: 'bd-muted', text: r.source === 'llm'
+          ? `AI 解析${r.usage ? `（${(r.usage.latency_ms / 1000).toFixed(1)} 秒）` : ''}・請確認後加入`
+          : '規則解析・請確認後加入' }),
         h('button', { type: 'button', class: 'bd-btn', dataset: { action: 'quick-cancel', key: 'quick-cancel' }, text: '取消' }),
         r.items.length ? h('button', { type: 'button', class: 'bd-btn bd-btn--primary', dataset: { action: 'quick-apply', key: 'quick-apply' }, text: '加入預計組數' }) : null));
   }

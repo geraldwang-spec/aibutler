@@ -22,6 +22,22 @@ class BodySqlProcess:
     def rollback(self):
         self.conn.rollback()
 
+    def rate_limited(self, bucket, maximum, seconds):
+        """沿用 rate_limits 資料表計數；超過次數回 True。SQLite 與 MariaDB 都能用（不用 BEGIN IMMEDIATE）。"""
+        import time
+        now = int(time.time())
+        row = self.conn.execute('SELECT count, started_at FROM rate_limits WHERE bucket=?', (bucket,)).fetchone()
+        if row and now - row['started_at'] < seconds:
+            if row['count'] >= maximum:
+                return True
+            self.conn.execute('UPDATE rate_limits SET count=count+1 WHERE bucket=?', (bucket,))
+        elif row:
+            self.conn.execute('UPDATE rate_limits SET count=1, started_at=? WHERE bucket=?', (now, bucket))
+        else:
+            self.conn.execute('INSERT INTO rate_limits (bucket, count, started_at) VALUES (?, 1, ?)', (bucket, now))
+        self.conn.commit()
+        return False
+
     def refresh_stats(self):
         """重算 daily_summary（沿用 smartlife 的共用函式）；由呼叫端決定何時 commit。"""
         # 延遲匯入，避免與 smartlife.create_app 互相匯入

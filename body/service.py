@@ -18,6 +18,7 @@ from datetime import date, datetime, time, timedelta
 
 from . import text_parser
 from .errors import ApiError
+from .llm_client import LlmError
 from .prompts import parse_messages
 from .sql_process import BodySqlProcess
 
@@ -99,6 +100,10 @@ DEFAULT_EXERCISES = [
     ('纜繩捲腹', '核心', '纜繩', 0),
 ]
 
+# 每個使用者每小時最多呼叫幾次 AI 解析（規則解析不受限制）
+LLM_PARSE_PER_HOUR = 30
+
+
 class Validator:
     """把前端送來的 JSON 值轉成正確型別；不合法就丟 ApiError。"""
 
@@ -146,7 +151,7 @@ class BodyService:
     WEEKDAYS = '一二三四五六日'
 
     def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None):
-        """llm_parse(messages) -> dict：規則解析不了時呼叫的 LLM（回傳解析後的 JSON）。
+        """llm_parse(messages) -> dict 或 (dict, 用量)：規則解析不了時呼叫的 LLM（回傳解析後的 JSON）。
 
         沒有傳入就只用規則解析；測試時可以傳入回傳固定 JSON 的假函式，不用真的呼叫 API。
         """
@@ -280,14 +285,24 @@ class BodyService:
         # 需要 LLM 的情況：有含數字但看不懂的片段，或動作名稱完全對不到（連候選都沒有）
         needs_llm = any(re.search(r'\d', seg) for seg in result['unparsed']) or \
             any(item['exercise_id'] is None and not item['candidates'] for item in result['items'])
+        llm_usage = None
         if needs_llm and self.llm_parse:
-            try:
-                drafted = text_parser.validate_llm_draft(
-                    self.llm_parse(parse_messages(text, [e['name'] for e in library])), library, usage)
-                if drafted['items']:
-                    result, source = drafted, 'llm'
-            except Exception:                                   # LLM 失敗不影響規則解析的結果
-                note = 'AI 解析暫時無法使用，只顯示規則解析的結果。'
+            if self.sql.rate_limited(f'body-llm:{self.sql.user_id}', LLM_PARSE_PER_HOUR, 3600):
+                note = f'AI 解析每小時最多 {LLM_PARSE_PER_HOUR} 次，已達上限；只顯示規則解析的結果。'
+            else:
+                try:
+                    raw = self.llm_parse(parse_messages(text, [e['name'] for e in library]))
+                    if isinstance(raw, tuple):                  # (資料, 用量)
+                        raw, llm_usage = raw
+                    drafted = text_parser.validate_llm_draft(raw, library, usage)
+                    if drafted['items']:
+                        result, source = drafted, 'llm'
+                    else:
+                        note = 'AI 也沒有解析出訓練內容，請改用「動作 重量 組數 次數」的寫法。'
+                except LlmError as exc:                         # LLM 失敗不影響規則解析的結果
+                    note = f'AI 解析暫時無法使用（{exc}），只顯示規則解析的結果。'
+                except Exception:
+                    note = 'AI 解析暫時無法使用，只顯示規則解析的結果。'
         elif needs_llm:
             note = '有部分內容需要 AI 解析，目前尚未啟用；請改用「動作 重量 組數 次數」的寫法。'
 
@@ -295,7 +310,7 @@ class BodyService:
         for item in result['items']:
             item['name'] = names.get(item['exercise_id'])
             item['candidates'] = [dict(id=c, name=names[c]) for c in item['candidates'] if c in names]
-        return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note)
+        return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note, usage=llm_usage)
 
     # ============================================================ 寫入
     def _owned_workout(self, workout_id):
