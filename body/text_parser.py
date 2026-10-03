@@ -67,7 +67,10 @@ def _segments(text):
 
 
 def _parse_segment(seg):
-    """解析一段文字 → (動作名稱, [組...], 錯誤訊息)；完全看不懂就回 None。"""
+    """解析一段文字 → (動作名稱, [組...], 錯誤訊息)；完全看不懂就回 None。
+
+    次數沒寫（例如「70kg 3組」）時 reps 是 None，由使用者在預計組數補上。
+    """
     first = _RE_FIRST_NUM.search(seg)
     name = _FILLER.sub('', (seg[:first.start()] if first else seg)).strip(' :-')
     if not first:
@@ -87,12 +90,12 @@ def _parse_segment(seg):
         body = body[:m.start()] + ' ' + body[m.end():]
     else:
         ms, mr = _RE_SETS.search(body), _RE_REPS.search(body)
-        if mr:
-            reps = int(mr.group(1))
+        if mr or ms:
+            reps = int(mr.group(1)) if mr else None          # 只寫組數沒寫次數 → 次數留空，請使用者補，不要猜
             sets = int(ms.group(1)) if ms else 1
             for found in sorted(filter(None, (ms, mr)), key=lambda x: -x.start()):
                 body = body[:found.start()] + ' ' + body[found.end():]
-    if reps is None:
+    if sets is None:
         return None
     if re.search(r'\d', body):          # 還有沒用到的數字 → 寫法不確定，交給 LLM 或使用者，不要猜
         return None
@@ -104,7 +107,7 @@ def _parse_segment(seg):
     error = None
     if not WEIGHT_RANGE[0] <= weight <= WEIGHT_RANGE[1]:
         error = f'重量 {weight:g} kg 不合理'
-    elif not REPS_RANGE[0] <= reps <= REPS_RANGE[1]:
+    elif reps is not None and not REPS_RANGE[0] <= reps <= REPS_RANGE[1]:
         error = f'次數 {reps} 不合理'
     elif not 1 <= sets <= MAX_SETS:
         error = f'組數 {sets} 不合理（最多 {MAX_SETS} 組）'
@@ -147,6 +150,11 @@ def match_exercise(name, library, usage=None):
     return None, [e['id'] for e in sorted(similar, key=rank)[:3]]
 
 
+def _warning(sets):
+    """有組數沒寫次數時的提醒（不影響加入，只是請使用者補）。"""
+    return '沒有寫次數，加入後請在預計組數補上' if any(x['reps'] is None for x in sets) else None
+
+
 # ------------------------------------------------------------------ 對外函式
 def parse_rules(text, library, usage=None):
     """用規則解析整句話。
@@ -165,13 +173,14 @@ def parse_rules(text, library, usage=None):
             items[-1]['sets'].extend(sets)
             items[-1]['sets'] = items[-1]['sets'][:MAX_SETS]
             items[-1]['error'] = items[-1]['error'] or error
+            items[-1]['warning'] = _warning(items[-1]['sets'])
             continue
         if not name:
             unparsed.append(seg)
             continue
         exercise_id, candidates = match_exercise(name, library, usage)
         items.append(dict(input_text=name[:50], exercise_id=exercise_id, candidates=candidates,
-                          sets=sets, error=error))
+                          sets=sets, error=error, warning=_warning(sets)))
         if len(items) >= MAX_ITEMS:
             break
     return dict(items=items, unparsed=unparsed)
@@ -198,21 +207,22 @@ def validate_llm_draft(raw, library, usage=None):
         for grp in (item.get('groups') or [])[:MAX_SETS]:
             try:
                 weight = float(grp.get('weight') or 0)
-                reps = int(grp.get('reps'))
+                raw_reps = grp.get('reps')
+                reps = None if raw_reps in (None, '', 0) else int(raw_reps)     # 沒寫次數 → 留空
                 count = int(grp.get('count') or 1)
             except (TypeError, ValueError, AttributeError):
                 error = '數值格式不正確'
                 continue
             if str(grp.get('unit', 'kg')).lower() in ('lb', 'lbs', '磅'):
                 weight = round(weight * LB_TO_KG, 1)
-            if not WEIGHT_RANGE[0] <= weight <= WEIGHT_RANGE[1] or not REPS_RANGE[0] <= reps <= REPS_RANGE[1] \
-                    or not 1 <= count <= MAX_SETS:
+            if not WEIGHT_RANGE[0] <= weight <= WEIGHT_RANGE[1] or not 1 <= count <= MAX_SETS \
+                    or (reps is not None and not REPS_RANGE[0] <= reps <= REPS_RANGE[1]):
                 error = '數值不合理，請檢查'
                 continue
             sets += [dict(weight_kg=round(weight, 2), reps=reps)] * count
         if sets or error:
             items.append(dict(input_text=input_text, exercise_id=exercise_id, candidates=candidates,
-                              sets=sets[:MAX_SETS], error=error))
+                              sets=sets[:MAX_SETS], error=error, warning=_warning(sets[:MAX_SETS])))
     unparsed = raw.get('unparsed')
     unparsed = [str(unparsed)[:200]] if isinstance(unparsed, str) and unparsed.strip() else \
         [str(u)[:200] for u in unparsed] if isinstance(unparsed, list) else []

@@ -464,7 +464,7 @@
   const setsSummary = (sets) => {
     if (!sets.length) return '沒有組數';
     const same = sets.every((x) => x.weight_kg === sets[0].weight_kg && x.reps === sets[0].reps);
-    const one = (x) => (x.weight_kg ? `${num(x.weight_kg)} kg × ${x.reps}` : `徒手 × ${x.reps}`);
+    const one = (x) => `${x.weight_kg ? `${num(x.weight_kg)} kg` : '徒手'} × ${x.reps ?? '?'}`;   // ? = 沒寫次數
     return same ? `${sets.length} 組・${one(sets[0])}` : sets.map(one).join('、');
   };
 
@@ -504,7 +504,8 @@
           h('div', { class: 'bd-quick__body' },
             h('div', { class: 'bd-quick__line' }, h('span', { class: 'bd-quick__said', text: `「${item.input_text}」` }), select),
             h('small', { text: setsSummary(item.sets) }),
-            item.error ? h('small', { class: 'bd-quick__error', text: `${item.error}，預設不加入，可勾選後再到下方修改。` }) : null));
+            item.error ? h('small', { class: 'bd-quick__error', text: `${item.error}，預設不加入，可勾選後再到下方修改。` }) : null,
+            !item.error && item.warning ? h('small', { class: 'bd-quick__hint', text: item.warning }) : null));
       }) : h('p', { class: 'bd-muted', text: '沒有解析到訓練內容。' }),
       r.unparsed.length ? h('p', { class: 'bd-quick__warn', text: `以下內容沒有被記錄：${r.unparsed.join('、')}` }) : null,
       r.note ? h('p', { class: 'bd-quick__warn', text: r.note }) : null,
