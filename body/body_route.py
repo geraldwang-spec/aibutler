@@ -34,14 +34,15 @@ body = Blueprint('body', __name__, url_prefix='/body')
 class BodyApi:
     """把 HTTP 請求轉給 BodyService，並把結果或錯誤包成 JSON。"""
 
-    _llm = None            # 依 .env 建立一次（改 .env 後要重新啟動）
+    config_file = Path(__file__).with_name('body.env')   # body 自己的設定檔（不讀專案 .env）
+    _llm = None            # 依設定檔建立一次（改設定後要重新啟動）
     _llm_loaded = False
 
     @classmethod
     def llm_parse(cls):
-        """回傳給 BodyService 用的 LLM 函式；.env 沒設定 BODY_LLM_* 就回 None（只用規則解析）。"""
+        """回傳給 BodyService 用的 LLM 函式；body/body.env 沒設定 BODY_LLM_* 就回 None（只用規則解析）。"""
         if not cls._llm_loaded:
-            cls._llm, cls._llm_loaded = BodyLlmClient.from_env(), True
+            cls._llm, cls._llm_loaded = BodyLlmClient.from_file(cls.config_file), True
         client = cls._llm
         if client is None:
             return None

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """body 模組自己的 LLM 呼叫（OpenAI 相容的 /chat/completions 與 /embeddings）。
 
-OpenAI、Groq、Gemini（OpenAI 相容介面）、Ollama（/v1）、LM Studio 都支援這個格式，換供應商只要改 .env：
+OpenAI、Groq、Gemini（OpenAI 相容介面）、Ollama（/v1）、LM Studio 都支援這個格式，換供應商只要改設定檔。
+設定只從 body 自己的設定檔讀取（預設 body/body.env，已被 body/.gitignore 排除，不會被 commit）：
     BODY_LLM_BASE_URL          例如 https://api.openai.com/v1 或 http://127.0.0.1:11434/v1
     BODY_LLM_MODEL             對話模型名稱（以供應商後台的模型清單為準）
     BODY_LLM_API_KEY           雲端服務的金鑰；本機 Ollama 留空
@@ -10,11 +11,13 @@ OpenAI、Groq、Gemini（OpenAI 相容介面）、Ollama（/v1）、LM Studio �
     BODY_LLM_REASONING_EFFORT  （選填）推理型模型的思考程度，留空就不送
     BODY_EMBED_MODEL           （選填）embedding 模型名稱；留空就不能用 embed()
     BODY_EMBED_BASE_URL / BODY_EMBED_API_KEY  （選填）embedding 用不同的服務時才填，預設沿用 BODY_LLM_*
+範本見 body/body.env.example。
 
 不同模型接受的參數不一樣（例如較新的推理型模型要用 max_completion_tokens、不接受自訂 temperature），
 遇到「不支援這個參數」的錯誤時會自動改用對應的參數再試一次，並記住，之後就直接用正確的參數。
 
-只用 Python 內建的 urllib，不需要安裝 SDK。金鑰只從環境變數讀取，不會出現在錯誤訊息或紀錄裡。
+只用 Python 內建的 urllib（讀設定檔用專案已有的 python-dotenv），不需要安裝 SDK。
+金鑰不會出現在錯誤訊息或紀錄裡。
 """
 import json
 import os
@@ -39,13 +42,15 @@ class _ParamRejected(Exception):
         self.param = param
 
 
-def _env(name, default=''):
-    return os.getenv(name, default).strip()
-
-
-def _env_bool(name, default=True):
-    value = _env(name)
-    return default if value == '' else value.lower() in ('1', 'true', 'yes', 'on')
+def _read_config_file(path):
+    """讀取設定檔（格式同 .env），不會寫進 os.environ；檔案不存在就回空 dict。"""
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        from dotenv import dotenv_values
+        return {k: (v or '') for k, v in dotenv_values(path).items()}
+    except Exception:
+        return {}
 
 
 def extract_json(text):
@@ -99,21 +104,30 @@ class BodyLlmClient:
         self._send_temperature = True
 
     @classmethod
-    def from_env(cls):
-        """.env 沒有設定 BODY_LLM_BASE_URL 或 BODY_LLM_MODEL 時回傳 None（只用規則解析）。"""
-        base_url, model = _env('BODY_LLM_BASE_URL'), _env('BODY_LLM_MODEL')
+    def from_file(cls, path):
+        """從 body 自己的設定檔讀取設定（格式同 .env，預設是 body/body.env）。
+
+        不讀專案 .env 或環境變數裡的 BODY_*，設定只看這個檔案。
+        檔案不存在、或沒有設定 BODY_LLM_BASE_URL／BODY_LLM_MODEL 時回傳 None（只用規則解析）。
+        """
+        values = _read_config_file(path)
+
+        def get(name, default=''):
+            return (values.get(name, '') or default).strip()
+
+        base_url, model = get('BODY_LLM_BASE_URL'), get('BODY_LLM_MODEL')
         if not base_url or not model:
             return None
         try:
-            timeout = max(5, min(120, int(_env('BODY_LLM_TIMEOUT', '30') or 30)))
+            timeout = max(5, min(120, int(get('BODY_LLM_TIMEOUT', '30'))))
         except ValueError:
             timeout = 30
-        return cls(base_url, model, _env('BODY_LLM_API_KEY'), timeout,
-                   json_mode=_env_bool('BODY_LLM_JSON_MODE', True),
-                   reasoning_effort=_env('BODY_LLM_REASONING_EFFORT'),
-                   embed_model=_env('BODY_EMBED_MODEL'),
-                   embed_base_url=_env('BODY_EMBED_BASE_URL'),
-                   embed_api_key=_env('BODY_EMBED_API_KEY'))
+        json_mode = get('BODY_LLM_JSON_MODE', 'true').lower() in ('1', 'true', 'yes', 'on')
+        return cls(base_url, model, get('BODY_LLM_API_KEY'), timeout, json_mode=json_mode,
+                   reasoning_effort=get('BODY_LLM_REASONING_EFFORT'),
+                   embed_model=get('BODY_EMBED_MODEL'),
+                   embed_base_url=get('BODY_EMBED_BASE_URL'),
+                   embed_api_key=get('BODY_EMBED_API_KEY'))
 
     @property
     def can_embed(self):

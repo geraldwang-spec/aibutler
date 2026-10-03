@@ -259,17 +259,17 @@ class LlmClientTests(unittest.TestCase):
             self.client(timeout=5).chat_json([{'role': 'user', 'content': 'hi'}])
         self.assertIn('秒', str(ctx.exception))
 
-    def test_from_env(self):
-        import os
-        from unittest import mock
+    def test_from_file(self):
         from body.llm_client import BodyLlmClient
-        with mock.patch.dict(os.environ, {'BODY_LLM_BASE_URL': '', 'BODY_LLM_MODEL': ''}):
-            self.assertIsNone(BodyLlmClient.from_env())
-        with mock.patch.dict(os.environ, {'BODY_LLM_BASE_URL': self.server.url + '/', 'BODY_LLM_MODEL': 'm',
-                                          'BODY_LLM_TIMEOUT': 'abc', 'BODY_LLM_JSON_MODE': 'false'}):
-            client = BodyLlmClient.from_env()
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'body.env'
+            self.assertIsNone(BodyLlmClient.from_file(path))                    # 沒有設定檔 → 不啟用
+            path.write_text('BODY_LLM_BASE_URL=\nBODY_LLM_MODEL=\n', encoding='utf-8')
+            self.assertIsNone(BodyLlmClient.from_file(path))                    # 空白 → 不啟用
+            path.write_text(f'BODY_LLM_BASE_URL={self.server.url}/\nBODY_LLM_MODEL=m\n'
+                            'BODY_LLM_TIMEOUT=abc\nBODY_LLM_JSON_MODE=false\n', encoding='utf-8')
+            client = BodyLlmClient.from_file(path)
             self.assertEqual((client.base_url, client.timeout, client.json_mode), (self.server.url, 30, False))
-
 
 class LlmClientCompatTests(unittest.TestCase):
     """參數自動相容與 embedding。"""
@@ -333,40 +333,63 @@ class LlmClientCompatTests(unittest.TestCase):
         with self.assertRaises(LlmError):
             client.embed(['a', 'b'])                                     # 回傳數量不對
 
-    def test_embed_from_env(self):
+    def test_embed_from_file(self):
+        from body.llm_client import BodyLlmClient
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'body.env'
+            base = f'BODY_LLM_BASE_URL={self.server.url}\nBODY_LLM_MODEL=m\nBODY_LLM_API_KEY=k1\nBODY_EMBED_MODEL=e\n'
+            path.write_text(base, encoding='utf-8')
+            client = BodyLlmClient.from_file(path)
+            self.assertEqual((client.embed_model, client.embed_base_url, client.embed_api_key), ('e', self.server.url, 'k1'))
+            path.write_text(base + 'BODY_EMBED_BASE_URL=http://127.0.0.1:11434/v1\n', encoding='utf-8')
+            client = BodyLlmClient.from_file(path)
+            self.assertEqual((client.embed_base_url, client.embed_api_key), ('http://127.0.0.1:11434/v1', ''))  # 另一個服務不帶對話的金鑰
+
+class ConfigFileTests(unittest.TestCase):
+    """body 的 AI 設定只讀 body/body.env，不讀專案 .env 或環境變數。"""
+
+    def test_environment_is_ignored(self):
         import os
         from unittest import mock
         from body.llm_client import BodyLlmClient
-        env = {'BODY_LLM_BASE_URL': self.server.url, 'BODY_LLM_MODEL': 'm', 'BODY_LLM_API_KEY': 'k1',
-               'BODY_EMBED_MODEL': 'e', 'BODY_EMBED_BASE_URL': '', 'BODY_EMBED_API_KEY': '', 'BODY_LLM_REASONING_EFFORT': ''}
-        with mock.patch.dict(os.environ, env):
-            client = BodyLlmClient.from_env()
-            self.assertEqual((client.embed_model, client.embed_base_url, client.embed_api_key), ('e', self.server.url, 'k1'))
-        env.update(BODY_EMBED_BASE_URL='http://127.0.0.1:11434/v1', BODY_EMBED_API_KEY='')
-        with mock.patch.dict(os.environ, env):
-            client = BodyLlmClient.from_env()
-            self.assertEqual((client.embed_base_url, client.embed_api_key), ('http://127.0.0.1:11434/v1', ''))  # 另一個服務不帶對話的金鑰
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'body.env'
+            path.write_text('BODY_LLM_BASE_URL=https://api.example.com/v1\nBODY_LLM_MODEL=file-model\n'
+                            'BODY_LLM_API_KEY=file-key\n', encoding='utf-8')
+            with mock.patch.dict(os.environ, {'BODY_LLM_MODEL': 'env-model', 'BODY_LLM_API_KEY': 'env-key'}):
+                client = BodyLlmClient.from_file(path)
+            self.assertEqual((client.model, client.api_key), ('file-model', 'file-key'))
+            with mock.patch.dict(os.environ, {'BODY_LLM_BASE_URL': 'https://x/v1', 'BODY_LLM_MODEL': 'env-model'}):
+                self.assertIsNone(BodyLlmClient.from_file(Path(folder) / 'missing.env'))   # 只有環境變數 → 不啟用
+
+    def test_default_path_is_inside_body_and_ignored_by_git(self):
+        from body.body_route import BodyApi
+        self.assertEqual(BodyApi.config_file, Path(__file__).resolve().parent.parent / 'body' / 'body.env')
+        ignore = (Path(__file__).resolve().parent.parent / 'body' / '.gitignore').read_text(encoding='utf-8')
+        self.assertIn('body.env', ignore.split())
 
 
 class ParseApiWithLlmTests(ParseApiTests):
-    """從 .env 設定 → API → 假的 LLM 伺服器，整條路徑跑一次。"""
+    """從 body 設定檔 → API → 假的 LLM 伺服器，整條路徑跑一次。"""
 
     def setUp(self):
-        import os
-        from unittest import mock
         from body import body_route
         self.server = FakeLlmServer()
-        self.env = mock.patch.dict(os.environ, {'BODY_LLM_BASE_URL': self.server.url, 'BODY_LLM_MODEL': 'test-model',
-                                                'BODY_LLM_API_KEY': 'k'})
-        self.env.start()
+        self.config_dir = tempfile.TemporaryDirectory()
+        config = Path(self.config_dir.name) / 'body.env'
+        config.write_text(f'BODY_LLM_BASE_URL={self.server.url}\nBODY_LLM_MODEL=test-model\nBODY_LLM_API_KEY=k\n',
+                          encoding='utf-8')
+        self.original_config = body_route.BodyApi.config_file
+        body_route.BodyApi.config_file = config
         body_route.BodyApi._llm_loaded = False
         super().setUp()
 
     def tearDown(self):
         from body import body_route
         super().tearDown()
-        self.env.stop()
+        body_route.BodyApi.config_file = self.original_config
         body_route.BodyApi._llm_loaded = False
+        self.config_dir.cleanup()
         self.server.close()
 
     def post(self, text):
