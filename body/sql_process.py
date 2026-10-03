@@ -133,6 +133,13 @@ class BodySqlProcess:
                 sessions.setdefault(r['exercise_id'], []).append(r)
         return sessions
 
+    def insert_exercise(self, name, muscle_group, equipment, is_cardio):
+        """新增一個動作，回傳新動作的 id（用查詢取回，不依賴 lastrowid，各種資料庫都能用）。"""
+        self.conn.execute('INSERT INTO exercises (exercise_name, muscle_group, equipment, is_cardio, created_by) '
+                          'VALUES (?,?,?,?,?)', (name, muscle_group, equipment, 1 if is_cardio else 0, self.user_id))
+        return self.conn.execute('SELECT MAX(id) FROM exercises WHERE created_by=? AND exercise_name=?',
+                                 (self.user_id, name)).fetchone()[0]
+
     def insert_default_exercises(self, exercises):
         """動作庫是空的才一次寫入預設動作；已經有任何動作就什麼都不做。
 

@@ -303,3 +303,10 @@
   .bd-stats--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .bd-report__grid { grid-template-columns: 1fr; }
 }
+
+/* ---------- 一句話輸入：新增動作 ---------- */
+.bd-newex { margin-top: 6px; padding: 10px; border-radius: 8px; background: #fff; border: 1px dashed var(--bd-teal-line); display: flex; flex-direction: column; gap: 8px; }
+.bd-newex__title { margin: 0; font-size: 13px; font-weight: 600; color: var(--bd-teal); }
+.bd-newex__row { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--bd-muted); }
+.bd-newex__actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.bd-quick__item.is-added { align-items: center; gap: 4px; background: #eaf7ee; color: #207245; font-size: 13px; }

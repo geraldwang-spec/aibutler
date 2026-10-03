@@ -155,6 +155,30 @@ def _warning(sets):
     return '沒有寫次數，加入後請在預計組數補上' if any(x['reps'] is None for x in sets) else None
 
 
+# ------------------------------------------------------------------ 新動作：依名稱預填部位／器材／有氧
+MUSCLE_CHOICES = ('胸', '背', '腿', '肩', '手臂', '核心')            # 與 records.py「運動動作庫」一致
+EQUIPMENT_CHOICES = ('槓鈴', '啞鈴', '機械', '纜繩', '徒手', '史密斯機', 'EZ 槓', '壺鈴', '彈力帶', '其他')
+_MUSCLE_WORDS = [('手臂', ('彎舉', '三頭', '二頭', '下壓', '前臂')),
+                 ('核心', ('捲腹', '腹', '核心', '棒式', '舉腿', '轉體', '健腹')),
+                 ('肩', ('肩', '平舉', '反向飛鳥', '臉拉', '面拉', '聳')),
+                 ('胸', ('臥推', '胸', '夾胸', '飛鳥', '伏地挺身', '撐體')),
+                 ('背', ('划船', '引體', '下拉', '背', '硬舉', '拉')),
+                 ('腿', ('蹲', '腿', '臀', '弓步', '提踵', '登階', '跳'))]
+_EQUIPMENT_WORDS = [('史密斯機', ('史密斯',)), ('EZ 槓', ('ez',)), ('槓鈴', ('槓鈴', '槓')), ('啞鈴', ('啞鈴',)),
+                    ('壺鈴', ('壺鈴',)), ('纜繩', ('纜繩', '滑輪', '繩索')), ('彈力帶', ('彈力帶', '彈力繩')),
+                    ('機械', ('機械', '器械', '機', '推舉')), ('徒手', ('徒手', '伏地挺身', '引體', '捲腹', '棒式', '跳'))]
+_CARDIO_WORDS = ('跑', '慢跑', '騎', '飛輪', '單車', '腳踏車', '游泳', '跳繩', '橢圓', '划船機', '有氧', '走路', '健走', '爬樓梯')
+
+
+def guess_exercise(name):
+    """依動作名稱猜部位、器材、是否有氧（只是預填建議，猜不到就留空，由使用者選）。"""
+    key = _key(name)
+    muscle = next((m for m, words in _MUSCLE_WORDS if any(w in key for w in words)), '')
+    equipment = next((e for e, words in _EQUIPMENT_WORDS if any(w.lower() in key for w in words)), '')
+    cardio = any(w in key for w in _CARDIO_WORDS)
+    return dict(muscle_group=muscle, equipment=equipment, is_cardio=cardio)
+
+
 # ------------------------------------------------------------------ 對外函式
 def parse_rules(text, library, usage=None):
     """用規則解析整句話。

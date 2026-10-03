@@ -5,6 +5,7 @@
   GET  /body/api/state?d=&ex=         取得某天的完整狀態
   GET  /body/api/report?period=week|month&d=   訓練分析（只讀）
   POST /body/api/parse                {text}               一句話輸入 → 草稿（不寫資料庫）
+  POST /body/api/exercises            {name, muscle_group, equipment, is_cardio, d}   新增動作
   POST /body/api/weight               {d, weight_kg, body_fat_pct?, ex?}
   POST /body/api/workouts             {d, exercise_ids}    開始訓練（須先加好動作）
   POST /body/api/workouts/<id>/end    {}                   結束並儲存
@@ -134,6 +135,16 @@ def report():
 def parse_text():
     """一句話輸入：只回傳草稿，不寫資料庫。"""
     return BodyApi.service().parse_text(BodyApi.payload())
+
+
+@body.post('/api/exercises')
+@api
+def create_exercise():
+    """新增動作（使用者在確認表單填好部位、器材、是否有氧後送出）。回傳新動作與最新狀態。"""
+    data = BodyApi.payload()
+    service = BodyApi.service()
+    result = service.create_exercise(data)
+    return dict(result, state=service.state(Validator.day(data.get('d')), result['exercise']['id']))
 
 
 @body.post('/api/weight')

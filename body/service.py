@@ -282,9 +282,9 @@ class BodyService:
         usage = self.sql.exercise_usage((self.today - timedelta(days=90)).isoformat())
 
         result, source, note = text_parser.parse_rules(text, library, usage), 'rule', None
-        # 需要 LLM 的情況：有含數字但看不懂的片段，或動作名稱完全對不到（連候選都沒有）
-        needs_llm = any(re.search(r'\d', seg) for seg in result['unparsed']) or \
-            any(item['exercise_id'] is None and not item['candidates'] for item in result['items'])
+        # 需要 LLM 的情況：有含數字但看不懂的片段（unclear），或動作名稱完全對不到（可能是別名，例如 bench）
+        unclear = any(re.search(r'\d', seg) for seg in result['unparsed'])
+        needs_llm = unclear or any(item['exercise_id'] is None and not item['candidates'] for item in result['items'])
         llm_usage = None
         if needs_llm and self.llm_parse:
             if self.sql.rate_limited(f'body-llm:{self.sql.user_id}', LLM_PARSE_PER_HOUR, 3600):
@@ -303,11 +303,13 @@ class BodyService:
                     note = f'AI 解析暫時無法使用（{exc}），只顯示規則解析的結果。'
                 except Exception:
                     note = 'AI 解析暫時無法使用，只顯示規則解析的結果。'
-        elif needs_llm:
+        elif unclear:      # 只是動作庫沒有的名稱時不提示（畫面會詢問是否新增動作）
             note = '有部分內容需要 AI 解析，目前尚未啟用；請改用「動作 重量 組數 次數」的寫法。'
 
         names = {e['id']: e['name'] for e in library}
         for item in result['items']:
+            if item['exercise_id'] is None:
+                item['suggest'] = text_parser.guess_exercise(item['input_text'])   # 新增動作時的預填值
             item['name'] = names.get(item['exercise_id'])
             item['candidates'] = [dict(id=c, name=names[c]) for c in item['candidates'] if c in names]
         return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note, usage=llm_usage)
@@ -325,6 +327,36 @@ class BodyService:
             sets=self.sql.sets_between(s, e), prev_sets=self.sql.sets_between(ps, pe),
             workouts=self.sql.workouts_between(s, e), prev_workouts=self.sql.workouts_between(ps, pe),
             metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference))
+
+    # ============================================================ 新增動作（一句話輸入遇到動作庫沒有的動作）
+    def create_exercise(self, data):
+        """新增動作；規則與「運動動作庫」頁面相同（名稱 80 字、部位 6 選 1、器材 50 字、是否有氧）。
+
+        名稱已經存在（不分大小寫與空白）就直接回傳既有的動作，不重複新增。
+        """
+        name = ' '.join(str(data.get('name') or '').split())
+        equipment = ' '.join(str(data.get('equipment') or '').split())
+        muscle = data.get('muscle_group')
+        if not name:
+            raise ApiError('請輸入動作名稱。')
+        if len(name) > 80:
+            raise ApiError('動作名稱最多 80 字。')
+        if muscle not in text_parser.MUSCLE_CHOICES:
+            raise ApiError('請選擇部位。')
+        if not equipment:
+            raise ApiError('請輸入使用的器材。')
+        if len(equipment) > 50:
+            raise ApiError('器材最多 50 字。')
+        is_cardio = data.get('is_cardio')
+        if not isinstance(is_cardio, bool):
+            is_cardio = str(is_cardio).strip().lower() in ('1', 'true', 'yes')
+        key = ''.join(name.split()).lower()
+        for row in self.sql.exercises():
+            if ''.join(row['exercise_name'].split()).lower() == key:
+                return dict(exercise=dict(id=row['id'], name=row['exercise_name']), existed=True)
+        exercise_id = self.sql.insert_exercise(name, muscle, equipment, is_cardio)
+        self.sql.commit()
+        return dict(exercise=dict(id=exercise_id, name=name), existed=False)
 
     # ============================================================ 寫入
     def _owned_workout(self, workout_id):

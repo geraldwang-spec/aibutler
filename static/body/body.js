@@ -460,7 +460,18 @@
 
   // ------------------------------------------------------------ 一句話輸入（解析結果只是草稿）
   // quick: {text, busy, result: {items, unparsed, note, source}, picks: {index: exercise_id}, use: {index: bool}}
-  let quick = { text: '', busy: false, result: null, picks: {}, use: {} };
+  // forms: {index: {open, name, muscle_group, equipment, is_cardio}} 新增動作的表單；added: {index: true} 已加入的項目
+  const emptyQuick = (text = '') => ({ text, busy: false, result: null, picks: {}, use: {}, forms: {}, added: {}, saving: null });
+  let quick = emptyQuick();
+  const MUSCLE_CHOICES = ['胸', '背', '腿', '肩', '手臂', '核心'];
+  const EQUIPMENT_CHOICES = ['槓鈴', '啞鈴', '機械', '纜繩', '徒手', '史密斯機', 'EZ 槓', '壺鈴', '彈力帶', '其他'];
+  function openNewForm(i) {
+    const item = quick.result.items[i];
+    const guess = item.suggest || {};
+    quick.forms[i] = quick.forms[i] || { name: item.input_text, muscle_group: guess.muscle_group || '',
+      equipment: guess.equipment || '', is_cardio: guess.is_cardio ? '1' : '0' };
+    quick.forms[i].open = true;
+  }
   const setsSummary = (sets) => {
     if (!sets.length) return '沒有組數';
     const same = sets.every((x) => x.weight_kg === sets[0].weight_kg && x.reps === sets[0].reps);
@@ -487,6 +498,7 @@
       const seen = new Set(item.candidates.map((c) => c.id).concat(item.exercise_id ? [item.exercise_id] : []));
       return [
         h('option', { value: '', text: item.candidates.length ? '請選擇動作…' : '從動作庫選擇…' }),
+        h('option', { value: '__new__', text: `＋ 新增「${item.input_text}」為新動作…` }),
         item.exercise_id ? h('option', { value: item.exercise_id, text: item.name }) : null,
         item.candidates.length ? h('optgroup', { label: '可能是' }, item.candidates.map((c) => h('option', { value: c.id, text: c.name }))) : null,
         h('optgroup', { label: '全部動作' }, state.library.filter((e) => !seen.has(e.id)).map((e) => h('option', { value: e.id, text: e.name })))
@@ -494,6 +506,10 @@
     };
     return h('div', { class: 'bd-quick__result', role: 'region', 'aria-label': '解析結果（尚未寫入）' },
       r.items.length ? r.items.map((item, i) => {
+        if (quick.added[i]) {
+          return h('div', { class: 'bd-quick__item is-added' },
+            icon('check-circle'), h('span', { text: ` 「${item.input_text}」已新增到動作庫並加入預計組數` }));
+        }
         const pick = quick.picks[i] ?? item.exercise_id ?? '';
         const select = h('select', { class: 'bd-quick__select', dataset: { quickPick: i, key: `qp-${i}` }, 'aria-label': `「${item.input_text}」對應的動作` }, options(item));
         select.value = String(pick || '');
@@ -505,7 +521,8 @@
             h('div', { class: 'bd-quick__line' }, h('span', { class: 'bd-quick__said', text: `「${item.input_text}」` }), select),
             h('small', { text: setsSummary(item.sets) }),
             item.error ? h('small', { class: 'bd-quick__error', text: `${item.error}，預設不加入，可勾選後再到下方修改。` }) : null,
-            !item.error && item.warning ? h('small', { class: 'bd-quick__hint', text: item.warning }) : null));
+            !item.error && item.warning ? h('small', { class: 'bd-quick__hint', text: item.warning }) : null,
+            quick.forms[i] && quick.forms[i].open ? newExerciseForm(i, item) : null));
       }) : h('p', { class: 'bd-muted', text: '沒有解析到訓練內容。' }),
       r.unparsed.length ? h('p', { class: 'bd-quick__warn', text: `以下內容沒有被記錄：${r.unparsed.join('、')}` }) : null,
       r.note ? h('p', { class: 'bd-quick__warn', text: r.note }) : null,
@@ -517,13 +534,86 @@
         r.items.length ? h('button', { type: 'button', class: 'bd-btn bd-btn--primary', dataset: { action: 'quick-apply', key: 'quick-apply' }, text: '加入預計組數' }) : null));
   }
 
+  /** 動作庫沒有這個動作時：詢問名稱、部位、器材、是否有氧，確認後新增並加入預計組數 */
+  function newExerciseForm(i, item) {
+    const f = quick.forms[i];
+    const field = (name, extra = {}) => ({ dataset: { quickNew: i, field: name, key: `qn-${i}-${name}` }, ...extra });
+    const select = (name, options, label) => {
+      const el = h('select', field(name, { class: 'bd-quick__select', 'aria-label': label }),
+        options.map(([value, text]) => h('option', { value, text })));
+      el.value = f[name];
+      return el;
+    };
+    const saving = quick.saving === i;
+    return h('div', { class: 'bd-newex', role: 'group', 'aria-label': `新增動作「${item.input_text}」` },
+      h('p', { class: 'bd-newex__title' }, icon('plus-circle'), ` 動作庫沒有「${item.input_text}」，要新增這個動作嗎？`),
+      h('label', { class: 'bd-newex__row' }, h('span', { text: '名稱' }),
+        h('input', field('name', { class: 'bd-quick__select', type: 'text', maxlength: 80, value: f.name, required: true }))),
+      h('label', { class: 'bd-newex__row' }, h('span', { text: '部位' }),
+        select('muscle_group', [['', '請選擇…']].concat(MUSCLE_CHOICES.map((m) => [m, m])), '部位')),
+      h('label', { class: 'bd-newex__row' }, h('span', { text: '器材' }),
+        h('input', field('equipment', { class: 'bd-quick__select', type: 'text', maxlength: 50, value: f.equipment,
+          list: 'bd-equipment-list', placeholder: '例如 啞鈴、機械、徒手' })),
+        h('datalist', { id: 'bd-equipment-list' }, EQUIPMENT_CHOICES.map((e) => h('option', { value: e })))),
+      h('label', { class: 'bd-newex__row' }, h('span', { text: '有氧' }),
+        select('is_cardio', [['0', '否（重量訓練）'], ['1', '是（有氧）']], '是否為有氧')),
+      h('div', { class: 'bd-newex__actions' },
+        h('button', { type: 'button', class: 'bd-btn', dataset: { action: 'quick-new-cancel', idx: i, key: `qnc-${i}` }, text: '先不要' }),
+        h('button', { type: 'button', class: 'bd-btn bd-btn--primary', disabled: saving,
+          dataset: { action: 'quick-new-save', idx: i, key: `qns-${i}` }, text: saving ? '新增中…' : '新增動作並加入訓練' })));
+  }
+
+  async function saveNewExercise(i) {
+    const f = quick.forms[i];
+    const item = quick.result.items[i];
+    if (!f.name.trim()) { showMessage('請輸入動作名稱。', 'error'); return; }
+    if (!f.muscle_group) { showMessage('請選擇部位。', 'error'); return; }
+    if (!f.equipment.trim()) { showMessage('請輸入使用的器材。', 'error'); return; }
+    quick.saving = i; render();
+    try {
+      const data = await call('POST', '/exercises', {
+        d: state.d, name: f.name.trim(), muscle_group: f.muscle_group, equipment: f.equipment.trim(), is_cardio: f.is_cardio === '1'
+      });
+      if (!data) return;
+      state = data.state;
+      const id = data.exercise.id;
+      quick.picks[i] = id;
+      quick.added[i] = true;
+      f.open = false;
+      if (item.sets.length) applySets(id, item.sets); else addToPlan(id);
+      showMessage(data.existed ? `動作庫已經有「${data.exercise.name}」，已直接加入預計組數。`
+        : `已新增動作「${data.exercise.name}」並加入預計組數。`);
+      if (quick.result.items.every((_, j) => quick.added[j])) quick = emptyQuick();
+      planSel = id;
+      syncUrl('replace');
+    } catch (err) {
+      showMessage(err.message, 'error');
+    } finally {
+      quick.saving = null; render();
+    }
+  }
+
+  /** 把一個動作的組數填進預計組數（草稿）；已完成的組保留，後面接上新的組 */
+  function applySets(id, sets) {
+    const done = (state.workout && (state.workout.exercises.find((e) => e.id === id) || {}).done) || 0;
+    updatePlan(id, (entry) => {
+      const kept = entry.sets.slice(0, done);
+      while (kept.length < done) kept.push(blankSet());
+      entry.sets = kept.concat(sets.map((x) => ({ kg: num(x.weight_kg), reps: num(x.reps) })));
+    });
+  }
+
   async function quickParse() {
     const text = quick.text.trim();
     if (!text || quick.busy) return;
     quick.busy = true; render();
     try {
       const data = await call('POST', '/parse', { text });
-      if (data) quick = { text, busy: false, result: data, picks: {}, use: {} };
+      if (data) {
+        quick = emptyQuick(text);
+        quick.result = data;
+        data.items.forEach((item, i) => { if (!item.exercise_id && !item.candidates.length) openNewForm(i); });
+      }
       showMessage('');
     } catch (err) {
       showMessage(err.message, 'error');
@@ -536,22 +626,20 @@
   function quickApply() {
     const r = quick.result;
     const chosen = [];
+    let waiting = 0;
     r.items.forEach((item, i) => {
-      if (!(quick.use[i] ?? !item.error)) return;
+      if (quick.added[i] || !(quick.use[i] ?? !item.error)) return;
       const id = Number(quick.picks[i] ?? item.exercise_id);
-      if (!id || !item.sets.length) return;
+      if (!id) { if (quick.forms[i] && quick.forms[i].open) waiting += 1; return; }
+      if (!item.sets.length) return;
       chosen.push([id, item.sets]);
     });
-    if (!chosen.length) { showMessage('請至少勾選一個動作，並選好對應的動作。', 'error'); return; }
-    chosen.forEach(([id, sets]) => {
-      const done = (state.workout && (state.workout.exercises.find((e) => e.id === id) || {}).done) || 0;
-      updatePlan(id, (entry) => {
-        const kept = entry.sets.slice(0, done);
-        while (kept.length < done) kept.push(blankSet());
-        entry.sets = kept.concat(sets.map((x) => ({ kg: num(x.weight_kg), reps: num(x.reps) })));
-      });
-    });
-    quick = { text: '', busy: false, result: null, picks: {}, use: {} };
+    if (!chosen.length) {
+      showMessage(waiting ? '請先完成「新增動作」，或從下拉選單選擇動作。' : '請至少勾選一個動作，並選好對應的動作。', 'error');
+      return;
+    }
+    chosen.forEach(([id, sets]) => applySets(id, sets));
+    quick = emptyQuick();
     showMessage(`已加入 ${chosen.length} 個動作的預計組數，請確認後再開始或逐組完成。`);
     const first = chosen[0][0];
     if (state.workout) load(state.d, first, 'replace'); else { planSel = first; render(); }
@@ -677,7 +765,9 @@
     else if (action === 'pick') load(state.d, ex);
     else if (action === 'plan-pick') { planSel = Number(ex); render(); }
     else if (action === 'report-period') { report.period = target.dataset.period; loadReport(true); }
-    else if (action === 'quick-cancel') { quick = { text: quick.text, busy: false, result: null, picks: {}, use: {} }; render(); }
+    else if (action === 'quick-cancel') { quick = emptyQuick(quick.text); render(); }
+    else if (action === 'quick-new-save') saveNewExercise(Number(target.dataset.idx));
+    else if (action === 'quick-new-cancel') { quick.forms[target.dataset.idx].open = false; render(); }
     else if (action === 'quick-apply') quickApply();
     else if (action === 'rest-default') {
       // 只改之後每次休息的起始秒數；正在倒數的這一次不受影響
@@ -754,13 +844,20 @@
 
   root.addEventListener('change', (event) => {
     const el = event.target;
-    if (el.dataset.quickPick !== undefined) quick.picks[el.dataset.quickPick] = el.value ? Number(el.value) : null;
+    if (el.dataset.quickPick !== undefined) {
+      const i = Number(el.dataset.quickPick);
+      if (el.value === '__new__') { quick.picks[i] = null; openNewForm(i); render(); return; }
+      quick.picks[i] = el.value ? Number(el.value) : null;
+      if (quick.forms[i]) quick.forms[i].open = false;
+      render();
+    }
     if (el.dataset.quickUse !== undefined) quick.use[el.dataset.quickUse] = el.checked;
   });
 
   root.addEventListener('input', (event) => {
     const el = event.target;
     if (el.dataset.quick === 'text') { quick.text = el.value; return; }
+    if (el.dataset.quickNew !== undefined) { quick.forms[el.dataset.quickNew][el.dataset.field] = el.value; return; }
     if (!el.dataset || el.dataset.planIdx === undefined || !el.dataset.planEx) return;
     const idx = Number(el.dataset.planIdx);
     updatePlan(Number(el.dataset.planEx), (entry) => {

@@ -57,6 +57,13 @@ class RuleParserTests(unittest.TestCase):
         item = parse_rules('槓鈴深蹲 100 公斤 1000 組', LIBRARY)['items'][0]
         self.assertIn('組數', item['error'])                                 # 不合理的組數仍然擋下
 
+    def test_guess_exercise(self):
+        from body.text_parser import guess_exercise
+        self.assertEqual(guess_exercise('啞鈴肩推'), {'muscle_group': '肩', 'equipment': '啞鈴', 'is_cardio': False})
+        self.assertEqual(guess_exercise('繩索面拉')['muscle_group'], '肩')
+        self.assertTrue(guess_exercise('跑步機慢跑')['is_cardio'])
+        self.assertEqual(guess_exercise('bench'), {'muscle_group': '', 'equipment': '', 'is_cardio': False})
+
     def test_unreasonable_values_are_flagged(self):
         self.assertIsNotNone(parse_rules('槓鈴深蹲 900 公斤 5 組 5 下', LIBRARY)['items'][0]['error'])
 
@@ -159,6 +166,36 @@ class ParseApiTests(unittest.TestCase):
         self.assertEqual((status, data['source']), (200, 'rule'))
         self.assertEqual(data['items'][0]['name'], '槓鈴臥推')
         self.assertTrue(data['note'])
+
+    def create(self, **data):
+        response = self.client.post('/body/api/exercises', json=data, headers={'X-CSRF-Token': self.token()})
+        return response.status_code, response.get_json()
+
+    def test_unknown_exercise_gets_suggestion_and_can_be_created(self):
+        status, data = self.parse('壺鈴擺盪 16kg 3組15下')
+        item = data['items'][0]
+        self.assertEqual((item['exercise_id'], item['candidates']), (None, []))
+        self.assertEqual(item['suggest'], {'muscle_group': '', 'equipment': '壺鈴', 'is_cardio': False})
+        status, data = self.create(name='  壺鈴  擺盪 ', muscle_group='腿', equipment='壺鈴', is_cardio=False)
+        self.assertEqual((status, data['existed'], data['exercise']['name']), (200, False, '壺鈴 擺盪'))
+        self.assertIn(data['exercise']['id'], [e['id'] for e in data['state']['library']])
+        new = [e for e in data['state']['library'] if e['id'] == data['exercise']['id']][0]
+        self.assertEqual((new['muscle_group'], new['equipment']), ('腿', '壺鈴'))
+        # 再解析一次就對得到了；同名（不分空白）不會重複新增
+        self.assertEqual(self.parse('壺鈴擺盪 16kg 3組15下')[1]['items'][0]['name'], '壺鈴 擺盪')
+        status, data = self.create(name='壺鈴擺盪', muscle_group='腿', equipment='壺鈴')
+        self.assertEqual((status, data['existed']), (200, True))
+
+    def test_create_exercise_validation(self):
+        self.assertEqual(self.create(name='', muscle_group='腿', equipment='徒手')[0], 400)
+        self.assertEqual(self.create(name='x' * 81, muscle_group='腿', equipment='徒手')[0], 400)
+        self.assertEqual(self.create(name='跑步', muscle_group='有氧', equipment='徒手')[0], 400)   # 部位只有 6 個選項
+        self.assertEqual(self.create(name='跑步', muscle_group='腿', equipment='')[0], 400)
+        self.assertEqual(self.create(name='跑步', muscle_group='腿', equipment='y' * 51)[0], 400)
+        status, data = self.create(name='跑步', muscle_group='腿', equipment='徒手', is_cardio=True)
+        self.assertEqual(status, 200)
+        response = self.client.post('/body/api/exercises', json={'name': 'z', 'muscle_group': '腿', 'equipment': 'x'})
+        self.assertEqual(response.status_code, 400)                                             # 沒帶 CSRF
 
     def test_validation(self):
         self.assertEqual(self.parse('')[0], 400)
