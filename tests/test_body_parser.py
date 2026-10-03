@@ -169,8 +169,26 @@ class FakeLlmServer:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
-                server.requests.append(dict(body=body, auth=self.headers.get('Authorization')))
+                server.requests.append(dict(body=body, auth=self.headers.get('Authorization'), path=self.path))
                 mode = server.mode
+                if self.path.endswith('/embeddings'):
+                    if mode == 'embed-bad':
+                        return self._send(200, {'data': [{'index': 0, 'embedding': [1, 2]}]})
+                    data = [{'index': i, 'embedding': [float(len(t)), float(i), 1.0]} for i, t in enumerate(body['input'])]
+                    return self._send(200, {'data': list(reversed(data)), 'usage': {'prompt_tokens': 7 * len(data)}})
+                if mode == 'reasoning':
+                    # 模擬較新的推理型模型：不接受 max_tokens，也不接受 temperature=0
+                    if 'max_tokens' in body:
+                        return self._send(400, {'error': {'message': "Unsupported parameter: 'max_tokens' is not supported "
+                                                          "with this model. Use 'max_completion_tokens' instead.",
+                                                          'param': 'max_tokens', 'code': 'unsupported_parameter'}})
+                    if 'temperature' in body:
+                        return self._send(400, {'error': {'message': "Unsupported value: 'temperature' does not support 0 "
+                                                          'with this model.', 'param': 'temperature', 'code': 'unsupported_value'}})
+                if mode == 'empty-length':
+                    return self._send(200, {'choices': [{'message': {'content': ''}, 'finish_reason': 'length'}]})
+                if mode == '404':
+                    return self._send(404, {'error': {'message': 'model not found'}})
                 if mode == 'no-json-mode' and 'response_format' in body:
                     return self._send(400, {'error': {'message': 'response_format is not supported'}})
                 if mode == '429':
@@ -251,6 +269,83 @@ class LlmClientTests(unittest.TestCase):
                                           'BODY_LLM_TIMEOUT': 'abc', 'BODY_LLM_JSON_MODE': 'false'}):
             client = BodyLlmClient.from_env()
             self.assertEqual((client.base_url, client.timeout, client.json_mode), (self.server.url, 30, False))
+
+
+class LlmClientCompatTests(unittest.TestCase):
+    """參數自動相容與 embedding。"""
+
+    def setUp(self):
+        self.server = FakeLlmServer()
+
+    def tearDown(self):
+        self.server.close()
+
+    def client(self, **kwargs):
+        from body.llm_client import BodyLlmClient
+        return BodyLlmClient(self.server.url, 'test-model', api_key='secret-key', **kwargs)
+
+    def test_reasoning_model_params_are_adjusted_and_remembered(self):
+        self.server.mode = 'reasoning'
+        client = self.client()
+        result = client.chat_json([{'role': 'user', 'content': 'hi'}])
+        self.assertEqual(result['data'], {})                                # 假伺服器在這個模式回傳 {}
+        self.assertEqual(len(self.server.requests), 3)                     # max_tokens 被拒 → temperature 被拒 → 成功
+        last = self.server.requests[-1]['body']
+        self.assertEqual((last.get('max_completion_tokens'), 'max_tokens' in last, 'temperature' in last), (800, False, False))
+        client.chat_json([{'role': 'user', 'content': 'again'}])
+        self.assertEqual(len(self.server.requests), 4)                     # 記住了，第二次直接成功
+
+    def test_reasoning_effort_only_when_set(self):
+        self.client().chat_json([{'role': 'user', 'content': 'hi'}])
+        self.assertNotIn('reasoning_effort', self.server.requests[-1]['body'])
+        self.client(reasoning_effort='low').chat_json([{'role': 'user', 'content': 'hi'}])
+        self.assertEqual(self.server.requests[-1]['body']['reasoning_effort'], 'low')
+
+    def test_empty_and_not_found(self):
+        from body.llm_client import LlmError
+        self.server.mode = 'empty-length'
+        with self.assertRaises(LlmError) as ctx:
+            self.client().chat_json([{'role': 'user', 'content': 'hi'}])
+        self.assertIn('截斷', str(ctx.exception))
+        self.server.mode = '404'
+        with self.assertRaises(LlmError) as ctx:
+            self.client().chat_json([{'role': 'user', 'content': 'hi'}])
+        self.assertIn('模型', str(ctx.exception))
+
+    def test_embed(self):
+        from body import llm_client
+        from body.llm_client import LlmError
+        with self.assertRaises(LlmError):
+            self.client().embed(['a'])                                   # 沒設定 embedding 模型
+        client = self.client(embed_model='embed-model')
+        original, llm_client.EMBED_BATCH = llm_client.EMBED_BATCH, 2
+        try:
+            result = client.embed(['一', '二二', '三三三'])
+        finally:
+            llm_client.EMBED_BATCH = original
+        self.assertEqual(result['vectors'], [[1.0, 0.0, 1.0], [2.0, 1.0, 1.0], [3.0, 0.0, 1.0]])   # 依 index 排回原順序
+        self.assertEqual(result['input_tokens'], 21)
+        embed_calls = [r for r in self.server.requests if r['path'].endswith('/embeddings')]
+        self.assertEqual([r['body']['input'] for r in embed_calls], [['一', '二二'], ['三三三']])     # 分批送
+        self.assertEqual(embed_calls[0]['auth'], 'Bearer secret-key')                          # 預設沿用對話的金鑰
+        self.assertEqual(client.embed([])['vectors'], [])
+        self.server.mode = 'embed-bad'
+        with self.assertRaises(LlmError):
+            client.embed(['a', 'b'])                                     # 回傳數量不對
+
+    def test_embed_from_env(self):
+        import os
+        from unittest import mock
+        from body.llm_client import BodyLlmClient
+        env = {'BODY_LLM_BASE_URL': self.server.url, 'BODY_LLM_MODEL': 'm', 'BODY_LLM_API_KEY': 'k1',
+               'BODY_EMBED_MODEL': 'e', 'BODY_EMBED_BASE_URL': '', 'BODY_EMBED_API_KEY': '', 'BODY_LLM_REASONING_EFFORT': ''}
+        with mock.patch.dict(os.environ, env):
+            client = BodyLlmClient.from_env()
+            self.assertEqual((client.embed_model, client.embed_base_url, client.embed_api_key), ('e', self.server.url, 'k1'))
+        env.update(BODY_EMBED_BASE_URL='http://127.0.0.1:11434/v1', BODY_EMBED_API_KEY='')
+        with mock.patch.dict(os.environ, env):
+            client = BodyLlmClient.from_env()
+            self.assertEqual((client.embed_base_url, client.embed_api_key), ('http://127.0.0.1:11434/v1', ''))  # 另一個服務不帶對話的金鑰
 
 
 class ParseApiWithLlmTests(ParseApiTests):
