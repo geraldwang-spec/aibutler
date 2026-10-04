@@ -215,6 +215,7 @@ class FakeLlmServer:
         from http.server import BaseHTTPRequestHandler, HTTPServer
         server = self
         self.mode, self.requests = 'ok', []
+        self.reply = None          # 設定後，對話一律回傳這段內容（測試分析說明用）
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -238,6 +239,9 @@ class FakeLlmServer:
                     if 'temperature' in body:
                         return self._send(400, {'error': {'message': "Unsupported value: 'temperature' does not support 0 "
                                                           'with this model.', 'param': 'temperature', 'code': 'unsupported_value'}})
+                if server.reply is not None:
+                    return self._send(200, {'choices': [{'message': {'content': server.reply}}],
+                                            'usage': {'prompt_tokens': 900, 'completion_tokens': 150}})
                 if mode == 'empty-length':
                     return self._send(200, {'choices': [{'message': {'content': ''}, 'finish_reason': 'length'}]})
                 if mode == '404':

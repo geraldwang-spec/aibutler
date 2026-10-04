@@ -77,6 +77,7 @@ class ReportApiTests(unittest.TestCase):
         from app import create_app
         self.directory = tempfile.TemporaryDirectory()
         path = str(Path(self.directory.name) / 'test.db')
+        self._db_path = path
         self.app = create_app({'TESTING': True, 'SECRET_KEY': 'test-only', 'DB_TYPE': 'sqlite', 'DATABASE': path,
                                'SMTP_HOST': '', 'SMTP_PORT': '', 'SMTP_USERNAME': '', 'SMTP_PASSWORD': '', 'SMTP_FROM_EMAIL': ''})
         today = date.today()
@@ -102,6 +103,9 @@ class ReportApiTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
+    def db_path(self):
+        return self._db_path
+
     def test_report_only_counts_own_data(self):
         data = self.client.get('/body/api/report?period=week').get_json()
         self.assertTrue(data['ok'])
@@ -113,6 +117,116 @@ class ReportApiTests(unittest.TestCase):
 
     def test_bad_period(self):
         self.assertEqual(self.client.get('/body/api/report?period=year').status_code, 400)
+
+
+class AiReportPureTests(unittest.TestCase):
+    def data(self):
+        start, end, *_ = analysis.period_range('week', date(2026, 10, 2))
+        sets = [row('2026-09-29', 1, 1, '槓鈴臥推', '胸', 62.5, 8)] * 6
+        prev = [row('2026-09-22', 9, 1, '槓鈴臥推', '胸', 60, 8)] * 3
+        workouts = [dict(id=1, workout_date='2026-09-29', duration_min=50, ended_at='x')]
+        report = analysis.build_report('week', start, end, date(2026, 10, 12), sets, prev, workouts,
+                                       [dict(id=9, workout_date='2026-09-22', duration_min=45, ended_at='x')],
+                                       [dict(record_date='2026-09-28', weight_kg=69.0), dict(record_date='2026-10-04', weight_kg=68.4)],
+                                       {'胸': '2026-09-29'})
+        from body import ai_report
+        return ai_report.llm_input(report, {'goal_type': '增肌', 'workout_days_per_week': 3, 'activity_level': None})
+
+    def test_input_is_compact(self):
+        data = self.data()
+        self.assertEqual(data['profile'], {'goal_type': '增肌', 'workout_days_per_week': 3})   # 空值不送
+        self.assertEqual(data['progress'][0]['metric'], '估計1RM(kg)')
+        self.assertNotIn('sets', data['progress'][0].get('raw', {}))
+
+    def test_fabricated_numbers_are_removed(self):
+        from body import ai_report
+        data = self.data()
+        raw = {'summary': '本週訓練 1 次，共 6 組，總訓練量 3,000 kg×次。',
+               'strengths': ['槓鈴臥推估計 1RM 從 76 提升到 79.2（+4.2%）。', '臥推進步了 15%。'],
+               'weaknesses': ['體重下降 0.6 公斤。', '背部沒有訓練。', 123],
+               'suggestions': ['下週增加 2 組划船。', '每週做 80 組背部。', '安排一天腿部訓練。', '多睡覺。']}
+        result = ai_report.check_output(raw, data)
+        self.assertEqual(result['summary'], raw['summary'])                       # 1、6、3000 都在資料裡
+        self.assertEqual(result['strengths'], ['槓鈴臥推估計 1RM 從 76 提升到 79.2（+4.2%）。'])   # 15% 是編造的
+        self.assertEqual(result['weaknesses'], ['體重下降 0.6 公斤。', '背部沒有訓練。'])        # 123 不在資料裡
+        self.assertEqual(result['suggestions'], ['下週增加 2 組划船。', '安排一天腿部訓練。', '多睡覺。'])   # 80 太大，而且不在資料裡
+        self.assertGreaterEqual(result['removed'], 2)
+        self.assertEqual(ai_report.check_output('不是 JSON', data)['strengths'], [])
+
+    def test_hash_changes_with_data(self):
+        from body import ai_report
+        data = self.data()
+        same = ai_report.input_hash(data)
+        data['this_period']['sets'] += 1
+        self.assertNotEqual(same, ai_report.input_hash(data))
+
+
+class AiReportApiTests(ReportApiTests):
+    """從 body.env 設定 → API → 假的 LLM 伺服器；存檔、沿用、資料變動、次數限制。"""
+
+    def setUp(self):
+        from body import body_route
+        from tests.test_body_parser import FakeLlmServer
+        self.server = FakeLlmServer()
+        self.server.reply = ('{"summary": "本週完成 2 組。", "strengths": ["槓鈴臥推 2 組。", "訓練量提升 999%。"], '
+                             '"weaknesses": ["背部沒有訓練。"], "suggestions": ["下週加入划船 3 組。"]}')
+        self.config_dir = tempfile.TemporaryDirectory()
+        config = Path(self.config_dir.name) / 'body.env'
+        config.write_text(f'BODY_LLM_BASE_URL={self.server.url}\nBODY_LLM_MODEL=test-model\n', encoding='utf-8')
+        self.original = body_route.BodyApi.config_file
+        body_route.BodyApi.config_file, body_route.BodyApi._llm_loaded = config, False
+        super().setUp()
+
+    def tearDown(self):
+        from body import body_route
+        super().tearDown()
+        body_route.BodyApi.config_file, body_route.BodyApi._llm_loaded = self.original, False
+        self.config_dir.cleanup()
+        self.server.close()
+
+    def token(self):
+        self.client.get('/body/api/report?period=week')          # 任何請求都會在 session 建立 CSRF token
+        with self.client.session_transaction() as s:
+            return s['csrf_token']
+
+    def generate(self, period='week'):
+        response = self.client.post('/body/api/report/ai', json={'period': period}, headers={'X-CSRF-Token': self.token()})
+        return response.status_code, response.get_json()
+
+    def test_generate_save_reuse_and_stale(self):
+        ai = self.client.get('/body/api/report/ai?period=week').get_json()['ai']
+        self.assertEqual((ai['enabled'], ai['saved'], ai['has_data']), (True, None, True))
+        status, data = self.generate()
+        saved = data['ai']['saved']
+        self.assertEqual(status, 200)
+        self.assertEqual(saved['strengths'], ['槓鈴臥推 2 組。'])                    # 999% 被拿掉
+        self.assertEqual((saved['removed'], saved['model'], saved['stale']), (1, 'test-model', False))
+        self.assertEqual(len(self.server.requests), 1)
+        # 再讀一次：沿用存好的，不呼叫 LLM
+        ai = self.client.get('/body/api/report/ai?period=week').get_json()['ai']
+        self.assertEqual((ai['saved']['summary'], ai['saved']['stale'], len(self.server.requests)), ('本週完成 2 組。', False, 1))
+        # 資料變動 → 標示 stale
+        with closing(sqlite3.connect(self.db_path())) as c:
+            c.execute('INSERT INTO workout_sets(workout_id,exercise_id,set_no,weight_kg,reps) VALUES (1,1,3,60,6)')
+            c.commit()
+        self.assertTrue(self.client.get('/body/api/report/ai?period=week').get_json()['ai']['saved']['stale'])
+        # 送給 LLM 的只有摘要，沒有別人的資料
+        sent = self.server.requests[0]['body']['messages'][1]['content']
+        self.assertNotIn('別人的', sent)
+
+    def test_rate_limit_and_no_data(self):
+        from body import service
+        original, service.LLM_REPORT_PER_HOUR = service.LLM_REPORT_PER_HOUR, 1
+        try:
+            self.assertEqual(self.generate()[0], 200)
+            status, data = self.generate()
+            self.assertEqual(status, 400)
+            self.assertIn('每小時', data['error'])
+        finally:
+            service.LLM_REPORT_PER_HOUR = original
+        response = self.client.post('/body/api/report/ai', json={'period': 'week', 'd': '2020-01-01'},
+                                    headers={'X-CSRF-Token': self.token()})
+        self.assertEqual(response.status_code, 400)                                   # 沒有訓練紀錄
 
 
 if __name__ == '__main__':

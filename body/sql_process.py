@@ -105,6 +105,26 @@ class BodySqlProcess:
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
             'WHERE w.user_id=? AND w.workout_date<=? GROUP BY e.muscle_group', (self.user_id, until)) if r['muscle_group']}
 
+    # ------------------------------------------------------------ 個人資料與 AI 說明（ai_suggestions）
+    def profile(self):
+        row = self.conn.execute('SELECT goal_type, activity_level, workout_days_per_week, minutes_per_session '
+                                'FROM user_profiles WHERE user_id=?', (self.user_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def ai_suggestion(self, kind, sug_date):
+        """取出某一期已產生的 AI 說明（type 例如 body_week，sug_date 是期間的第一天）。"""
+        return self.conn.execute('SELECT id, content FROM ai_suggestions WHERE user_id=? AND type=? AND sug_date=? '
+                                 'ORDER BY id DESC LIMIT 1', (self.user_id, kind, sug_date)).fetchone()
+
+    def save_ai_suggestion(self, kind, sug_date, content):
+        """同一期只保留一筆：有就更新、沒有就新增（兩種資料庫都能用的寫法）。"""
+        row = self.ai_suggestion(kind, sug_date)
+        if row:
+            self.conn.execute('UPDATE ai_suggestions SET content=? WHERE id=?', (content, row['id']))
+        else:
+            self.conn.execute('INSERT INTO ai_suggestions (user_id, sug_date, type, content, accepted) VALUES (?,?,?,?,0)',
+                              (self.user_id, sug_date, kind, content))
+
     # ------------------------------------------------------------ 動作庫 exercises
 
     # 動作庫的部位排序（與 records.py 的選項順序一致），其他部位排最後

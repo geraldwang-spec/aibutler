@@ -12,14 +12,15 @@
 - 結束時如果一組都沒做，這次訓練直接取消。
 - 打開頁面時，如果使用者的動作庫是空的，先寫入 DEFAULT_EXERCISES。
 """
+import json
 import math
 import re
 from datetime import date, datetime, time, timedelta
 
-from . import analysis, text_parser
+from . import ai_report, analysis, text_parser
 from .errors import ApiError
 from .llm_client import LlmError
-from .prompts import parse_messages
+from .prompts import parse_messages, report_messages
 from .sql_process import BodySqlProcess
 
 # 動作庫是空的時候預先放進去的常用動作：(名稱, 部位, 器材, 是否有氧)
@@ -104,6 +105,8 @@ DEFAULT_EXERCISES = [
 
 # 每個使用者每小時最多呼叫幾次 AI 解析（規則解析不受限制）
 LLM_PARSE_PER_HOUR = 30
+# 每個使用者每小時最多產生幾次 AI 分析說明（同一期資料沒變時直接用存好的，不算次數）
+LLM_REPORT_PER_HOUR = 10
 
 
 class Validator:
@@ -152,7 +155,7 @@ class Validator:
 class BodyService:
     WEEKDAYS = '一二三四五六日'
 
-    def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None):
+    def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None, llm_report=None):
         """llm_parse(messages) -> dict 或 (dict, 用量)：規則解析不了時呼叫的 LLM（回傳解析後的 JSON）。
 
         沒有傳入就只用規則解析；測試時可以傳入回傳固定 JSON 的假函式，不用真的呼叫 API。
@@ -160,6 +163,7 @@ class BodyService:
         self.sql = sql
         self.today = today or date.today()
         self.llm_parse = llm_parse
+        self.llm_report = llm_report          # llm_report(messages) -> (dict, 用量)：週／月分析的 AI 說明
 
 
     # ============================================================ 預設動作
@@ -329,6 +333,50 @@ class BodyService:
             sets=self.sql.sets_between(s, e), prev_sets=self.sql.sets_between(ps, pe),
             workouts=self.sql.workouts_between(s, e), prev_workouts=self.sql.workouts_between(ps, pe),
             metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference))
+
+    # ============================================================ AI 分析說明（數字由程式算，LLM 只負責說明）
+    def _ai_input(self, period, anchor):
+        report = self.report(period, anchor)
+        return report, ai_report.llm_input(report, self.sql.profile())
+
+    def ai_explanation(self, period, anchor):
+        """讀取這一期已產生的 AI 說明；資料有變動時標示 stale（不會自動重新呼叫 LLM）。"""
+        report, data = self._ai_input(period, anchor)
+        row = self.sql.ai_suggestion(f'body_{period}', report['start'])
+        saved = None
+        if row:
+            try:
+                saved = json.loads(row['content'])
+            except (TypeError, ValueError):
+                saved = None
+        if saved:
+            saved['stale'] = saved.get('input_hash') != ai_report.input_hash(data)
+        return dict(enabled=self.llm_report is not None, saved=saved, has_data=report['summary']['sessions'] > 0)
+
+    def generate_ai_explanation(self, period, anchor):
+        """呼叫 LLM 產生（或重新產生）這一期的說明，檢查數字後存進 ai_suggestions。"""
+        if self.llm_report is None:
+            raise ApiError('尚未設定 AI（body/body.env），目前只能看程式算出的分析。')
+        report, data = self._ai_input(period, anchor)
+        if report['summary']['sessions'] == 0:
+            raise ApiError('這段期間沒有訓練紀錄，沒有可以分析的內容。')
+        if self.sql.rate_limited(f'body-llm-report:{self.sql.user_id}', LLM_REPORT_PER_HOUR, 3600):
+            raise ApiError(f'AI 分析每小時最多 {LLM_REPORT_PER_HOUR} 次，請稍後再試。')
+        try:
+            raw = self.llm_report(report_messages(data))
+        except LlmError as exc:
+            raise ApiError(f'AI 分析暫時無法使用（{exc}）。') from None
+        raw, usage = raw if isinstance(raw, tuple) else (raw, None)
+        result = ai_report.check_output(raw, data)
+        if not (result['summary'] or result['strengths'] or result['weaknesses'] or result['suggestions']):
+            raise ApiError('AI 回傳的內容沒有通過檢查，請稍後再試。')
+        saved = dict(result, input_hash=ai_report.input_hash(data), period=period, start=report['start'],
+                     end=report['end'], generated_at=datetime.now().isoformat(timespec='seconds'),
+                     model=(usage or {}).get('model'), usage=usage)
+        self.sql.save_ai_suggestion(f'body_{period}', report['start'], json.dumps(saved, ensure_ascii=False))
+        self.sql.commit()
+        saved['stale'] = False
+        return dict(enabled=True, saved=saved, has_data=True)
 
     # ============================================================ 新增動作（一句話輸入遇到動作庫沒有的動作）
     def create_exercise(self, data):

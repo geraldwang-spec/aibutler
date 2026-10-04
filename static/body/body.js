@@ -378,7 +378,7 @@
   }
 
   // ------------------------------------------------------------ 分析（數字都由後端程式計算）
-  const report = { period: 'week', key: null, data: null, busy: false };
+  const report = { period: 'week', key: null, data: null, busy: false, ai: null, aiBusy: false };
   const MUSCLES = ['胸', '背', '腿', '肩', '手臂', '核心'];
   const fmtDate = (iso) => { const [, m, d] = iso.split('-').map(Number); return `${m}/${d}`; };
   // 期間還沒結束時，跟上一期整段比較會偏低，所以不上顏色，避免看起來像退步
@@ -392,12 +392,67 @@
     fill($('bd-report'), h('p', { class: 'bd-muted', text: '分析中…' }));
     try {
       const data = await call('GET', `/report?period=${report.period}&d=${state.d}`);
-      if (data && report.key === key) { report.data = data.report; renderReport(); }
+      if (data && report.key === key) {
+        report.data = data.report; report.ai = null; renderReport();
+        // 已產生過的 AI 說明（只讀，不會呼叫 LLM）
+        const ai = await call('GET', `/report/ai?period=${report.period}&d=${state.d}`).catch(() => null);
+        if (ai && report.key === key) { report.ai = ai.ai; renderReport(); }
+      }
     } catch (err) {
       report.key = null;
       fill($('bd-report'), h('p', { class: 'bd-empty', text: err.message }));
     } finally {
       report.busy = false;
+    }
+  }
+
+  /** AI 說明：使用者按下按鈕才呼叫 LLM；資料沒變就沿用存好的結果 */
+  function aiBlock() {
+    const ai = report.ai;
+    const head = (button) => h('div', { class: 'bd-ai__head' }, h('h3', null, icon('magic'), ' AI 說明與建議'), button);
+    if (!ai) return h('section', { class: 'bd-report__block bd-ai' }, head(null), h('p', { class: 'bd-muted', text: '載入中…' }));
+    if (!ai.enabled) {
+      return h('section', { class: 'bd-report__block bd-ai' }, head(null),
+        h('p', { class: 'bd-muted', text: '在 body/body.env 設定 AI 之後，可以把上面的統計寫成文字說明與建議。' }));
+    }
+    const saved = ai.saved;
+    const button = ai.has_data ? h('button', {
+      type: 'button', class: 'bd-btn ' + (saved ? '' : 'bd-btn--primary'), disabled: report.aiBusy,
+      dataset: { action: 'report-ai', key: 'report-ai' }
+    }, report.aiBusy ? '產生中…' : saved ? '重新產生' : '產生 AI 說明') : null;
+    if (!saved) {
+      return h('section', { class: 'bd-report__block bd-ai' }, head(button),
+        h('p', { class: 'bd-muted', text: ai.has_data ? '按下按鈕後，AI 會根據上面的統計寫出優點、需要注意的地方與下一步建議。' : '這段期間沒有訓練紀錄。' }));
+    }
+    const list = (title, items, level, iconName) => (items.length ? h('div', { class: 'bd-ai__group' },
+      h('h4', { text: title }),
+      h('ul', { class: 'bd-findings' }, items.map((t) => h('li', { class: `bd-finding is-${level}` }, icon(iconName), h('span', { text: t }))))) : null);
+    const time = (saved.generated_at || '').replace('T', ' ').slice(5, 16);
+    const latency = saved.usage && saved.usage.latency_ms ? `・${(saved.usage.latency_ms / 1000).toFixed(1)} 秒` : '';
+    return h('section', { class: 'bd-report__block bd-ai' }, head(button),
+      saved.stale ? h('p', { class: 'bd-quick__warn', text: '這段期間的訓練資料有更新，可以按「重新產生」。' }) : null,
+      saved.summary ? h('p', { class: 'bd-ai__summary', text: saved.summary }) : null,
+      list('做得好的地方', saved.strengths, 'good', 'check-circle'),
+      list('需要注意', saved.weaknesses, 'warn', 'exclamation-triangle'),
+      list('下一步建議', saved.suggestions, 'info', 'lightbulb-o'),
+      h('p', { class: 'bd-muted' },
+        `AI 產生於 ${time}${saved.model ? `・${saved.model}` : ''}${latency}`,
+        saved.removed ? `；有 ${saved.removed} 句因為數字對不上統計資料，已自動拿掉` : '',
+        '。僅供參考，不是醫療或專業教練建議。'));
+  }
+
+  async function generateAi() {
+    if (report.aiBusy) return;
+    report.aiBusy = true; renderReport();
+    const key = report.key;
+    try {
+      const data = await call('POST', '/report/ai', { period: report.period, d: state.d });
+      if (data && report.key === key) report.ai = data.ai;
+      showMessage('');
+    } catch (err) {
+      showMessage(err.message, 'error');
+    } finally {
+      report.aiBusy = false; renderReport();
     }
   }
 
@@ -426,7 +481,8 @@
         h('h3', { text: '重點發現' }),
         h('ul', { class: 'bd-findings' }, r.findings.map((f) => h('li', { class: `bd-finding is-${f.level}` },
           icon(icon2[f.level] || 'info-circle'), h('span', { text: f.text })))),
-        h('p', { class: 'bd-muted', text: '以上由程式依紀錄計算；之後會加上 AI 的建議。' })),
+        h('p', { class: 'bd-muted', text: '以上由程式依紀錄計算。' })),
+      aiBlock(),
 
       h('div', { class: 'bd-report__grid' },
         h('section', { class: 'bd-report__block' },
@@ -765,6 +821,7 @@
     else if (action === 'pick') load(state.d, ex);
     else if (action === 'plan-pick') { planSel = Number(ex); render(); }
     else if (action === 'report-period') { report.period = target.dataset.period; loadReport(true); }
+    else if (action === 'report-ai') generateAi();
     else if (action === 'quick-cancel') { quick = emptyQuick(quick.text); render(); }
     else if (action === 'quick-new-save') saveNewExercise(Number(target.dataset.idx));
     else if (action === 'quick-new-cancel') { quick.forms[target.dataset.idx].open = false; render(); }

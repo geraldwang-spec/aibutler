@@ -4,6 +4,8 @@
   GET  /body/                         頁面外殼（內嵌第一份狀態 JSON；動作庫是空的會先寫入預設動作）
   GET  /body/api/state?d=&ex=         取得某天的完整狀態
   GET  /body/api/report?period=week|month&d=   訓練分析（只讀）
+  GET  /body/api/report/ai?period=&d=          已產生的 AI 說明（不呼叫 LLM）
+  POST /body/api/report/ai            {period, d}          產生／重新產生 AI 說明
   POST /body/api/parse                {text}               一句話輸入 → 草稿（不寫資料庫）
   POST /body/api/exercises            {name, muscle_group, equipment, is_cardio, d}   新增動作
   POST /body/api/weight               {d, weight_kg, body_fat_pct?, ex?}
@@ -40,6 +42,22 @@ class BodyApi:
     _llm_loaded = False
 
     @classmethod
+    def llm_report(cls):
+        """回傳週／月分析說明用的 LLM 函式；沒有設定就回 None。"""
+        cls.llm_parse()                       # 確保已讀取設定
+        client = cls._llm
+        if client is None:
+            return None
+
+        def explain(messages):
+            result = client.chat_json(messages, max_tokens=1200)
+            usage = dict(model=client.model, input_tokens=result['input_tokens'],
+                         output_tokens=result['output_tokens'], latency_ms=result['latency_ms'])
+            BodyApi.log_usage(usage, feature='report')
+            return result['data'], usage
+        return explain
+
+    @classmethod
     def llm_parse(cls):
         """回傳給 BodyService 用的 LLM 函式；body/body.env 沒設定 BODY_LLM_* 就回 None（只用規則解析）。"""
         if not cls._llm_loaded:
@@ -57,12 +75,12 @@ class BodyApi:
         return parse
 
     @staticmethod
-    def log_usage(usage):
+    def log_usage(usage, feature='parse'):
         """把每次 AI 呼叫的用量與延遲寫到 instance/body_llm_usage.jsonl（成本控制與報告素材）。
 
         只記錄數字，不記錄使用者輸入的內容；instance/ 已排除 Git。寫檔失敗不影響功能。
         """
-        line = dict(time=datetime.now().isoformat(timespec='seconds'), user=g.user['id'], feature='parse', **usage)
+        line = dict(time=datetime.now().isoformat(timespec='seconds'), user=g.user['id'], feature=feature, **usage)
         try:
             path = Path(current_app.instance_path) / 'body_llm_usage.jsonl'
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +93,8 @@ class BodyApi:
     def service():
         # 同一個請求共用一個 service / 資料庫連線
         if 'body_service' not in g:
-            g.body_service = BodyService(BodySqlProcess(g.user['id']), llm_parse=BodyApi.llm_parse())
+            g.body_service = BodyService(BodySqlProcess(g.user['id']), llm_parse=BodyApi.llm_parse(),
+                                         llm_report=BodyApi.llm_report())
         return g.body_service
 
     @staticmethod
@@ -128,6 +147,23 @@ def report():
     """訓練分析（週／月）：只讀資料，不寫入。"""
     period = request.args.get('period', 'week')
     return dict(report=BodyApi.service().report(period, Validator.day(request.args.get('d'))))
+
+
+@body.get('/api/report/ai')
+@api
+def report_ai():
+    """讀取這一期已產生的 AI 說明（不會呼叫 LLM）。"""
+    period = request.args.get('period', 'week')
+    return dict(ai=BodyApi.service().ai_explanation(period, Validator.day(request.args.get('d'))))
+
+
+@body.post('/api/report/ai')
+@api
+def report_ai_generate():
+    """產生（或重新產生）這一期的 AI 說明：使用者按下按鈕才呼叫 LLM。"""
+    data = BodyApi.payload()
+    period = data.get('period', 'week')
+    return dict(ai=BodyApi.service().generate_ai_explanation(period, Validator.day(data.get('d'))))
 
 
 @body.post('/api/parse')

@@ -310,3 +310,12 @@
 .bd-newex__row { display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 8px; margin: 0; font-size: 13px; color: var(--bd-muted); }
 .bd-newex__actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .bd-quick__item.is-added { align-items: center; gap: 4px; background: #eaf7ee; color: #207245; font-size: 13px; }
+
+/* ---------- 分析：AI 說明 ---------- */
+.bd-ai { padding: 14px; border-radius: 10px; background: #f7fbfb; border: 1px solid var(--bd-line); }
+.bd-ai__head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.bd-ai__head h3 { margin: 0; }
+.bd-ai__head .fa { color: var(--bd-teal); }
+.bd-ai__summary { margin: 0 0 10px; font-size: 15px; line-height: 1.7; }
+.bd-ai__group h4 { margin: 10px 0 6px; font-size: 13px; color: var(--bd-muted); font-weight: 600; }
+.bd-finding .fa-lightbulb-o { color: var(--bd-teal); }
