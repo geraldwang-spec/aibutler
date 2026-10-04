@@ -1,15 +1,16 @@
-"""Database compatibility layer for AI Butler personal edition.
+"""Database compatibility layer for AI Butler.
 
-Backends:
-- postgresql -> recommended personal backend; supports pgvector RAG search.
-- sqlite     -> lightweight fallback for tests/offline work (no pgvector search).
+Default development backend can be switched with DB_TYPE:
+- sqlite   -> instance/smartlife.db
+- mariadb  -> PyMySQL + DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME
 
-Application modules keep SQLite-style ``?`` parameter markers. The PostgreSQL
-adapter converts them to psycopg ``%s`` markers so existing modules do not need
-to be rewritten just to change databases.
+Application modules intentionally keep the existing SQLite-style ``?`` parameter
+markers.  The MariaDB adapter converts them to PyMySQL ``%s`` markers so team
+modules do not need database-specific SQL for ordinary queries.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import date, datetime
 from decimal import Decimal
@@ -44,7 +45,7 @@ def _normalise_value(value):
 
 
 def _question_to_percent(sql: str) -> str:
-    """Convert ? placeholders outside quoted strings to %s."""
+    """Convert ? placeholders outside quoted strings to %s for PyMySQL."""
     out = []
     quote = None
     escaped = False
@@ -72,17 +73,28 @@ def _question_to_percent(sql: str) -> str:
     return "".join(out)
 
 
-class PgCursor:
-    def __init__(self, cursor, lastrowid=0):
+class MariaCursor:
+    def __init__(self, cursor, connection=None):
         self._cursor = cursor
+        # PyMySQL Cursor implementations differ slightly across versions.
+        # Some expose ``lastrowid`` directly, while others only expose the
+        # connection's latest insert id.  Keep a SQLite-compatible attribute
+        # for existing application modules without assuming either shape.
+        lastrowid = getattr(cursor, "lastrowid", None)
+        if lastrowid is None and connection is not None:
+            try:
+                lastrowid = connection.insert_id()
+            except (AttributeError, TypeError):
+                lastrowid = None
         self.lastrowid = lastrowid or 0
         self.rowcount = getattr(cursor, "rowcount", -1)
 
     def _convert(self, row):
         if row is None:
             return None
-        names = [column.name if hasattr(column, "name") else column[0] for column in (self._cursor.description or [])]
-        return CompatRow(names, [_normalise_value(v) for v in row])
+        names = [column[0] for column in (self._cursor.description or [])]
+        values = [_normalise_value(v) for v in row]
+        return CompatRow(names, values)
 
     def fetchone(self):
         return self._convert(self._cursor.fetchone())
@@ -94,57 +106,24 @@ class PgCursor:
         return iter(self.fetchall())
 
 
-class PgConnection:
-    _SERIAL_TABLES = {
-        'users','reset_auth','body_metrics','subjects','chapters','questions','question_options',
-        'exam_imports','import_items','quiz_sessions','quiz_answers','summaries','exam_plans',
-        'study_plans','exercises','workouts','workout_sets','workout_templates','template_items',
-        'chat_sessions','chat_messages','materials','rag_documents','rag_chunks','generated_quizzes',
-        'ai_suggestions','ai_question_drafts','concepts','tutor_threads','tutor_messages','learning_goals','learning_phases','learning_milestones','learning_phase_concepts','learning_tasks','learning_checkpoint_attempts','micro_courses','micro_course_steps','micro_course_messages'
-    }
-
-    def __init__(self, connection, psycopg_module):
+class MariaConnection:
+    def __init__(self, connection, pymysql_module):
         self._connection = connection
-        self._psycopg = psycopg_module
-
-    @staticmethod
-    def _insert_table(sql):
-        import re
-        match = re.match(r'\s*INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_]*)', sql, re.I)
-        return match.group(1).lower() if match else None
+        self._pymysql = pymysql_module
 
     def execute(self, sql, params=()):
-        stripped = sql.strip().upper()
-        if stripped == "BEGIN IMMEDIATE":
-            # psycopg starts a transaction automatically on the first statement.
-            return PgCursor(self._connection.cursor())
-
-        converted = _question_to_percent(sql)
-        table = self._insert_table(sql)
-        wants_id = table in self._SERIAL_TABLES and ' RETURNING ' not in (' ' + stripped + ' ')
-        if wants_id:
-            converted = converted.rstrip().rstrip(';') + ' RETURNING id'
+        # Existing modules use this SQLite statement to request a write lock.
+        # MariaDB starts a transaction instead; row-level locks are acquired by
+        # the actual writes.
+        if sql.strip().upper() == "BEGIN IMMEDIATE":
+            self._connection.begin()
+            return MariaCursor(self._connection.cursor(), self._connection)
 
         cursor = self._connection.cursor()
         try:
-            cursor.execute(converted, tuple(params or ()))
-            lastrowid = 0
-            if wants_id:
-                row = cursor.fetchone()
-                lastrowid = int(row[0]) if row else 0
-            return PgCursor(cursor, lastrowid)
-        except self._psycopg.IntegrityError as exc:
-            self._connection.rollback()
-            cursor.close()
-            raise StorageIntegrityError(str(exc)) from exc
-
-    def executemany(self, sql, seq_of_params):
-        cursor = self._connection.cursor()
-        try:
-            cursor.executemany(_question_to_percent(sql), [tuple(p or ()) for p in seq_of_params])
-            return PgCursor(cursor)
-        except self._psycopg.IntegrityError as exc:
-            self._connection.rollback()
+            cursor.execute(_question_to_percent(sql), tuple(params or ()))
+            return MariaCursor(cursor, self._connection)
+        except self._pymysql.err.IntegrityError as exc:
             cursor.close()
             raise StorageIntegrityError(str(exc)) from exc
 
@@ -157,34 +136,38 @@ class PgConnection:
     def close(self):
         self._connection.close()
 
+
 def _backend(app=None):
     config = (app or current_app).config
-    value = str(config.get("DB_TYPE", "postgresql")).lower()
-    if value in ("postgres", "postgresql", "pg"):
-        return "postgresql"
-    return "sqlite"
+    return str(config.get("DB_TYPE", "sqlite")).lower()
 
 
-def backend():
-    return _backend()
+def backend(app=None):
+    """Return normalized backend name for feature modules."""
+    return _backend(app)
 
 
-def _connect_postgresql(app=None):
+def _connect_mariadb(app=None):
     config = (app or current_app).config
     try:
-        import psycopg
+        import pymysql
     except ImportError as exc:
-        raise RuntimeError('PostgreSQL 模式需要 psycopg，請先執行：pip install "psycopg[binary]"') from exc
+        raise RuntimeError("MariaDB 模式需要 PyMySQL，請先執行：pip install pymysql") from exc
 
-    raw = psycopg.connect(
-        host=config.get("DB_HOST", "127.0.0.1"),
-        port=int(config.get("DB_PORT", 5432)),
-        user=config.get("DB_USER", ""),
-        password=config.get("DB_PASSWORD", ""),
-        dbname=config.get("DB_NAME", ""),
+    raw = pymysql.connect(
+        host=config["DB_HOST"],
+        port=int(config.get("DB_PORT", 3306)),
+        user=config["DB_USER"],
+        password=config["DB_PASSWORD"],
+        database=config["DB_NAME"],
+        charset=config.get("DB_CHARSET", "utf8mb4"),
+        autocommit=False,
+        cursorclass=pymysql.cursors.Cursor,
         connect_timeout=10,
+        read_timeout=20,
+        write_timeout=20,
     )
-    return PgConnection(raw, psycopg)
+    return MariaConnection(raw, pymysql)
 
 
 def _connect_sqlite(app=None):
@@ -197,11 +180,12 @@ def _connect_sqlite(app=None):
 
 def db():
     if "db" not in g:
-        g.db = _connect_postgresql() if _backend() == "postgresql" else _connect_sqlite()
+        g.db = _connect_mariadb() if _backend() == "mariadb" else _connect_sqlite()
     return g.db
 
 
 def _split_sql_script(script: str):
+    """Split our schema file into statements (schema contains no procedures)."""
     statements = []
     current = []
     quote = None
@@ -237,11 +221,11 @@ def _split_sql_script(script: str):
 
 
 def init_storage(app):
-    """Create missing tables for selected backend and register teardown."""
-    if _backend(app) == "postgresql":
-        connection = _connect_postgresql(app)
+    """Create missing tables for the selected backend and register teardown."""
+    if _backend(app) == "mariadb":
+        connection = _connect_mariadb(app)
         try:
-            schema = Path(__file__).with_name("schema_postgres.sql").read_text(encoding="utf-8")
+            schema = Path(__file__).with_name("schema_mariadb.sql").read_text(encoding="utf-8")
             for statement in _split_sql_script(schema):
                 connection.execute(statement)
             connection.commit()

@@ -79,6 +79,9 @@ class OpenAICompatibleLLM(BaseLLM):
         ).encode("utf-8")
         req = urllib.request.Request(self.base_url + "/chat/completions", data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
+        # Groq's edge protection rejects urllib's default Python-urllib agent (1010).
+        req.add_header("User-Agent", "AI-Butler/1.0")
+        req.add_header("Accept", "application/json")
         if self.api_key:
             req.add_header("Authorization", "Bearer " + self.api_key)
         try:

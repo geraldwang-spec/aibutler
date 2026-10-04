@@ -5,9 +5,10 @@ chcp 65001 >nul
 if not exist ".env" (
   copy /y ".env.example" ".env" >nul
 )
-echo Starting AI Butler with REAL/HYBRID providers...
-echo Local: qwen3.5:4b + bge-m3
-echo Cloud when GROQ_API_KEY is set: qwen3.8-27b / gpt-oss-120b
+echo Starting AI Butler with GROQ API providers...
+echo Text AI: Groq API (one GROQ_API_KEY for all roles)
+echo Local only: bge-m3 embedding for RAG
+echo Model: qwen/qwen3.8-27b
 echo.
 python app.py
 pause

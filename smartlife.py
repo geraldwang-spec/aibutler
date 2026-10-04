@@ -26,9 +26,9 @@ def create_app(test_config=None):
     app.config.update(
         DATABASE=os.getenv('DATABASE', str(root/'instance'/'personal_ai_dev.db')),
         APP_MODE=os.getenv('APP_MODE','dev').lower(),
-        DB_TYPE=os.getenv('DB_TYPE','sqlite' if os.getenv('APP_MODE','dev').lower()=='dev' else 'postgresql').lower(),
+        DB_TYPE=os.getenv('DB_TYPE','mariadb').lower(),
         DB_HOST=os.getenv('DB_HOST','127.0.0.1'),
-        DB_PORT=int(os.getenv('DB_PORT','5432')),
+        DB_PORT=int(os.getenv('DB_PORT','3306')),
         DB_USER=os.getenv('DB_USER',''),
         DB_PASSWORD=os.getenv('DB_PASSWORD',''),
         DB_NAME=os.getenv('DB_NAME',''),
@@ -115,8 +115,8 @@ def create_app(test_config=None):
             pass
         app.config['SECRET_KEY'] = secret_file.read_text(encoding='utf-8').strip()
     app.config['DUMMY_PASSWORD_HASH'] = generate_password_hash(secrets.token_hex(16))
-    # Personal edition defaults to its own PostgreSQL + pgvector database.
-    # SQLite remains available as a lightweight fallback for tests.
+    # Team integration uses teammate MariaDB by default.
+    # SQLite remains available only as a lightweight test fallback.
     if app.config['DB_TYPE'] == 'sqlite' or os.getenv('AUTO_INIT_DB','false').lower() == 'true':
         init_storage(app)
     app.register_blueprint(auth)
@@ -137,8 +137,9 @@ def create_app(test_config=None):
                 session.clear()
         if 'csrf_token' not in session:
             session['csrf_token'] = secrets.token_hex(32)
-        if request.method == 'POST' and not secrets.compare_digest(request.form.get('csrf_token',''), session['csrf_token']):
-            if request.path == '/send-verification':
+        token = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token','')
+        if request.method == 'POST' and not secrets.compare_digest(token, session['csrf_token']):
+            if request.path == '/send-verification' or request.path.startswith('/body/api/') :
                 return jsonify(ok=False,message='頁面已過期，請重新整理後再試。'),400
             abort(400, '頁面已過期，請重新整理後再試。')
 

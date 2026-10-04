@@ -4,9 +4,9 @@
 
 | 功能 | Provider | 模型 | 狀態 |
 |---|---|---|---|
-| 通用本機 LLM / fallback | Ollama | `qwen3.5:4b` | 實際使用 |
-| 題型／Concept 分類 | Ollama | `qwen3.5:4b` | 實際使用 |
-| 文件 / 題庫 LLM 解析 | Ollama | `qwen3.5:4b` | 實際使用，可切換雲端 |
+| 通用文字 LLM | Groq API | `qwen/qwen3.8-27b` | 實際使用，單一 `GROQ_API_KEY` |
+| 題目知識概念／Concept 分類 | Groq API | `qwen/qwen3.8-27b` | 實際使用，單一 `GROQ_API_KEY` |
+| 文件 / 題庫 LLM 解析 | Groq API | `qwen/qwen3.8-27b` | 實際使用，單一 `GROQ_API_KEY` |
 | Embedding / RAG / 相似度 | Ollama | `bge-m3` | 實際使用 |
 | 動態出題 | Groq | `qwen/qwen3.8-27b` | 有 API Key 時使用 |
 | 出題審核 | Groq | `qwen/qwen3.8-27b` | 有 API Key 時使用 |
