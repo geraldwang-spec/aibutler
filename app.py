@@ -23,6 +23,16 @@ def create_app(test_config=None):
     """
     flask_app = create_base_app(test_config)
 
+    # 整合版統一使用同學的 MariaDB。遠端既有 DB 可能只有同學原始 schema，
+    # 因此啟動時只透過 CREATE TABLE IF NOT EXISTS 補齊缺少資料表，不刪除/覆寫既有資料。
+    # 可在 .env 設 AUTO_INIT_DB=false 關閉此行為。
+    if (
+        str(flask_app.config.get("DB_TYPE", "")).lower() == "mariadb"
+        and os.getenv("AUTO_INIT_DB", "true").lower() == "true"
+    ):
+        from storage import init_storage
+        init_storage(flask_app)
+
     # 模組保持獨立：只在組裝入口註冊，不修改 body/ 與 TYE/ 內部內容。
     flask_app.register_blueprint(body)
     register_tye_exam(flask_app)

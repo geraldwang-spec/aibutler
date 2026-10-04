@@ -20,3 +20,9 @@ AI Butler 整合版（body / TYE 分離）
 - pip install -r requirements.txt
 - 若遠端 MariaDB 尚未建齊資料表，再執行 python init_db.py
 - 平常啟動 python app.py
+
+[2026-10-04 修正]
+- body/ 完整保持同學原檔；TYE/ 完整保持使用者原檔。
+- 恢復共用側邊欄「體重與訓練」入口（不修改 body 模組）。
+- app.py 在 MariaDB 模式啟動時自動以 CREATE TABLE IF NOT EXISTS 補齊整合版缺少的表（例如 ai_question_drafts / concepts / source_question_items / learning_*）。
+- 不 DROP、不清空、不覆寫同學既有 MariaDB 資料。
