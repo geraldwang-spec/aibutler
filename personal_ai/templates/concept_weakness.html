@@ -1,0 +1,16 @@
+{% extends 'live_base.html' %}{% block content %}
+<section class="panel-card">
+  <h2>Concept / Skill 弱項分析</h2>
+  <p>每個 Concept 最多採最近 {{ recent_limit }} 次作答，越新的作答權重越高。少於 {{ minimum_sample }} 次會標示資料不足；LLM 不負責決定分數，只用於後續解釋與出題。</p>
+  <form method="get" class="inline-form"><label>科目<select name="subject_id"><option value="">全部科目</option>{% for s in subjects %}<option value="{{s.id}}" {% if subject_id==s.id %}selected{% endif %}>{{s.subject_name}}</option>{% endfor %}</select></label><button class="action">套用</button></form>
+</section>
+<section class="panel-card">
+  {% for row in rows %}
+  <article class="record-item">
+    <div class="record-head"><strong>{{ row.subject_name }} / {{ row.chapter_name }} / {{ row.concept_name }}</strong><span class="pill">{{ row.priority }}</span></div>
+    <p>近期樣本：{{ row.n }} 次 · 加權掌握度：{{ (row.mastery|string + '%') if row.mastery is not none else '尚未測驗' }}{% if row.raw_accuracy is not none %} · 原始正確率：{{ row.raw_accuracy }}%{% endif %}</p>
+    {% if row.skills %}<p>Skill：{% for s in row.skills %}<span class="pill">{{ s.name }} {{ s.accuracy }}% ({{s.n}})</span> {% endfor %}</p>{% endif %}<form method="post" action="{{url_for('personal_ai.micro_courses')}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="concept_id" value="{{row.concept_id}}"><input type="hidden" name="minutes" value="5"><button class="secondary-button">生成 5 分鐘補強課</button></form>
+  </article>
+  {% else %}<p>目前還沒有可分析的 Concept。先做概念型匯入或完成動態模擬考後，這裡會開始累積。</p>{% endfor %}
+</section>
+{% endblock %}

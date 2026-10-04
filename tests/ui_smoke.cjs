@@ -1,0 +1,41 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE);
+const assert=require('node:assert/strict');
+const path=require('node:path');
+(async()=>{
+  const browser=await chromium.launch({headless:true, ...(process.env.BROWSER_EXECUTABLE ? {executablePath:process.env.BROWSER_EXECUTABLE} : {})});
+  try {
+    const page=await browser.newPage({viewport:{width:1440,height:1000}});
+    const errors=[];
+    page.on('pageerror',error=>errors.push(String(error)));
+    await page.goto('http://127.0.0.1:5057/login');
+    await page.getByRole('link',{name:'還沒有帳號？前往註冊'}).click();
+    await page.locator('#email').fill('student@example.com');
+    await page.getByRole('button',{name:'發送驗證碼',exact:true}).click();
+    await page.locator('#mail-status.error').waitFor();
+    assert.match(await page.locator('#mail-status').innerText(),/尚未設定/);
+    await page.screenshot({path:path.resolve('instance/qa/register.png'),fullPage:true});
+    await page.getByRole('link',{name:'已有帳號？返回登入'}).click();
+    await page.locator('#username').fill('tester01');
+    await page.locator('#password').fill('Testing!123');
+    await page.getByRole('button',{name:'登入 →'}).click();
+    await page.waitForURL('**/profile');
+    await page.getByRole('link',{name:'稍後填寫'}).click();
+    await page.screenshot({path:path.resolve('instance/qa/dashboard.png'),fullPage:true});
+    await page.goto('http://127.0.0.1:5057/records/subjects');
+    const subjectName='Browser test '+Date.now();
+    await page.getByLabel('科目名稱',{exact:true}).fill(subjectName);
+    await page.getByRole('button',{name:'儲存資料'}).click();
+    await page.getByRole('cell',{name:subjectName,exact:true}).waitFor();
+    await page.reload();
+    await page.getByRole('cell',{name:subjectName,exact:true}).waitFor();
+    await page.setViewportSize({width:390,height:844});
+    await page.goto('http://127.0.0.1:5057/dashboard');
+    await page.getByRole('button',{name:'☰ 功能選單'}).click();
+    assert.equal(await page.getByRole('button',{name:'☰ 功能選單'}).getAttribute('aria-expanded'),'true');
+    await page.locator('#main-nav a[href="/records/subjects"]').click();
+    await page.screenshot({path:path.resolve('instance/qa/mobile.png'),fullPage:true});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
+    assert.deepEqual(errors,[]);
+    console.log('Browser checks passed: register mail error, login, saved data, mobile menu, no JS errors.');
+  } finally {await browser.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

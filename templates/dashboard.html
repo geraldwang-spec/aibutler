@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>主頁｜考試規劃助手</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/font-awesome.min.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="app-page">
+    <div class="app-shell">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-brand brand brand-light">
+                <span class="brand-mark"><i class="fa fa-check-square-o" aria-hidden="true"></i></span><span>ExamMate</span>
+                <button class="sidebar-close" type="button" aria-label="關閉選單" data-sidebar-close><i class="fa fa-times" aria-hidden="true"></i></button>
+            </div>
+            <nav class="sidebar-nav" aria-label="主要功能">
+                <p class="nav-section-label">總覽</p>
+                <a class="nav-item active" href="{{ url_for('dashboard') }}"><i class="fa fa-home fa-fw" aria-hidden="true"></i><span>主頁</span></a>
+                <a class="nav-item" href="#today-plan"><i class="fa fa-check-circle-o fa-fw" aria-hidden="true"></i><span>今日計畫</span><span class="nav-badge">4</span></a>
+                <p class="nav-section-label">考試規劃</p>
+                <a class="nav-item" href="#exams"><i class="fa fa-calendar fa-fw" aria-hidden="true"></i><span>我的考試</span></a>
+                <a class="nav-item" href="#study-plan"><i class="fa fa-list-alt fa-fw" aria-hidden="true"></i><span>讀書計畫</span></a>
+                <a class="nav-item" href="#progress"><i class="fa fa-line-chart fa-fw" aria-hidden="true"></i><span>進度追蹤</span></a>
+                <a class="nav-item" href="#calendar"><i class="fa fa-calendar-check-o fa-fw" aria-hidden="true"></i><span>行事曆</span></a>
+                <p class="nav-section-label">個人</p>
+                <a class="nav-item" href="#notifications"><i class="fa fa-bell-o fa-fw" aria-hidden="true"></i><span>通知中心</span><span class="notification-dot" aria-label="有新通知"></span></a>
+                <a class="nav-item" href="#settings"><i class="fa fa-cog fa-fw" aria-hidden="true"></i><span>偏好設定</span></a>
+            </nav>
+            <div class="sidebar-footer">
+                <div class="sidebar-user"><span class="avatar">王</span><span><strong>王小明</strong><small>一般會員</small></span></div>
+                <a class="logout-link" href="{{ url_for('logout') }}" title="登出" aria-label="登出"><i class="fa fa-sign-out" aria-hidden="true"></i></a>
+            </div>
+        </aside>
+        <div class="sidebar-overlay" data-sidebar-close></div>
+        <main class="main-content">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="menu-button" type="button" aria-label="開啟選單" aria-controls="sidebar" data-sidebar-open><i class="fa fa-bars" aria-hidden="true"></i></button>
+                    <div><p class="eyebrow">2026 年 9 月 9 日・星期三</p><h1>早安，王小明 <span aria-hidden="true">👋</span></h1></div>
+                </div>
+                <div class="topbar-actions">
+                    <label class="search-box"><i class="fa fa-search" aria-hidden="true"></i><span class="sr-only">搜尋</span><input type="search" placeholder="搜尋考試、科目..."></label>
+                    <button class="icon-button" type="button" aria-label="通知"><i class="fa fa-bell-o" aria-hidden="true"></i><span class="alert-count">2</span></button>
+                    <span class="topbar-avatar avatar">王</span>
+                </div>
+            </header>
+            <div class="dashboard-content">
+                <section class="hero-card">
+                    <div><span class="hero-label"><i class="fa fa-graduation-cap" aria-hidden="true"></i> 距離下一場考試</span><h2>資料結構期中考</h2><p><i class="fa fa-calendar-o" aria-hidden="true"></i> 2026 年 9 月 23 日・資訊大樓 301</p></div>
+                    <div class="countdown"><strong>14</strong><span>天</span></div>
+                    <button class="secondary-button" type="button">查看考試 <i class="fa fa-angle-right" aria-hidden="true"></i></button>
+                </section>
+                <section class="stats-grid" aria-label="學習數據摘要">
+                    <article class="stat-card"><span class="stat-icon teal"><i class="fa fa-tasks"></i></span><div><p>今日待辦</p><strong>4 <small>項</small></strong><span>已完成 2 項</span></div></article>
+                    <article class="stat-card"><span class="stat-icon orange"><i class="fa fa-clock-o"></i></span><div><p>本週讀書</p><strong>12.5 <small>小時</small></strong><span class="positive">較上週 +18%</span></div></article>
+                    <article class="stat-card"><span class="stat-icon purple"><i class="fa fa-book"></i></span><div><p>進行中科目</p><strong>5 <small>科</small></strong><span>共 18 個章節</span></div></article>
+                    <article class="stat-card"><span class="stat-icon blue"><i class="fa fa-bullseye"></i></span><div><p>本週達成率</p><strong>78<small>%</small></strong><span>目標 85%</span></div></article>
+                </section>
+                <div class="dashboard-grid">
+                    <section class="content-card task-card" id="today-plan">
+                        <div class="card-heading"><div><p class="eyebrow accent-text">TODAY</p><h2>今日讀書計畫</h2></div><a href="#">查看全部 <i class="fa fa-angle-right"></i></a></div>
+                        <div class="task-list">
+                            <label class="task-item done"><input type="checkbox" checked><span class="custom-check"><i class="fa fa-check"></i></span><span class="task-info"><strong>資料結構｜複習樹狀結構</strong><small><i class="fa fa-clock-o"></i> 09:00–10:30・90 分鐘</small></span><span class="subject-tag green">資料結構</span></label>
+                            <label class="task-item"><input type="checkbox"><span class="custom-check"><i class="fa fa-check"></i></span><span class="task-info"><strong>線性代數｜矩陣運算習題</strong><small><i class="fa fa-clock-o"></i> 13:30–15:00・90 分鐘</small></span><span class="subject-tag purple">線性代數</span></label>
+                            <label class="task-item"><input type="checkbox"><span class="custom-check"><i class="fa fa-check"></i></span><span class="task-info"><strong>英文｜單字與閱讀測驗</strong><small><i class="fa fa-clock-o"></i> 16:00–17:00・60 分鐘</small></span><span class="subject-tag blue">英文</span></label>
+                            <label class="task-item"><input type="checkbox"><span class="custom-check"><i class="fa fa-check"></i></span><span class="task-info"><strong>作業系統｜整理課堂筆記</strong><small><i class="fa fa-clock-o"></i> 20:00–21:00・60 分鐘</small></span><span class="subject-tag orange">作業系統</span></label>
+                        </div>
+                        <button class="add-task-button" type="button"><i class="fa fa-plus"></i> 新增讀書任務</button>
+                    </section>
+                    <section class="content-card exam-card" id="exams">
+                        <div class="card-heading"><div><p class="eyebrow accent-text">UPCOMING</p><h2>近期考試</h2></div><button class="more-button" type="button" aria-label="更多"><i class="fa fa-ellipsis-h"></i></button></div>
+                        <div class="exam-list">
+                            <article class="exam-item urgent"><div class="exam-date"><strong>23</strong><span>9 月</span></div><div class="exam-info"><strong>資料結構期中考</strong><span>剩餘 14 天</span><div class="progress"><i style="width:68%"></i></div><small>準備進度 68%</small></div></article>
+                            <article class="exam-item"><div class="exam-date"><strong>30</strong><span>9 月</span></div><div class="exam-info"><strong>線性代數小考</strong><span>剩餘 21 天</span><div class="progress"><i style="width:42%"></i></div><small>準備進度 42%</small></div></article>
+                            <article class="exam-item"><div class="exam-date"><strong>08</strong><span>10 月</span></div><div class="exam-info"><strong>英文能力測驗</strong><span>剩餘 29 天</span><div class="progress"><i style="width:25%"></i></div><small>準備進度 25%</small></div></article>
+                        </div>
+                        <button class="outline-button" type="button"><i class="fa fa-plus"></i> 新增考試</button>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+</body>
+</html>
