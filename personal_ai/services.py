@@ -109,7 +109,10 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         '5. 每題回傳 concept_id、concept_name、skill、cognitive_level、答案與解析。\n'
         '6. 只回 JSON，不要 Markdown。'
     )
-    user=(f'請產生 {count} 題，題型限定 {q_types}，難度 {difficulty}/5。\n'
+    # Small Groq output quotas cannot fit a multi-question JSON response.
+    primary = getattr(generator, 'primary', generator)
+    batch_size = 1 if getattr(primary, 'provider', '') == 'groq' else count
+    user=(f'請產生 {batch_size} 題，題型限定 {q_types}，難度 {difficulty}/5。\n'
           f'使用者指定重點：{focus or "無"}\n\n'
           f'Concept Bank / 來源題樣本：\n{concept_text or "無"}\n\n'
           f'教材 RAG：\n{evidence or "無"}\n\n'
@@ -117,8 +120,18 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
           'JSON 格式：{"questions":[{"concept_id":1,"concept_name":"...","q_type":"單選",'
           '"content":"...","options":{"A":"...","B":"...","C":"...","D":"..."},'
           '"answer_key":"B","explanation":"...","evidence_chunk_ids":[1],"skill":"...","cognitive_level":"apply"}]}')
-    data=generator.complete_json(system,user)
-    qs=data.get('questions',[]) if isinstance(data,dict) else []
+    qs=[]
+    for offset in range(0, count, batch_size):
+        batch_user = user
+        if batch_size == 1:
+            previous = '\n'.join(str(q.get('content', '')) for q in qs if isinstance(q, dict))
+            batch_user += (f'\n本次是第 {offset + 1}/{count} 題。題幹、選項與解析請精簡，解析最多兩句。'
+                           f'\n本輪已產生題目（請避免重複）：\n{previous or "無"}')
+        data=generator.complete_json(system,batch_user)
+        batch=data.get('questions',[]) if isinstance(data,dict) else []
+        if not isinstance(batch,list) or not batch:
+            raise LLMError('Generator 沒有產生可用題目。')
+        qs.extend(batch[:batch_size])
     if not qs:
         raise LLMError('Generator 沒有產生可用題目。')
 

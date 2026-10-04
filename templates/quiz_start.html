@@ -2,7 +2,7 @@
 {% block content %}
 <section class="panel-card">
   <h2>模擬考設定</h2>
-  <p>有 Concept 來源樣本時，模擬考 / 練習會依 Concept 即時生成全新題目；不再要求固定題庫先累積到指定題數。錯題複習則保留原題。</p>
+  <p>模擬考 / 練習可選擇 Concept 動態出題，或直接從固定題庫隨機抽題。錯題複習則保留原題。</p>
   <p class="notice info"><strong>動態出題：</strong>題數是「這次要考幾題」，不是題庫最低門檻。再次建立考卷時會重新生成敘述、數值或情境，但維持相同 Concept / Skill 範圍。</p>
   {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
   <form method="post">
@@ -26,13 +26,21 @@
       <label>題數
         <input type="number" name="count" value="{{ selected.count or 5 }}" min="1" max="100" required>
       </label>
-      <label>出題策略
+      <label>出題方式
+        <select name="question_source">
+          <option value="auto" {% if selected.question_source != 'bank_random' %}selected{% endif %}>Concept 動態出題（無來源時使用固定題庫）</option>
+          <option value="bank_random" {% if selected.question_source == 'bank_random' %}selected{% endif %}>普通隨機出題（直接抽題庫，不使用 AI）</option>
+        </select>
+      </label>
+      <label>固定題庫順序（普通隨機出題一律隨機）
         <select name="random_order">
-          <option value="1" {% if selected.random_order != '0' %}selected{% endif %}>Concept 動態生成 / 固定題庫則隨機</option>
-          <option value="0" {% if selected.random_order == '0' %}selected{% endif %}>無 Concept 時依固定題庫順序</option>
+          <option value="1" {% if selected.random_order != '0' %}selected{% endif %}>隨機抽題</option>
+          <option value="0" {% if selected.random_order == '0' %}selected{% endif %}>依固定題庫順序</option>
         </select>
       </label>
     </div>
+
+    <p><small>普通隨機出題保留題庫原題、選項、答案與解析，同一份考卷不重複抽題；題數不足時會提示調整。概念型匯入的來源樣本不屬於固定題庫，請使用傳統題庫匯入。錯題複習只抽待複習錯題。</small></p>
 
     <h3>章節範圍</h3>
     <p><small>不勾選代表該科目全部章節；後端仍會驗證章節是否屬於所選科目。</small></p>

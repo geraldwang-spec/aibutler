@@ -262,13 +262,17 @@ def _materialize_dynamic_questions(subject_id: int, chapter_ids: list[int], q_ty
     return created_questions
 
 
-def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], q_types: list[str], random_order: bool):
+def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], q_types: list[str], random_order: bool, question_source: str = "auto"):
     """Create a quiz from Concept generation or, when unavailable, the legacy fixed bank."""
     _owned_subject(subject_id)
     if mode not in ALLOWED_MODES or not 1 <= count <= 100:
         raise ValueError("請選擇有效模式與 1–100 題；Concept 模式沒有固定題庫數量門檻。")
     if any(q_type not in ALLOWED_TYPES for q_type in q_types):
         raise ValueError("題型設定不正確。")
+    if question_source not in ("auto", "bank_random"):
+        raise ValueError("出題方式設定不正確。")
+    if question_source == "bank_random":
+        random_order = True
 
     if chapter_ids:
         rows = db().execute(
@@ -287,7 +291,7 @@ def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], 
     # Wrong-answer review intentionally reuses the exact question the learner got wrong.
     # Normal practice/mock exams prefer Concept-based fresh generation whenever concept
     # source samples exist in the selected scope.
-    if mode != "錯題複習" and _concept_source_count(subject_id, chapter_ids) > 0:
+    if question_source == "auto" and mode != "錯題複習" and _concept_source_count(subject_id, chapter_ids) > 0:
         chosen = _materialize_dynamic_questions(subject_id, chapter_ids, q_types, count)
     else:
         candidates = _candidate_questions(subject_id, chapter_ids, q_types, mode)
@@ -296,6 +300,11 @@ def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], 
             label = "待複習錯題" if mode == "錯題複習" else "固定題庫題目"
             if mode == "錯題複習":
                 raise ValueError(f"目前{label}只有 {available} 題；錯題複習會保留原題，因此不能憑空補題。")
+            if question_source == "bank_random":
+                raise ValueError(
+                    f"選取範圍的固定題庫只有 {available} 題，無法抽出 {count} 題。"
+                    "請降低題數、擴大範圍，或匯入固定題庫；普通隨機出題不會呼叫 AI 補題。"
+                )
             raise ValueError(
                 f"目前沒有可用的 Concept 來源樣本，且{label}只有 {available} 題。"
                 "請先用概念型匯入建立 Concept，或使用傳統題庫匯入。"
@@ -542,6 +551,7 @@ def register_tye_exam(app):
             "chapter_ids": request.form.getlist("chapter_ids"),
             "q_types": request.form.getlist("q_types"),
             "random_order": request.form.get("random_order", "1"),
+            "question_source": request.form.get("question_source", "auto"),
         }
         if request.method == "POST":
             try:
@@ -557,6 +567,7 @@ def register_tye_exam(app):
                     chapter_ids,
                     q_types,
                     random_order,
+                    question_source=selected["question_source"],
                 )
                 return redirect(url_for("quiz_take", sid=session_id))
             except ValueError as exc:

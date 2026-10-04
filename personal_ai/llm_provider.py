@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -74,6 +75,7 @@ class OpenAICompatibleLLM(BaseLLM):
                 "model": self.model,
                 "messages": messages,
                 "temperature": temperature,
+                **self._request_options(),
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -97,6 +99,9 @@ class OpenAICompatibleLLM(BaseLLM):
             raise LLMError(f"LLM API HTTP {exc.code}{suffix}") from exc
         except Exception as exc:
             raise LLMError(f"LLM API 呼叫失敗：{exc}") from exc
+
+    def _request_options(self):
+        return {}
 
     @staticmethod
     def _parse_json_text(text: str):
@@ -128,6 +133,8 @@ class OpenAICompatibleLLM(BaseLLM):
             text = data["choices"][0]["message"]["content"]
         except Exception as exc:
             raise LLMError("LLM 回傳格式不符合 OpenAI-compatible API。") from exc
+        if data["choices"][0].get("finish_reason") == "length":
+            raise LLMError("模型輸出達到 token 上限，JSON 未完成。請縮短題目或解析內容。")
         return self._parse_json_text(text)
 
     def ping(self):
@@ -147,6 +154,9 @@ class OpenAICompatibleLLM(BaseLLM):
 
 class OllamaLLM(OpenAICompatibleLLM):
     provider = "ollama"
+
+    def __init__(self, base_url, model, api_key="", timeout=60):
+        super().__init__(base_url, model, api_key, timeout=timeout)
 
     def _native_chat(self, messages, temperature=0.2, images=None, num_predict=4096):
         """Call Ollama native /api/chat with thinking explicitly disabled."""
@@ -204,6 +214,34 @@ class GroqLLM(OpenAICompatibleLLM):
 
     def __init__(self, model, api_key="", base_url=GROQ_BASE_URL, timeout=120):
         super().__init__(base_url, model, api_key, timeout=timeout)
+
+    def _request_options(self):
+        # Explicitly stay below the account's 1000 output tokens/minute limit.
+        options = {"max_completion_tokens": 800}
+        if self.model == "qwen/qwen3.8-27b":
+            options["reasoning_effort"] = "none"
+        return options
+
+    def _request(self, messages, temperature=0.2):
+        for attempt in range(3):
+            try:
+                return super()._request(messages, temperature)
+            except LLMError as exc:
+                cause = exc.__cause__
+                if not isinstance(cause, urllib.error.HTTPError) or cause.code != 429:
+                    raise
+                # Oversized requests cannot be repaired by waiting.
+                if "request too large" in str(exc).lower():
+                    raise
+                if attempt == 2:
+                    raise LLMError("Groq 每分鐘額度仍不足，請稍後再試。") from exc
+                try:
+                    delay = float(cause.headers.get("Retry-After", "60"))
+                except (TypeError, ValueError):
+                    delay = 60
+                if delay > 60:
+                    raise LLMError("Groq 額度不足，需等待超過一分鐘，請稍後再試。") from exc
+                time.sleep(max(1, delay))
 
     def complete_json(self, system, user):
         if not self.api_key:
