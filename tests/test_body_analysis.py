@@ -6,7 +6,12 @@ from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 
-from body import analysis
+from body.ai_report import AiReport
+from body.analysis import TrainingAnalysis
+
+
+def build_report(*args):
+    return TrainingAnalysis(*args).build()
 
 
 def row(day, workout_id, ex_id, name, muscle, weight, reps):
@@ -16,28 +21,28 @@ def row(day, workout_id, ex_id, name, muscle, weight, reps):
 
 class PureFunctionTests(unittest.TestCase):
     def test_period_range(self):
-        self.assertEqual(analysis.period_range('week', date(2026, 10, 2)),
+        self.assertEqual(TrainingAnalysis.period_range('week', date(2026, 10, 2)),
                          (date(2026, 9, 28), date(2026, 10, 4), date(2026, 9, 21), date(2026, 9, 27)))
-        self.assertEqual(analysis.period_range('month', date(2026, 3, 15)),
+        self.assertEqual(TrainingAnalysis.period_range('month', date(2026, 3, 15)),
                          (date(2026, 3, 1), date(2026, 3, 31), date(2026, 2, 1), date(2026, 2, 28)))
-        self.assertEqual(analysis.period_range('month', date(2026, 12, 31))[1], date(2026, 12, 31))
+        self.assertEqual(TrainingAnalysis.period_range('month', date(2026, 12, 31))[1], date(2026, 12, 31))
 
     def test_estimated_1rm(self):
-        self.assertEqual(analysis.estimated_1rm(100, 1), 100)
-        self.assertEqual(analysis.estimated_1rm(60, 10), 80.0)
-        self.assertEqual(analysis.estimated_1rm(0, 10), 0)          # 徒手
-        self.assertEqual(analysis.estimated_1rm(40, 20), 0)         # 次數太多不估
+        self.assertEqual(TrainingAnalysis.estimated_1rm(100, 1), 100)
+        self.assertEqual(TrainingAnalysis.estimated_1rm(60, 10), 80.0)
+        self.assertEqual(TrainingAnalysis.estimated_1rm(0, 10), 0)          # 徒手
+        self.assertEqual(TrainingAnalysis.estimated_1rm(40, 20), 0)         # 次數太多不估
 
     def test_volume_balance_and_progress(self):
         sets = [row('2026-09-29', 1, 1, '槓鈴臥推', '胸', 62.5, 8)] * 6 + \
                [row('2026-09-29', 1, 2, '纜繩下壓', '手臂', 25, 12)] * 3 + \
                [row('2026-10-01', 2, 3, '引體向上', '背', 0, 10)] * 3
         prev = [row('2026-09-22', 9, 1, '槓鈴臥推', '胸', 60, 8)] * 3 + [row('2026-09-23', 8, 3, '引體向上', '背', 0, 8)]
-        by_muscle = analysis.volume_by_muscle(sets)
+        by_muscle = TrainingAnalysis.volume_by_muscle(sets)
         self.assertEqual(by_muscle['胸'], dict(sets=6, volume=3000.0, exercises=1))
         self.assertEqual(by_muscle['腿']['sets'], 0)
-        self.assertEqual(analysis.balance(sets), dict(push=9, pull=3, upper=12, lower=0, push_pull=3.0, upper_lower=None))
-        progress = {p['name']: p for p in analysis.progress_by_exercise(sets, prev)}
+        self.assertEqual(TrainingAnalysis.balance(sets), dict(push=9, pull=3, upper=12, lower=0, push_pull=3.0, upper_lower=None))
+        progress = {p['name']: p for p in TrainingAnalysis.progress_by_exercise(sets, prev)}
         self.assertEqual((progress['槓鈴臥推']['value'], progress['槓鈴臥推']['prev_value'], progress['槓鈴臥推']['change_pct']),
                          (79.2, 76.0, 4.2))
         self.assertEqual((progress['引體向上']['metric'], progress['引體向上']['value'], progress['引體向上']['change_pct']),
@@ -45,12 +50,12 @@ class PureFunctionTests(unittest.TestCase):
 
     def test_findings_use_only_report_numbers(self):
         today = date(2026, 10, 12)
-        start, end, ps, pe = analysis.period_range('week', date(2026, 10, 2))
+        start, end, ps, pe = TrainingAnalysis.period_range('week', date(2026, 10, 2))
         sets = [row('2026-09-29', 1, 1, '槓鈴臥推', '胸', 62.5, 8)] * 6 + [row('2026-10-01', 2, 3, '引體向上', '背', 0, 10)] * 2
         prev = [row('2026-09-22', 9, 1, '槓鈴臥推', '胸', 60, 8)] * 3
         workouts = [dict(id=1, workout_date='2026-09-29', duration_min=50, ended_at='x'),
                     dict(id=2, workout_date='2026-10-01', duration_min=40, ended_at='x')]
-        report = analysis.build_report('week', start, end, today, sets, prev, workouts,
+        report = build_report('week', start, end, today, sets, prev, workouts,
                                        [dict(id=9, workout_date='2026-09-22', duration_min=45, ended_at='x')],
                                        [dict(record_date='2026-09-28', weight_kg=69.0), dict(record_date='2026-10-04', weight_kg=68.4)],
                                        {'胸': '2026-09-29', '背': '2026-10-01'})
@@ -65,8 +70,8 @@ class PureFunctionTests(unittest.TestCase):
         self.assertIn('還沒有腿、肩的訓練紀錄', texts)
 
     def test_empty_period(self):
-        start, end, *_ = analysis.period_range('week', date(2026, 10, 2))
-        report = analysis.build_report('week', start, end, date(2026, 10, 2), [], [], [], [], [], {})
+        start, end, *_ = TrainingAnalysis.period_range('week', date(2026, 10, 2))
+        report = build_report('week', start, end, date(2026, 10, 2), [], [], [], [], [], {})
         self.assertEqual(report['findings'], [dict(level='info', text='這段期間還沒有訓練紀錄。')])
         self.assertIsNone(report['weight'])
 
@@ -121,44 +126,41 @@ class ReportApiTests(unittest.TestCase):
 
 class AiReportPureTests(unittest.TestCase):
     def data(self):
-        start, end, *_ = analysis.period_range('week', date(2026, 10, 2))
+        start, end, *_ = TrainingAnalysis.period_range('week', date(2026, 10, 2))
         sets = [row('2026-09-29', 1, 1, '槓鈴臥推', '胸', 62.5, 8)] * 6
         prev = [row('2026-09-22', 9, 1, '槓鈴臥推', '胸', 60, 8)] * 3
         workouts = [dict(id=1, workout_date='2026-09-29', duration_min=50, ended_at='x')]
-        report = analysis.build_report('week', start, end, date(2026, 10, 12), sets, prev, workouts,
+        report = build_report('week', start, end, date(2026, 10, 12), sets, prev, workouts,
                                        [dict(id=9, workout_date='2026-09-22', duration_min=45, ended_at='x')],
                                        [dict(record_date='2026-09-28', weight_kg=69.0), dict(record_date='2026-10-04', weight_kg=68.4)],
                                        {'胸': '2026-09-29'})
-        from body import ai_report
-        return ai_report.llm_input(report, {'goal_type': '增肌', 'workout_days_per_week': 3, 'activity_level': None})
+        return AiReport(report, {'goal_type': '增肌', 'workout_days_per_week': 3, 'activity_level': None})
 
     def test_input_is_compact(self):
-        data = self.data()
+        data = self.data().data
         self.assertEqual(data['profile'], {'goal_type': '增肌', 'workout_days_per_week': 3})   # 空值不送
         self.assertEqual(data['progress'][0]['metric'], '估計1RM(kg)')
         self.assertNotIn('sets', data['progress'][0].get('raw', {}))
 
     def test_fabricated_numbers_are_removed(self):
-        from body import ai_report
-        data = self.data()
+        ai = self.data()
         raw = {'summary': '本週訓練 1 次，共 6 組，總訓練量 3,000 kg×次。',
                'strengths': ['槓鈴臥推估計 1RM 從 76 提升到 79.2（+4.2%）。', '臥推進步了 15%。'],
                'weaknesses': ['體重下降 0.6 公斤。', '背部沒有訓練。', 123],
                'suggestions': ['下週增加 2 組划船。', '每週做 80 組背部。', '安排一天腿部訓練。', '多睡覺。']}
-        result = ai_report.check_output(raw, data)
+        result = ai.check(raw)
         self.assertEqual(result['summary'], raw['summary'])                       # 1、6、3000 都在資料裡
         self.assertEqual(result['strengths'], ['槓鈴臥推估計 1RM 從 76 提升到 79.2（+4.2%）。'])   # 15% 是編造的
         self.assertEqual(result['weaknesses'], ['體重下降 0.6 公斤。', '背部沒有訓練。'])        # 123 不在資料裡
         self.assertEqual(result['suggestions'], ['下週增加 2 組划船。', '安排一天腿部訓練。', '多睡覺。'])   # 80 太大，而且不在資料裡
         self.assertGreaterEqual(result['removed'], 2)
-        self.assertEqual(ai_report.check_output('不是 JSON', data)['strengths'], [])
+        self.assertEqual(ai.check('不是 JSON')['strengths'], [])
 
     def test_hash_changes_with_data(self):
-        from body import ai_report
-        data = self.data()
-        same = ai_report.input_hash(data)
-        data['this_period']['sets'] += 1
-        self.assertNotEqual(same, ai_report.input_hash(data))
+        ai = self.data()
+        same = ai.hash
+        ai.data['this_period']['sets'] += 1
+        self.assertNotEqual(same, ai.hash)
 
 
 class AiReportApiTests(ReportApiTests):

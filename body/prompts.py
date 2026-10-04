@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
-"""body 模組給 LLM 的提示詞。"""
+"""body 模組給 LLM 的提示詞與 messages。
 
-# 一句話輸入：規則解析不了時才用。輸出格式由 text_parser.validate_llm_draft() 檢查。
-PARSE_SYSTEM_PROMPT = """你是健身紀錄的解析器，只負責把使用者的文字轉成 JSON，不做其他事。
+    Prompts.parse_messages(text, library_names)   一句話輸入：規則解析不了時才用
+    Prompts.report_messages(data)                 週／月分析的 AI 說明
+"""
+import json
+
+
+class Prompts:
+    # 一句話輸入：輸出格式由 WorkoutTextParser.validate_llm_draft() 檢查。
+    PARSE_SYSTEM = """你是健身紀錄的解析器，只負責把使用者的文字轉成 JSON，不做其他事。
 規則：
 - 只輸出 JSON，不要任何說明或 Markdown。
 - exercise_name 只能是下方「動作庫」裡的名稱；無法確定時填 null，並在 candidates 列出最多 3 個動作庫裡的名稱。
@@ -18,18 +25,9 @@ PARSE_SYSTEM_PROMPT = """你是健身紀錄的解析器，只負責把使用者�
  "unparsed": "無法理解的內容"}
 """
 
-
-def parse_messages(text, library_names):
-    """組成呼叫 LLM 的 messages（OpenAI 相容格式）。"""
-    return [
-        {'role': 'system', 'content': PARSE_SYSTEM_PROMPT + '\n動作庫：' + '、'.join(library_names)},
-        {'role': 'user', 'content': text},
-    ]
-
-
-# 週／月分析的 AI 說明：輸入是 ai_report.llm_input() 的摘要（數字都已由程式算好）。
-# 輸出由 ai_report.check_output() 檢查：摘要、優點、缺點裡的數字必須能在資料裡找到。
-REPORT_SYSTEM_PROMPT = """你是健身紀錄的分析助理，根據使用者這段期間的訓練統計，用繁體中文寫簡短的回饋。
+    # 週／月分析的 AI 說明：輸入是 AiReport.data（數字都已由程式算好）。
+    # 輸出由 AiReport.check() 檢查：摘要、優點、缺點裡的數字必須能在資料裡找到。
+    REPORT_SYSTEM = """你是健身紀錄的分析助理，根據使用者這段期間的訓練統計，用繁體中文寫簡短的回饋。
 規則：
 - 只根據下方 JSON 資料說明，不要自己計算或估算新的數字；提到數字時，直接使用資料裡的數字。
 - summary：1～2 句總結這段期間。strengths、weaknesses、suggestions 各最多 3 項，每項 1 句、40 字以內。
@@ -45,11 +43,18 @@ REPORT_SYSTEM_PROMPT = """你是健身紀錄的分析助理，根據使用者這
 {"summary": "…", "strengths": ["…"], "weaknesses": ["…"], "suggestions": ["…"]}
 """
 
+    @classmethod
+    def parse_messages(cls, text, library_names):
+        """組成一句話解析的 messages（OpenAI 相容格式）。"""
+        return [
+            {'role': 'system', 'content': cls.PARSE_SYSTEM + '\n動作庫：' + '、'.join(library_names)},
+            {'role': 'user', 'content': text},
+        ]
 
-def report_messages(data):
-    """組成週／月分析說明的 messages（OpenAI 相容格式）。"""
-    import json
-    return [
-        {'role': 'system', 'content': REPORT_SYSTEM_PROMPT},
-        {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)},
-    ]
+    @classmethod
+    def report_messages(cls, data):
+        """組成週／月分析說明的 messages（OpenAI 相容格式）。"""
+        return [
+            {'role': 'system', 'content': cls.REPORT_SYSTEM},
+            {'role': 'user', 'content': json.dumps(data, ensure_ascii=False)},
+        ]

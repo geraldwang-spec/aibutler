@@ -17,11 +17,13 @@ import math
 import re
 from datetime import date, datetime, time, timedelta
 
-from . import ai_report, analysis, text_parser
+from .ai_report import AiReport
+from .analysis import TrainingAnalysis
 from .errors import ApiError
 from .llm_client import LlmError
-from .prompts import parse_messages, report_messages
+from .prompts import Prompts
 from .sql_process import BodySqlProcess
+from .text_parser import ExerciseGuesser, WorkoutTextParser
 
 # 動作庫是空的時候預先放進去的常用動作：(名稱, 部位, 器材, 是否有氧)
 # 參考 BurnFit 的分類方式（依部位，再依器材：槓鈴／啞鈴／機械／纜繩／徒手…）整理。
@@ -280,14 +282,15 @@ class BodyService:
         text = data.get('text')
         if not isinstance(text, str) or not text.strip():
             raise ApiError('請輸入今天的訓練內容。')
-        if len(text) > text_parser.MAX_TEXT:
-            raise ApiError(f'內容太長，請在 {text_parser.MAX_TEXT} 字以內。')
+        if len(text) > WorkoutTextParser.MAX_TEXT:
+            raise ApiError(f'內容太長，請在 {WorkoutTextParser.MAX_TEXT} 字以內。')
         library = [dict(id=r['id'], name=r['exercise_name']) for r in self.sql.exercises()]
         if not library:
             raise ApiError('動作庫是空的，請先新增動作。')
         usage = self.sql.exercise_usage((self.today - timedelta(days=90)).isoformat())
 
-        result, source, note = text_parser.parse_rules(text, library, usage), 'rule', None
+        parser = WorkoutTextParser(library, usage)
+        result, source, note = parser.parse(text), 'rule', None
         # 需要 LLM 的情況：有含數字但看不懂的片段（unclear），或動作名稱完全對不到（可能是別名，例如 bench）
         unclear = any(re.search(r'\d', seg) for seg in result['unparsed'])
         needs_llm = unclear or any(item['exercise_id'] is None and not item['candidates'] for item in result['items'])
@@ -297,10 +300,10 @@ class BodyService:
                 note = f'AI 解析每小時最多 {LLM_PARSE_PER_HOUR} 次，已達上限；只顯示規則解析的結果。'
             else:
                 try:
-                    raw = self.llm_parse(parse_messages(text, [e['name'] for e in library]))
+                    raw = self.llm_parse(Prompts.parse_messages(text, [e['name'] for e in library]))
                     if isinstance(raw, tuple):                  # (資料, 用量)
                         raw, llm_usage = raw
-                    drafted = text_parser.validate_llm_draft(raw, library, usage)
+                    drafted = parser.validate_llm_draft(raw)
                     if drafted['items']:
                         result, source = drafted, 'llm'
                     else:
@@ -315,7 +318,7 @@ class BodyService:
         names = {e['id']: e['name'] for e in library}
         for item in result['items']:
             if item['exercise_id'] is None:
-                item['suggest'] = text_parser.guess_exercise(item['input_text'])   # 新增動作時的預填值
+                item['suggest'] = ExerciseGuesser.guess(item['input_text'])   # 新增動作時的預填值
             item['name'] = names.get(item['exercise_id'])
             item['candidates'] = [dict(id=c, name=names[c]) for c in item['candidates'] if c in names]
         return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note, usage=llm_usage)
@@ -325,24 +328,23 @@ class BodyService:
         """週／月分析：本期與上期比較、各部位組數、推拉比例、各動作進步、多久沒練、體重變化，以及規則產生的發現。"""
         if period not in ('week', 'month'):
             raise ApiError('period 只能是 week 或 month。')
-        start, end, prev_start, prev_end = analysis.period_range(period, anchor)
+        start, end, prev_start, prev_end = TrainingAnalysis.period_range(period, anchor)
         s, e, ps, pe = (x.isoformat() for x in (start, end, prev_start, prev_end))
         reference = min(end, self.today).isoformat()
-        return analysis.build_report(
+        return TrainingAnalysis(
             period, start, end, self.today,
             sets=self.sql.sets_between(s, e), prev_sets=self.sql.sets_between(ps, pe),
             workouts=self.sql.workouts_between(s, e), prev_workouts=self.sql.workouts_between(ps, pe),
-            metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference))
+            metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference)).build()
 
     # ============================================================ AI 分析說明（數字由程式算，LLM 只負責說明）
-    def _ai_input(self, period, anchor):
-        report = self.report(period, anchor)
-        return report, ai_report.llm_input(report, self.sql.profile())
+    def _ai_report(self, period, anchor):
+        return AiReport(self.report(period, anchor), self.sql.profile())
 
     def ai_explanation(self, period, anchor):
         """讀取這一期已產生的 AI 說明；資料有變動時標示 stale（不會自動重新呼叫 LLM）。"""
-        report, data = self._ai_input(period, anchor)
-        row = self.sql.ai_suggestion(f'body_{period}', report['start'])
+        ai = self._ai_report(period, anchor)
+        row = self.sql.ai_suggestion(f'body_{period}', ai.report['start'])
         saved = None
         if row:
             try:
@@ -350,30 +352,30 @@ class BodyService:
             except (TypeError, ValueError):
                 saved = None
         if saved:
-            saved['stale'] = saved.get('input_hash') != ai_report.input_hash(data)
-        return dict(enabled=self.llm_report is not None, saved=saved, has_data=report['summary']['sessions'] > 0)
+            saved['stale'] = saved.get('input_hash') != ai.hash
+        return dict(enabled=self.llm_report is not None, saved=saved, has_data=ai.has_data)
 
     def generate_ai_explanation(self, period, anchor):
         """呼叫 LLM 產生（或重新產生）這一期的說明，檢查數字後存進 ai_suggestions。"""
         if self.llm_report is None:
             raise ApiError('尚未設定 AI（body/body.env），目前只能看程式算出的分析。')
-        report, data = self._ai_input(period, anchor)
-        if report['summary']['sessions'] == 0:
+        ai = self._ai_report(period, anchor)
+        if not ai.has_data:
             raise ApiError('這段期間沒有訓練紀錄，沒有可以分析的內容。')
         if self.sql.rate_limited(f'body-llm-report:{self.sql.user_id}', LLM_REPORT_PER_HOUR, 3600):
             raise ApiError(f'AI 分析每小時最多 {LLM_REPORT_PER_HOUR} 次，請稍後再試。')
         try:
-            raw = self.llm_report(report_messages(data))
+            raw = self.llm_report(Prompts.report_messages(ai.data))
         except LlmError as exc:
             raise ApiError(f'AI 分析暫時無法使用（{exc}）。') from None
         raw, usage = raw if isinstance(raw, tuple) else (raw, None)
-        result = ai_report.check_output(raw, data)
+        result = ai.check(raw)
         if not (result['summary'] or result['strengths'] or result['weaknesses'] or result['suggestions']):
             raise ApiError('AI 回傳的內容沒有通過檢查，請稍後再試。')
-        saved = dict(result, input_hash=ai_report.input_hash(data), period=period, start=report['start'],
-                     end=report['end'], generated_at=datetime.now().isoformat(timespec='seconds'),
+        saved = dict(result, input_hash=ai.hash, period=period, start=ai.report['start'], end=ai.report['end'],
+                     generated_at=datetime.now().isoformat(timespec='seconds'),
                      model=(usage or {}).get('model'), usage=usage)
-        self.sql.save_ai_suggestion(f'body_{period}', report['start'], json.dumps(saved, ensure_ascii=False))
+        self.sql.save_ai_suggestion(f'body_{period}', ai.report['start'], json.dumps(saved, ensure_ascii=False))
         self.sql.commit()
         saved['stale'] = False
         return dict(enabled=True, saved=saved, has_data=True)
@@ -391,7 +393,7 @@ class BodyService:
             raise ApiError('請輸入動作名稱。')
         if len(name) > 80:
             raise ApiError('動作名稱最多 80 字。')
-        if muscle not in text_parser.MUSCLE_CHOICES:
+        if muscle not in ExerciseGuesser.MUSCLES:
             raise ApiError('請選擇部位。')
         if not equipment:
             raise ApiError('請輸入使用的器材。')
