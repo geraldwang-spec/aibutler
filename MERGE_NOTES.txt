@@ -26,3 +26,12 @@ AI Butler 整合版（body / TYE 分離）
 - 恢復共用側邊欄「體重與訓練」入口（不修改 body 模組）。
 - app.py 在 MariaDB 模式啟動時自動以 CREATE TABLE IF NOT EXISTS 補齊整合版缺少的表（例如 ai_question_drafts / concepts / source_question_items / learning_*）。
 - 不 DROP、不清空、不覆寫同學既有 MariaDB 資料。
+
+
+[v3 DB 修正]
+- body/：不修改。
+- TYE/：不修改。
+- teamdb：仍使用同學 MariaDB。
+- app.py：啟動時固定確認 TYE / Personal AI 擴充表存在，不受 AUTO_INIT_DB=false 影響。
+- schema_tye_personal_mariadb.sql：只放你的擴充表，不含 body 擁有的資料表。
+- 目的：修正 concepts / ai_question_drafts 等 1146 Table doesn't exist。

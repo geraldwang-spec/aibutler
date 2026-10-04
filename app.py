@@ -23,15 +23,48 @@ def create_app(test_config=None):
     """
     flask_app = create_base_app(test_config)
 
-    # 整合版統一使用同學的 MariaDB。遠端既有 DB 可能只有同學原始 schema，
-    # 因此啟動時只透過 CREATE TABLE IF NOT EXISTS 補齊缺少資料表，不刪除/覆寫既有資料。
-    # 可在 .env 設 AUTO_INIT_DB=false 關閉此行為。
-    if (
-        str(flask_app.config.get("DB_TYPE", "")).lower() == "mariadb"
-        and os.getenv("AUTO_INIT_DB", "true").lower() == "true"
-    ):
-        from storage import init_storage
-        init_storage(flask_app)
+    # MariaDB 由同學既有 teamdb 作為唯一正式資料庫。
+    # BODY 的既有 schema 不在這裡重建；此處只補 TYE / Personal AI 自己新增的資料表。
+    # 注意：舊專案 .env 可能有 AUTO_INIT_DB=false，這個旗標只控制「完整 schema」初始化，
+    # 不應阻止整合模組建立自己的 extension tables。
+    if str(flask_app.config.get("DB_TYPE", "")).lower() == "mariadb":
+        from storage import _connect_mariadb, _split_sql_script
+
+        extension_schema = BASE_DIR / "schema_tye_personal_mariadb.sql"
+        connection = _connect_mariadb(flask_app)
+        try:
+            for statement in _split_sql_script(extension_schema.read_text(encoding="utf-8")):
+                connection.execute(statement)
+            connection.commit()
+
+            # 啟動時立即驗證最關鍵的擴充表，避免到匯入題庫時才出現 1146。
+            required_tables = (
+                "concepts",
+                "source_question_items",
+                "question_concepts",
+                "ai_question_drafts",
+                "question_metadata",
+            )
+            missing = []
+            for table_name in required_tables:
+                row = connection.execute(
+                    "SELECT COUNT(*) AS n FROM information_schema.tables "
+                    "WHERE table_schema=? AND table_name=?",
+                    (flask_app.config["DB_NAME"], table_name),
+                ).fetchone()
+                if not row or int(row["n"]) == 0:
+                    missing.append(table_name)
+            if missing:
+                raise RuntimeError("MariaDB 擴充資料表建立失敗：" + ", ".join(missing))
+            print("TYE / Personal AI MariaDB 擴充表：已確認")
+        except Exception as exc:
+            connection.rollback()
+            raise RuntimeError(
+                "無法建立 TYE / Personal AI 的 MariaDB 擴充資料表。"
+                "請確認 DB_USER 對 teamdb 具有 CREATE/ALTER 權限。原始錯誤：" + str(exc)
+            ) from exc
+        finally:
+            connection.close()
 
     # 模組保持獨立：只在組裝入口註冊，不修改 body/ 與 TYE/ 內部內容。
     flask_app.register_blueprint(body)
