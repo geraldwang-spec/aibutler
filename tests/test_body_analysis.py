@@ -66,8 +66,19 @@ class PureFunctionTests(unittest.TestCase):
         texts = ' '.join(f['text'] for f in report['findings'])
         self.assertIn('訓練次數 2 次，比上一期多 1 次', texts)
         self.assertIn('槓鈴臥推 估計 1RM從 76 提升到 79.2（+4.2%）', texts)
-        self.assertIn('推的組數（6）是拉的（2）3 倍', texts)
+        self.assertIn('推的動作做了 6 組，拉的只有 2 組', texts)
         self.assertIn('還沒有腿、肩的訓練紀錄', texts)
+
+    def test_balance_findings_text(self):
+        def texts(push, pull):
+            report = dict(summary=dict(sessions=1), previous=dict(sessions=0), progress=[], in_progress=False,
+                          balance=dict(push=push, pull=pull, push_pull=round(push / pull, 2) if pull else None),
+                          days_since={m: 0 for m in TrainingAnalysis.MUSCLES}, by_muscle={}, weeks=1)
+            return ' '.join(f['text'] for f in TrainingAnalysis.findings(report))
+        self.assertIn('拉的動作做了 15 組，推的只有 4 組，可以多安排臥推、肩推等推的動作。', texts(4, 15))
+        self.assertIn('推的動作做了 6 組，但沒有拉的動作', texts(6, 0))
+        self.assertIn('拉的動作做了 5 組，但沒有推的動作', texts(0, 5))
+        self.assertNotIn('動作做了', texts(5, 4))                      # 比例在 1.5 倍以內不提醒
 
     def test_empty_period(self):
         start, end, *_ = TrainingAnalysis.period_range('week', date(2026, 10, 2))

@@ -190,15 +190,20 @@ class TrainingAnalysis:
                                                    f"{item['value']:g}（{item['change_pct']:g}%），留意恢復與睡眠。"))
 
         bal = report['balance']
-        if bal['push'] and bal['pull'] and bal['push_pull'] is not None:
+        push, pull = bal['push'], bal['pull']
+        if push and pull and bal['push_pull'] is not None:
             if bal['push_pull'] >= cls.BALANCE_HIGH:
-                out.append(dict(level='warn', text=f"推的組數（{bal['push']}）是拉的（{bal['pull']}）{bal['push_pull']:g} 倍，"
+                out.append(dict(level='warn', text=f'推的動作做了 {push} 組，拉的只有 {pull} 組，'
                                                    '可以多安排划船、下拉等背部動作。'))
             elif bal['push_pull'] <= 1 / cls.BALANCE_HIGH:
-                out.append(dict(level='warn', text=f"拉的組數（{bal['pull']}）比推的（{bal['push']}）多很多，"
+                out.append(dict(level='warn', text=f'拉的動作做了 {pull} 組，推的只有 {push} 組，'
                                                    '可以多安排臥推、肩推等推的動作。'))
-        elif bal['push'] and not bal['pull']:
-            out.append(dict(level='warn', text=f"有 {bal['push']} 組推的動作，但沒有拉的動作（背部、彎舉）。"))
+        elif push and not pull:
+            out.append(dict(level='warn', text=f'推的動作做了 {push} 組，但沒有拉的動作（背部、彎舉），'
+                                               '可以多安排划船、下拉等背部動作。'))
+        elif pull and not push:
+            out.append(dict(level='warn', text=f'拉的動作做了 {pull} 組，但沒有推的動作（胸、肩、三頭），'
+                                               '可以多安排臥推、肩推等推的動作。'))
 
         never = [m for m in cls.MAJOR_MUSCLES if report['days_since'].get(m) is None]
         if never:
