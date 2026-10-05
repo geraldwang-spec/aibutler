@@ -6,6 +6,10 @@
   GET  /body/api/report?period=week|month&d=   訓練分析（只讀）
   GET  /body/api/report/ai?period=&d=          已產生的 AI 說明（不呼叫 LLM）
   POST /body/api/report/ai            {period, d}          產生／重新產生 AI 說明
+  GET  /body/api/docs                                     教練文章列表
+  POST /body/api/docs                 multipart: file, title   上傳教練文章（.txt／.md）
+  POST /body/api/docs/<id>/delete                         刪除教練文章
+  GET  /body/api/docs/search?q=&k=&min_score=             查詢教練文章（評估與除錯用）
   POST /body/api/parse                {text}               一句話輸入 → 草稿（不寫資料庫）
   POST /body/api/exercises            {name, muscle_group, equipment, is_cardio, d}   新增動作
   POST /body/api/weight               {d, weight_kg, body_fat_pct?, ex?}
@@ -40,6 +44,21 @@ class BodyApi:
     config_file = Path(__file__).with_name('body.env')   # body 自己的設定檔（不讀專案 .env）
     _llm = None            # 依設定檔建立一次（改設定後要重新啟動）
     _llm_loaded = False
+
+    @classmethod
+    def embedder(cls):
+        """回傳教練文章 RAG 用的 embedding 函式與模型名稱；沒有設定 BODY_EMBED_MODEL 就回 (None, '')。"""
+        cls.llm_parse()                       # 確保已讀取設定
+        client = cls._llm
+        if client is None or not client.can_embed:
+            return None, ''
+
+        def embed(texts):
+            result = client.embed(texts)
+            BodyApi.log_usage(dict(model=result['model'], input_tokens=result['input_tokens'], output_tokens=0,
+                                   latency_ms=result['latency_ms']), feature='embed')
+            return result['vectors']
+        return embed, client.embed_model
 
     @classmethod
     def llm_report(cls):
@@ -93,8 +112,9 @@ class BodyApi:
     def service():
         # 同一個請求共用一個 service / 資料庫連線
         if 'body_service' not in g:
+            embedder, embed_model = BodyApi.embedder()
             g.body_service = BodyService(BodySqlProcess(g.user['id']), llm_parse=BodyApi.llm_parse(),
-                                         llm_report=BodyApi.llm_report())
+                                         llm_report=BodyApi.llm_report(), embedder=embedder, embed_model=embed_model)
         return g.body_service
 
     @staticmethod
@@ -164,6 +184,38 @@ def report_ai_generate():
     data = BodyApi.payload()
     period = data.get('period', 'week')
     return dict(ai=BodyApi.service().generate_ai_explanation(period, Validator.day(data.get('d'))))
+
+
+@body.get('/api/docs')
+@api
+def documents():
+    """自己的教練文章列表。"""
+    return BodyApi.service().documents()
+
+
+@body.post('/api/docs')
+@api
+def upload_document():
+    """上傳教練文章（multipart：file、title）；只收 .txt／.md，切段與 embedding 後存進資料庫，原始檔案不存。"""
+    file = request.files.get('file')
+    if file is None:
+        raise ApiError('請選擇要上傳的檔案。')
+    return BodyApi.service().upload_document(file.filename, file.read(), request.form.get('title', ''))
+
+
+@body.post('/api/docs/<int:material_id>/delete')
+@api
+def delete_document(material_id):
+    return BodyApi.service().delete_document(material_id)
+
+
+@body.get('/api/docs/search')
+@api
+def search_documents():
+    """直接查詢教練文章（評估與除錯用）。"""
+    k = request.args.get('k', type=int)
+    min_score = request.args.get('min_score', type=float)
+    return BodyApi.service().search_documents(request.args.get('q', ''), k=k, min_score=min_score)
 
 
 @body.post('/api/parse')

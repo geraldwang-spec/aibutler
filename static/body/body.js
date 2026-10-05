@@ -397,6 +397,7 @@
         // 已產生過的 AI 說明（只讀，不會呼叫 LLM）
         const ai = await call('GET', `/report/ai?period=${report.period}&d=${state.d}`).catch(() => null);
         if (ai && report.key === key) { report.ai = ai.ai; renderReport(); }
+        if (!docs.data) loadDocs();
       }
     } catch (err) {
       report.key = null;
@@ -435,10 +436,78 @@
       list('做得好的地方', saved.strengths, 'good', 'check-circle'),
       list('需要注意', saved.weaknesses, 'warn', 'exclamation-triangle'),
       list('下一步建議', saved.suggestions, 'info', 'lightbulb-o'),
+      saved.sources && saved.sources.length ? h('div', { class: 'bd-ai__group' },
+        h('h4', { text: '參考來源（你上傳的教練文章）' }),
+        saved.sources.map((src) => h('details', { class: 'bd-source' },
+          h('summary', { text: `[${src.n}] ${src.title}${src.section ? `・${src.section}` : ''}` }),
+          h('p', { text: src.text })))) : null,
       h('p', { class: 'bd-muted' },
         `AI 產生於 ${time}${saved.model ? `・${saved.model}` : ''}${latency}`,
-        saved.removed ? `；有 ${saved.removed} 句因為數字對不上統計資料，已自動拿掉` : '',
+        saved.removed ? `；有 ${saved.removed} 句因為數字或出處對不上資料，已自動拿掉` : '',
         '。僅供參考，不是醫療或專業教練建議。'));
+  }
+
+  // ------------------------------------------------------------ 教練文章（RAG）：上傳後，AI 說明會參考並標出處
+  const docs = { data: null, busy: false, title: '' };
+
+  async function loadDocs() {
+    try {
+      const data = await call('GET', '/docs');
+      if (data) { docs.data = data; renderReport(); }
+    } catch (err) { /* 文章列表載入失敗不影響分析 */ }
+  }
+
+  async function uploadDoc(form) {
+    const file = form.elements.file.files[0];
+    if (!file || docs.busy) { if (!file) showMessage('請選擇 .txt 或 .md 檔案。', 'error'); return; }
+    const body = new FormData();
+    body.append('file', file);
+    body.append('title', form.elements.title.value.trim());
+    docs.busy = true; renderReport();
+    try {
+      const response = await fetch(`${API}/docs`, { method: 'POST', body, credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': CSRF, Accept: 'application/json' } });
+      const data = await response.json().catch(() => ({ ok: false, error: `伺服器回應錯誤（${response.status}）。` }));
+      if (!data.ok) throw new Error(data.error || '上傳失敗。');
+      docs.data = data;
+      showMessage(`已上傳「${data.uploaded.title}」，切成 ${data.uploaded.chunks} 段。下次產生 AI 說明時會參考它。`);
+    } catch (err) {
+      showMessage(err.message, 'error');
+    } finally {
+      docs.busy = false; renderReport();
+    }
+  }
+
+  async function deleteDoc(id) {
+    if (!window.confirm('刪除這篇文章？刪除後 AI 說明就不會再參考它。')) return;
+    try {
+      const data = await call('POST', `/docs/${id}/delete`);
+      if (data) { docs.data = data; renderReport(); }
+    } catch (err) { showMessage(err.message, 'error'); }
+  }
+
+  function docsBlock() {
+    const d = docs.data;
+    const head = h('div', { class: 'bd-ai__head' }, h('h3', null, icon('book'), ' 教練文章'));
+    if (!d) return h('section', { class: 'bd-report__block bd-docs' }, head, h('p', { class: 'bd-muted', text: '載入中…' }));
+    if (!d.enabled) {
+      return h('section', { class: 'bd-report__block bd-docs' }, head,
+        h('p', { class: 'bd-muted', text: '在 body/body.env 設定 BODY_EMBED_MODEL 之後，可以上傳教練給的文章，AI 說明會參考並標出處。' }));
+    }
+    const full = d.documents.length >= d.limits.max_documents;
+    return h('section', { class: 'bd-report__block bd-docs' }, head,
+      h('p', { class: 'bd-muted', text: `上傳教練給的文章或訓練原則（.txt／.md，最多 ${d.limits.max_chars.toLocaleString()} 字、${d.limits.max_documents} 篇）。產生 AI 說明時會找出相關段落，並在建議後面標出處。` }),
+      h('form', { class: 'bd-docs__form', dataset: { form: 'doc-upload' } },
+        h('label', { class: 'bd-sr', for: 'bd-doc-file', text: '選擇檔案' }),
+        h('input', { id: 'bd-doc-file', name: 'file', type: 'file', accept: '.txt,.md,text/plain,text/markdown', disabled: full || docs.busy }),
+        h('label', { class: 'bd-sr', for: 'bd-doc-title', text: '標題（選填）' }),
+        h('input', { id: 'bd-doc-title', name: 'title', type: 'text', maxlength: 120, placeholder: '標題（選填，預設用檔名）', class: 'bd-quick__input', disabled: full || docs.busy }),
+        h('button', { class: 'bd-btn bd-btn--primary', disabled: full || docs.busy, dataset: { key: 'doc-upload' } }, docs.busy ? '處理中…' : '上傳')),
+      d.documents.length ? h('ul', { class: 'bd-docs__list' }, d.documents.map((doc) => h('li', { class: 'bd-docs__item' },
+        h('span', { class: 'bd-docs__name' }, icon('file-text-o'), ` ${doc.title}`),
+        h('small', { text: doc.usable ? `${doc.chunks} 段` : `${doc.chunks} 段・用不同的 embedding 模型建立，請重新上傳` }),
+        h('button', { type: 'button', class: 'bd-btn', dataset: { action: 'doc-delete', id: doc.id, key: `doc-del-${doc.id}` }, 'aria-label': `刪除 ${doc.title}` }, icon('trash-o'))))) :
+        h('p', { class: 'bd-muted', text: '還沒有上傳文章。' }));
   }
 
   async function generateAi() {
@@ -483,6 +552,7 @@
           icon(icon2[f.level] || 'info-circle'), h('span', { text: f.text })))),
         h('p', { class: 'bd-muted', text: '以上由程式依紀錄計算。' })),
       aiBlock(),
+      docsBlock(),
 
       h('div', { class: 'bd-report__grid' },
         h('section', { class: 'bd-report__block' },
@@ -822,6 +892,7 @@
     else if (action === 'plan-pick') { planSel = Number(ex); render(); }
     else if (action === 'report-period') { report.period = target.dataset.period; loadReport(true); }
     else if (action === 'report-ai') generateAi();
+    else if (action === 'doc-delete') deleteDoc(target.dataset.id);
     else if (action === 'quick-cancel') { quick = emptyQuick(quick.text); render(); }
     else if (action === 'quick-new-save') saveNewExercise(Number(target.dataset.idx));
     else if (action === 'quick-new-cancel') { quick.forms[target.dataset.idx].open = false; render(); }
@@ -874,6 +945,7 @@
     const form = event.target;
     event.preventDefault();
     if (form.dataset.form === 'quick-parse') { quickParse(); return; }
+    if (form.dataset.form === 'doc-upload') { uploadDoc(form); return; }
     if (form.id === 'bd-weight-form') {
       run('POST', '/weight', {
         d: state.d,

@@ -216,6 +216,7 @@ class FakeLlmServer:
         server = self
         self.mode, self.requests = 'ok', []
         self.reply = None          # 設定後，對話一律回傳這段內容（測試分析說明用）
+        self.embed_mode = 'default'   # 'keywords'：依關鍵字產生向量，讓相似度有意義（測試 RAG 用）
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -228,6 +229,11 @@ class FakeLlmServer:
                 if self.path.endswith('/embeddings'):
                     if mode == 'embed-bad':
                         return self._send(200, {'data': [{'index': 0, 'embedding': [1, 2]}]})
+                    if server.embed_mode == 'keywords':
+                        words = ('背', '划船', '下拉', '胸', '臥推', '腿', '深蹲', '睡眠', '蛋白質', '有氧')
+                        data = [{'index': i, 'embedding': [float(t.count(w)) for w in words] + [0.1]}
+                                for i, t in enumerate(body['input'])]
+                        return self._send(200, {'data': data, 'usage': {'prompt_tokens': 5 * len(data)}})
                     data = [{'index': i, 'embedding': [float(len(t)), float(i), 1.0]} for i, t in enumerate(body['input'])]
                     return self._send(200, {'data': list(reversed(data)), 'usage': {'prompt_tokens': 7 * len(data)}})
                 if mode == 'reasoning':

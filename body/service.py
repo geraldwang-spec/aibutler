@@ -22,6 +22,7 @@ from .analysis import TrainingAnalysis
 from .errors import ApiError
 from .llm_client import LlmError
 from .prompts import Prompts
+from .rag import TextChunker, VectorIndex
 from .sql_process import BodySqlProcess
 from .text_parser import ExerciseGuesser, WorkoutTextParser
 
@@ -115,6 +116,17 @@ LLM_PARSE_PER_HOUR = 30
 LLM_REPORT_PER_HOUR = 10
 
 
+class DocumentRules:
+    """教練文章（RAG）的限制：控制 embedding 費用與檢索品質。"""
+    FILE_TYPES = ('txt', 'md')
+    MAX_CHARS = 20000          # 一篇最多幾個字
+    MAX_DOCUMENTS = 10         # 每人最多幾篇
+    MAX_CHUNKS = 80            # 一篇最多切成幾段
+    UPLOADS_PER_HOUR = 20
+    REPORT_PASSAGES = 4        # AI 說明最多參考幾段
+    QUERIES = 3                # 從分析結果最多產生幾個查詢
+
+
 class Validator:
     """把前端送來的 JSON 值轉成正確型別；不合法就丟 ApiError。"""
 
@@ -161,7 +173,7 @@ class Validator:
 class BodyService:
     WEEKDAYS = '一二三四五六日'
 
-    def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None, llm_report=None):
+    def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None, llm_report=None, embedder=None, embed_model=''):
         """llm_parse(messages) -> dict 或 (dict, 用量)：規則解析不了時呼叫的 LLM（回傳解析後的 JSON）。
 
         沒有傳入就只用規則解析；測試時可以傳入回傳固定 JSON 的假函式，不用真的呼叫 API。
@@ -170,6 +182,8 @@ class BodyService:
         self.today = today or date.today()
         self.llm_parse = llm_parse
         self.llm_report = llm_report          # llm_report(messages) -> (dict, 用量)：週／月分析的 AI 說明
+        self.embedder = embedder              # embedder(texts) -> [[float, ...], ...]：教練文章的 embedding
+        self.embed_model = embed_model        # 目前的 embedding 模型；換模型後舊文章要重新上傳
 
 
     # ============================================================ 預設動作
@@ -342,8 +356,38 @@ class BodyService:
             metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference)).build()
 
     # ============================================================ AI 分析說明（數字由程式算，LLM 只負責說明）
-    def _ai_report(self, period, anchor):
-        return AiReport(self.report(period, anchor), self.sql.profile())
+    def _ai_report(self, period, anchor, with_passages=False):
+        report, profile = self.report(period, anchor), self.sql.profile()
+        passages = self._report_passages(report, profile) if with_passages else None
+        return AiReport(report, profile, passages)
+
+    def _report_passages(self, report, profile):
+        """用這期分析的重點當查詢，從自己的教練文章找出相關段落；沒有文章、沒設定或出錯就回空清單。"""
+        if self.embedder is None:
+            return []
+        queries = [f['text'] for f in report['findings'] if f['level'] in ('warn', 'info')][:DocumentRules.QUERIES]
+        if profile.get('goal_type'):
+            queries.append(f"{profile['goal_type']} 的訓練建議")
+        rows = self._searchable_chunks()
+        if not queries or not rows:
+            return []
+        try:
+            vectors = self.embedder(queries)
+        except LlmError:
+            return []
+        best = {}
+        for vector in vectors:
+            for row, score in VectorIndex.search(vector, rows, k=2):
+                if score > best.get(row['id'], (None, -1))[1]:
+                    best[row['id']] = (row, score)
+        ranked = sorted(best.values(), key=lambda x: -x[1])[:DocumentRules.REPORT_PASSAGES]
+        return [dict(n=i + 1, chunk_id=row['id'], title=row['title'], section=row.get('section') or '',
+                     text=row['content'], score=score) for i, (row, score) in enumerate(ranked)]
+
+    def _searchable_chunks(self):
+        """只用「目前的 embedding 模型」做的段落（換模型後的舊向量不能互相比較）。"""
+        tag = f'embedding:{self.embed_model}'
+        return [r for r in self.sql.chunks_for_search() if r['file_path'] == tag]
 
     def ai_explanation(self, period, anchor):
         """讀取這一期已產生的 AI 說明；資料有變動時標示 stale（不會自動重新呼叫 LLM）。"""
@@ -363,13 +407,13 @@ class BodyService:
         """呼叫 LLM 產生（或重新產生）這一期的說明，檢查數字後存進 ai_suggestions。"""
         if self.llm_report is None:
             raise ApiError('尚未設定 AI（body/body.env），目前只能看程式算出的分析。')
-        ai = self._ai_report(period, anchor)
+        ai = self._ai_report(period, anchor, with_passages=True)
         if not ai.has_data:
             raise ApiError('這段期間沒有訓練紀錄，沒有可以分析的內容。')
         if self.sql.rate_limited(f'body-llm-report:{self.sql.user_id}', LLM_REPORT_PER_HOUR, 3600):
             raise ApiError(f'AI 分析每小時最多 {LLM_REPORT_PER_HOUR} 次，請稍後再試。')
         try:
-            raw = self.llm_report(Prompts.report_messages(ai.data))
+            raw = self.llm_report(Prompts.report_messages(ai.prompt_data))
         except LlmError as exc:
             raise ApiError(f'AI 分析暫時無法使用（{exc}）。') from None
         raw, usage = raw if isinstance(raw, tuple) else (raw, None)
@@ -378,11 +422,87 @@ class BodyService:
             raise ApiError('AI 回傳的內容沒有通過檢查，請稍後再試。')
         saved = dict(result, input_hash=ai.hash, period=period, start=ai.report['start'], end=ai.report['end'],
                      generated_at=datetime.now().isoformat(timespec='seconds'),
-                     model=(usage or {}).get('model'), usage=usage)
+                     model=(usage or {}).get('model'), usage=usage, passages=len(ai.passages))
         self.sql.save_ai_suggestion(f'body_{period}', ai.report['start'], json.dumps(saved, ensure_ascii=False))
         self.sql.commit()
         saved['stale'] = False
         return dict(enabled=True, saved=saved, has_data=True)
+
+    # ============================================================ 教練文章（RAG）
+    def documents(self):
+        """自己的教練文章；usable=False 代表是用別的 embedding 模型做的，要重新上傳才能檢索。"""
+        tag = f'embedding:{self.embed_model}'
+        docs = [dict(id=d['id'], title=d['title'], file_type=d['file_type'], chunks=d['chunks'],
+                     model=(d['file_path'] or '').replace('embedding:', '', 1), usable=d['file_path'] == tag)
+                for d in self.sql.documents()]
+        return dict(enabled=self.embedder is not None, documents=docs, limits=dict(
+            max_chars=DocumentRules.MAX_CHARS, max_documents=DocumentRules.MAX_DOCUMENTS,
+            file_types=list(DocumentRules.FILE_TYPES)))
+
+    def upload_document(self, filename, raw, title=''):
+        """上傳 .txt／.md：切段 → embedding → 一次寫入資料庫（原始檔案不存）。"""
+        if self.embedder is None:
+            raise ApiError('尚未設定 embedding（body/body.env 的 BODY_EMBED_MODEL），不能上傳文章。')
+        name = str(filename or '').strip()
+        ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+        if ext not in DocumentRules.FILE_TYPES:
+            raise ApiError('只能上傳 .txt 或 .md 檔案。')
+        try:
+            text = (raw or b'').decode('utf-8-sig').strip()
+        except UnicodeDecodeError:
+            raise ApiError('檔案要用 UTF-8 編碼儲存。') from None
+        if not text:
+            raise ApiError('檔案是空的。')
+        if len(text) > DocumentRules.MAX_CHARS:
+            raise ApiError(f'文章太長（{len(text):,} 字），一篇最多 {DocumentRules.MAX_CHARS:,} 字。')
+        if self.sql.document_count() >= DocumentRules.MAX_DOCUMENTS:
+            raise ApiError(f'最多上傳 {DocumentRules.MAX_DOCUMENTS} 篇，請先刪除不需要的文章。')
+        title = ' '.join(str(title or '').split())[:120] or name.rsplit('.', 1)[0][:120] or '教練文章'
+        chunks = TextChunker().split(text)
+        if not chunks:
+            raise ApiError('文章裡沒有可以使用的內容。')
+        if len(chunks) > DocumentRules.MAX_CHUNKS:
+            raise ApiError(f'文章切成 {len(chunks)} 段，超過上限 {DocumentRules.MAX_CHUNKS} 段，請分成幾篇上傳。')
+        if self.sql.rate_limited(f'body-doc:{self.sql.user_id}', DocumentRules.UPLOADS_PER_HOUR, 3600):
+            raise ApiError(f'每小時最多上傳 {DocumentRules.UPLOADS_PER_HOUR} 次，請稍後再試。')
+        try:
+            vectors = self.embedder([c['content'] for c in chunks])
+        except LlmError as exc:
+            raise ApiError(f'產生 embedding 失敗（{exc}）。') from None
+        if len(vectors) != len(chunks):
+            raise ApiError('embedding 回傳的數量不對。')
+        try:
+            material_id = self.sql.insert_document(title, ext, self.embed_model, chunks, vectors)
+            self.sql.commit()
+        except Exception:
+            self.sql.rollback()
+            raise ApiError('儲存文章時發生錯誤，請再試一次。') from None
+        return dict(self.documents(), uploaded=dict(id=material_id, title=title, chunks=len(chunks)))
+
+    def delete_document(self, material_id):
+        if not self.sql.delete_document(material_id):
+            raise ApiError.not_found('找不到這篇文章。')
+        self.sql.commit()
+        return self.documents()
+
+    def search_documents(self, query, k=None, min_score=None):
+        """直接查詢教練文章（給評估與除錯用）：回傳超過門檻的段落與分數。"""
+        if self.embedder is None:
+            raise ApiError('尚未設定 embedding（BODY_EMBED_MODEL）。')
+        query = ' '.join(str(query or '').split())[:300]
+        if not query:
+            raise ApiError('請輸入查詢內容。')
+        rows = self._searchable_chunks()
+        if not rows:
+            return dict(query=query, hits=[], min_score=min_score or VectorIndex.DEFAULT_MIN_SCORE)
+        try:
+            vector = self.embedder([query])[0]
+        except LlmError as exc:
+            raise ApiError(f'產生 embedding 失敗（{exc}）。') from None
+        hits = VectorIndex.search(vector, rows, k=k, min_score=min_score)
+        return dict(query=query, min_score=VectorIndex.DEFAULT_MIN_SCORE if min_score is None else min_score,
+                    hits=[dict(chunk_id=r['id'], title=r['title'], section=r.get('section') or '',
+                               text=r['content'], score=score) for r, score in hits])
 
     # ============================================================ 新增動作（一句話輸入遇到動作庫沒有的動作）
     def create_exercise(self, data):

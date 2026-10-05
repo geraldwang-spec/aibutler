@@ -125,6 +125,72 @@ class BodySqlProcess:
             self.conn.execute('INSERT INTO ai_suggestions (user_id, sug_date, type, content, accepted) VALUES (?,?,?,?,0)',
                               (self.user_id, sug_date, kind, content))
 
+    # ------------------------------------------------------------ 教練文章（RAG）
+    # 沿用既有的 materials → rag_documents → rag_chunks（＋rag_chunk_meta），不改資料表：
+    #   materials.subject_id 留空、rag_documents.source_type = 'body'，跟其他模組的教材分開；
+    #   materials.file_path 記錄做 embedding 用的模型（'embedding:<模型>'），body 不在硬碟存原始檔案。
+    # 寫入用批次（executemany）＋最後一次 commit，經過 Tailscale 連遠端資料庫也只有少數幾次來回。
+    SOURCE = 'body'
+
+    def insert_document(self, title, file_type, embedding_model, chunks, vectors):
+        """新增一篇文章與所有段落；回傳 material_id。由呼叫端 commit（失敗時 rollback，不會留下一半）。"""
+        from .rag import VectorIndex
+        self.conn.execute(
+            'INSERT INTO materials (user_id, subject_id, title, file_path, file_type, page_count, parse_status) '
+            'VALUES (?, NULL, ?, ?, ?, ?, ?)',
+            (self.user_id, title, f'embedding:{embedding_model}', file_type, len(chunks), '完成'))
+        material_id = self.conn.execute(
+            'SELECT MAX(id) FROM materials WHERE user_id=? AND title=?', (self.user_id, title)).fetchone()[0]
+        self.conn.execute('INSERT INTO rag_documents (source_type, material_id, title) VALUES (?,?,?)',
+                          (self.SOURCE, material_id, title))
+        doc_id = self.conn.execute('SELECT MAX(id) FROM rag_documents WHERE material_id=?', (material_id,)).fetchone()[0]
+        self.conn.executemany(
+            'INSERT INTO rag_chunks (doc_id, chunk_index, content, token_count, embedding) VALUES (?,?,?,?,?)',
+            [(doc_id, c['index'], c['content'], len(c['content']), VectorIndex.to_blob(v)) for c, v in zip(chunks, vectors)])
+        ids = [r[0] for r in self.conn.execute(
+            'SELECT id FROM rag_chunks WHERE doc_id=? ORDER BY chunk_index', (doc_id,))]
+        self.conn.executemany(
+            'INSERT INTO rag_chunk_meta (chunk_id, source_locator, section_title) VALUES (?,?,?)',
+            [(chunk_id, f"第 {c['index'] + 1} 段", c['section'] or None) for chunk_id, c in zip(ids, chunks)])
+        return material_id
+
+    def documents(self):
+        """自己的教練文章列表（不含其他模組的教材）。"""
+        return [dict(r) for r in self.conn.execute(
+            'SELECT m.id AS id, m.title AS title, m.file_type AS file_type, m.page_count AS chunks, '
+            'm.file_path AS file_path FROM materials m JOIN rag_documents d ON d.material_id=m.id '
+            'WHERE m.user_id=? AND d.source_type=? ORDER BY m.id DESC', (self.user_id, self.SOURCE))]
+
+    def document_count(self):
+        return self.conn.execute(
+            'SELECT COUNT(*) FROM materials m JOIN rag_documents d ON d.material_id=m.id '
+            'WHERE m.user_id=? AND d.source_type=?', (self.user_id, self.SOURCE)).fetchone()[0]
+
+    def delete_document(self, material_id):
+        """刪除自己的一篇文章（段落、出處資訊、文件、教材都刪）；不是自己的或不是 body 的文章回 False。"""
+        doc = self.conn.execute(
+            'SELECT d.id FROM rag_documents d JOIN materials m ON m.id=d.material_id '
+            'WHERE m.id=? AND m.user_id=? AND d.source_type=?', (material_id, self.user_id, self.SOURCE)).fetchone()
+        if not doc:
+            return False
+        chunk_ids = [r[0] for r in self.conn.execute('SELECT id FROM rag_chunks WHERE doc_id=?', (doc[0],))]
+        if chunk_ids:
+            marks = ','.join('?' * len(chunk_ids))
+            self.conn.execute(f'DELETE FROM rag_chunk_meta WHERE chunk_id IN ({marks})', chunk_ids)
+        self.conn.execute('DELETE FROM rag_chunks WHERE doc_id=?', (doc[0],))
+        self.conn.execute('DELETE FROM rag_documents WHERE id=?', (doc[0],))
+        self.conn.execute('DELETE FROM materials WHERE id=? AND user_id=?', (material_id, self.user_id))
+        return True
+
+    def chunks_for_search(self):
+        """自己所有教練文章的段落與向量（檢索用）；一定經過 materials.user_id 檢查。"""
+        return [dict(r) for r in self.conn.execute(
+            'SELECT c.id AS id, c.content AS content, c.embedding AS embedding, c.chunk_index AS chunk_index, '
+            'm.id AS material_id, m.title AS title, m.file_path AS file_path, meta.section_title AS section '
+            'FROM rag_chunks c JOIN rag_documents d ON d.id=c.doc_id JOIN materials m ON m.id=d.material_id '
+            'LEFT JOIN rag_chunk_meta meta ON meta.chunk_id=c.id '
+            'WHERE m.user_id=? AND d.source_type=?', (self.user_id, self.SOURCE))]
+
     # ------------------------------------------------------------ 動作庫 exercises
 
     # 動作庫的部位排序（與 records.py 的選項順序一致），其他部位排最後

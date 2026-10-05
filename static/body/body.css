@@ -319,3 +319,18 @@
 .bd-ai__summary { margin: 0 0 10px; font-size: 15px; line-height: 1.7; }
 .bd-ai__group h4 { margin: 10px 0 6px; font-size: 13px; color: var(--bd-muted); font-weight: 600; }
 .bd-finding .fa-lightbulb-o { color: var(--bd-teal); }
+
+/* ---------- 分析：教練文章（RAG）與參考來源 ---------- */
+.bd-docs { padding: 14px; border-radius: 10px; border: 1px solid var(--bd-line); background: #fff; }
+.bd-docs__form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.bd-docs__form input[type="file"] { flex: 1 1 220px; min-width: 0; margin: 0; font-size: 13px; }
+.bd-docs__form .bd-quick__input { flex: 1 1 200px; }
+.bd-docs__list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bd-docs__item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; background: #f6f9f9; }
+.bd-docs__name { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-docs__item small { color: var(--bd-muted); font-size: 12px; }
+.bd-docs__item .bd-btn { min-height: 36px; padding: 0 10px; }
+.bd-docs__item .fa, .bd-docs__name .fa { position: static; background: none; }
+.bd-source { margin: 4px 0; padding: 6px 10px; border-radius: 8px; background: #fff; border: 1px solid var(--bd-line); font-size: 13px; }
+.bd-source summary { cursor: pointer; color: var(--bd-teal); }
+.bd-source p { margin: 6px 0 2px; white-space: pre-wrap; color: var(--bd-ink); line-height: 1.6; }
