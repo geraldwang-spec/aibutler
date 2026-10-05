@@ -1,4 +1,16 @@
-{% extends 'live_base.html' %}{% block content %}<div class="chat-workspace">
-<section class="panel-card"><h2>AI 對話</h2><form method="post" action="{{url_for('personal_ai.chat_new')}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input name="title" maxlength="120" placeholder="新對話主題" required><button>建立對話</button></form><nav>{% for c in chats %}<a href="{{url_for('personal_ai.chat_page',chat_id=c.id)}}">{{c.title}}</a> · {% endfor %}</nav></section>
-{% if chat %}<section class="panel-card"><h2>{{chat.title}}</h2>{% for m in messages %}<article class="chat-message {{'chat-user' if m.role=='user' else 'chat-assistant'}}"><strong>{{'你' if m.role=='user' else 'AI'}}</strong><p class="prewrap">{{m.content}}</p></article>{% endfor %}<form method="post" class="chat-composer"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><label>教材範圍<select name="subject_id"><option value="">一般對話</option>{% for s in subjects %}<option value="{{s.id}}">{{s.subject_name}}</option>{% endfor %}</select></label><textarea name="question" required maxlength="1500" placeholder="輸入問題"></textarea><button>送出</button></form></section>{% endif %}
+{% extends 'live_base.html' %}{% block content %}
+<div class="chat-layout">
+  <aside class="chat-history"><h2>我的 AI 老師</h2>
+    <form method="post" action="{{url_for('personal_ai.chat_new')}}" class="new-chat-form"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input name="title" maxlength="120" placeholder="輸入新對話主題" aria-label="新對話主題" required><button type="submit">＋ 新對話</button></form>
+    <p class="chat-history-label">最近的對話</p>
+    <nav aria-label="對話紀錄">{% for c in chats %}<a class="{{'active' if chat and c.id==chat.id else ''}}" href="{{url_for('personal_ai.chat_page',chat_id=c.id)}}" title="{{c.title}}">{{c.title}}</a>{% else %}<p class="note">你的對話會顯示在這裡。</p>{% endfor %}</nav>
+  </aside>
+  <section class="chat-stage">
+    <header class="chat-stage-heading"><h2>{{chat.title if chat else '學習，從一個好問題開始'}}</h2><span class="pill">AI 學習助手</span></header>
+    <div class="chat-stream">
+      {% if not chat or not messages %}<div class="chat-welcome"><span class="chat-welcome-mark" aria-hidden="true">✦</span><h2>今天想了解什麼？</h2><p>釐清一個觀念、讀懂一個例子，<br>或讓老師陪你找出卡住的地方。</p><div class="chat-hints"><span>用簡單例子解釋 SQL JOIN</span><span>幫我釐清 Python 的回傳值</span><span>整理這份講義的重點</span><span>說明這道題的解題思路</span></div>{% if not chat %}<p class="note">從左側建立對話，就可以開始提問。</p>{% endif %}</div>{% endif %}
+      {% for m in messages|default([]) %}<article class="chat-message {{'chat-user' if m.role=='user' else 'chat-assistant'}}"><strong>{{'你' if m.role=='user' else '✦ AI 老師'}}</strong><p class="prewrap">{{m.content}}</p></article>{% endfor %}
+    </div>
+    {% if chat %}<div class="chat-input-area"><form method="post" class="chat-composer"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><textarea name="question" required maxlength="1500" placeholder="問一個問題，或說說你正在學什麼…" aria-label="你的問題" rows="3"></textarea><div class="chat-composer-bottom"><select name="subject_id" aria-label="教材範圍"><option value="">一般對話</option>{% for s in subjects %}<option value="{{s.id}}">{{s.subject_name}}</option>{% endfor %}</select><button type="submit">送出 ↑</button></div></form><p class="chat-footnote">AI 回答可作為學習參考，重要內容請對照講義。</p></div>{% endif %}
+  </section>
 </div>{% endblock %}
