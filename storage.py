@@ -127,6 +127,21 @@ class MariaConnection:
             cursor.close()
             raise StorageIntegrityError(str(exc)) from exc
 
+    def executemany(self, sql, params):
+        """Run a batch with SQLite-style placeholders in the current transaction."""
+        cursor = self._connection.cursor()
+        try:
+            cursor.executemany(
+                _question_to_percent(sql), [tuple(row) for row in params]
+            )
+            return MariaCursor(cursor, self._connection)
+        except self._pymysql.err.IntegrityError as exc:
+            cursor.close()
+            raise StorageIntegrityError(str(exc)) from exc
+        except Exception:
+            cursor.close()
+            raise
+
     def commit(self):
         self._connection.commit()
 
@@ -140,6 +155,11 @@ class MariaConnection:
 def _backend(app=None):
     config = (app or current_app).config
     return str(config.get("DB_TYPE", "sqlite")).lower()
+
+
+def backend(app=None):
+    """Return normalized backend name for feature modules."""
+    return _backend(app)
 
 
 def _connect_mariadb(app=None):

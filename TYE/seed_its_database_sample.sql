@@ -1,5 +1,5 @@
--- ITS Databases 測試題 1 題
--- 使用方式：先用網站註冊至少一個使用者，再在 HeidiSQL 的 teamdb 執行本檔。
+﻿-- ITS Databases 測試題 1 題
+-- 使用方式：先用網站註冊至少一個使用者，再在個人版自己的資料庫執行本檔。
 -- 預設把題目建立給 users 表中最早建立的使用者。
 
 SET @uid := (SELECT id FROM users ORDER BY id LIMIT 1);

@@ -135,7 +135,8 @@ class BodyLlmClient:
 
     # ------------------------------------------------------------------ HTTP
     def _request(self, url, api_key, payload):
-        headers = {'Content-Type': 'application/json'}
+        headers = {'Content-Type': 'application/json',
+                   'User-Agent': 'AI-Butler/1.0', 'Accept': 'application/json'}
         if api_key:
             headers['Authorization'] = f'Bearer {api_key}'
         request = urllib.request.Request(url, method='POST', headers=headers,

@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: aibutler-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: aibutler_personal
+      POSTGRES_USER: aibutler
+      POSTGRES_PASSWORD: change_me
+    ports:
+      - "5432:5432"
+    volumes:
+      - aibutler_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aibutler -d aibutler_personal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+volumes:
+  aibutler_pgdata:

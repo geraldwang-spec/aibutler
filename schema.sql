@@ -124,3 +124,97 @@ CREATE TABLE IF NOT EXISTS generated_quizzes (
 CREATE TABLE IF NOT EXISTS ai_suggestions (
  id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id), sug_date TEXT, type TEXT, content TEXT, accepted INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS rag_chunk_meta (chunk_id INTEGER PRIMARY KEY,source_locator TEXT,section_title TEXT,FOREIGN KEY(chunk_id) REFERENCES rag_chunks(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS question_metadata (question_id INTEGER PRIMARY KEY,source_type TEXT DEFAULT 'manual',generation_model TEXT,evidence_chunk_ids TEXT,concepts_json TEXT,skill TEXT,is_verified INTEGER DEFAULT 0,FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS ai_question_drafts (id INTEGER PRIMARY KEY AUTOINCREMENT,user_id INTEGER NOT NULL,subject_id INTEGER NOT NULL,chapter_id INTEGER,q_type TEXT NOT NULL,content TEXT NOT NULL,options_json TEXT,answer_key TEXT NOT NULL,explanation TEXT,evidence_chunk_ids TEXT,concepts_json TEXT,skill TEXT,difficulty INTEGER DEFAULT 3,status TEXT DEFAULT 'draft',model_name TEXT,approved_question_id INTEGER,created_at TEXT DEFAULT CURRENT_TIMESTAMP,FOREIGN KEY(user_id) REFERENCES users(id),FOREIGN KEY(subject_id) REFERENCES subjects(id),FOREIGN KEY(chapter_id) REFERENCES chapters(id),FOREIGN KEY(approved_question_id) REFERENCES questions(id));
+CREATE INDEX IF NOT EXISTS ix_aidraft_user_status ON ai_question_drafts(user_id,status,created_at);
+CREATE TABLE IF NOT EXISTS concepts (id INTEGER PRIMARY KEY AUTOINCREMENT,subject_id INTEGER NOT NULL,chapter_id INTEGER,name TEXT NOT NULL,description TEXT,importance INTEGER DEFAULT 3,UNIQUE(subject_id,name),FOREIGN KEY(subject_id) REFERENCES subjects(id),FOREIGN KEY(chapter_id) REFERENCES chapters(id));
+CREATE TABLE IF NOT EXISTS question_concepts (question_id INTEGER NOT NULL,concept_id INTEGER NOT NULL,weight REAL DEFAULT 1,PRIMARY KEY(question_id,concept_id),FOREIGN KEY(question_id) REFERENCES questions(id) ON DELETE CASCADE,FOREIGN KEY(concept_id) REFERENCES concepts(id) ON DELETE CASCADE);
+
+-- Concept-based import: imported questions are source examples, not necessarily exam-pool questions.
+CREATE TABLE IF NOT EXISTS source_question_items (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id INTEGER NOT NULL REFERENCES users(id),
+ subject_id INTEGER NOT NULL REFERENCES subjects(id),
+ chapter_id INTEGER REFERENCES chapters(id),
+ import_id INTEGER REFERENCES exam_imports(id),
+ import_item_id INTEGER REFERENCES import_items(id),
+ source_file TEXT,
+ raw_question TEXT NOT NULL,
+ q_type TEXT,
+ answer_key TEXT,
+ explanation TEXT,
+ options_json TEXT,
+ concept_id INTEGER NOT NULL REFERENCES concepts(id),
+ skill TEXT,
+ cognitive_level TEXT,
+ difficulty INTEGER DEFAULT 2,
+ classification_confidence REAL DEFAULT 0,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_source_questions_concept ON source_question_items(concept_id,chapter_id);
+CREATE INDEX IF NOT EXISTS ix_source_questions_subject ON source_question_items(user_id,subject_id);
+
+
+CREATE TABLE IF NOT EXISTS learning_goals (
+ id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), subject_id INTEGER NOT NULL REFERENCES subjects(id),
+ goal_name TEXT NOT NULL, exam_date TEXT NOT NULL, chapter_ids TEXT DEFAULT '[]', weekday_minutes INTEGER DEFAULT 60,
+ weekend_minutes INTEGER DEFAULT 90, starting_level TEXT DEFAULT 'auto', status TEXT DEFAULT 'active',
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP, last_replanned_at TEXT
+);
+CREATE TABLE IF NOT EXISTS learning_phases (
+ id INTEGER PRIMARY KEY, goal_id INTEGER NOT NULL REFERENCES learning_goals(id), phase_no INTEGER NOT NULL, name TEXT NOT NULL,
+ start_date TEXT NOT NULL, end_date TEXT NOT NULL, objective TEXT, target_mastery REAL DEFAULT 75, status TEXT DEFAULT 'planned'
+);
+CREATE TABLE IF NOT EXISTS learning_milestones (
+ id INTEGER PRIMARY KEY, goal_id INTEGER NOT NULL REFERENCES learning_goals(id), phase_id INTEGER REFERENCES learning_phases(id),
+ title TEXT NOT NULL, target_date TEXT NOT NULL, target_mastery REAL, checkpoint_question_count INTEGER DEFAULT 10,
+ status TEXT DEFAULT 'planned', achieved_at TEXT
+);
+CREATE TABLE IF NOT EXISTS learning_phase_concepts (
+ id INTEGER PRIMARY KEY, phase_id INTEGER NOT NULL REFERENCES learning_phases(id), concept_id INTEGER REFERENCES concepts(id),
+ chapter_id INTEGER REFERENCES chapters(id), concept_name TEXT NOT NULL, priority_order INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS learning_tasks (
+ id INTEGER PRIMARY KEY, goal_id INTEGER NOT NULL REFERENCES learning_goals(id), user_id INTEGER NOT NULL REFERENCES users(id),
+ phase_id INTEGER REFERENCES learning_phases(id), task_date TEXT NOT NULL, task_type TEXT NOT NULL, title TEXT NOT NULL,
+ concept_id INTEGER REFERENCES concepts(id), chapter_id INTEGER REFERENCES chapters(id), target_minutes INTEGER DEFAULT 0,
+ question_count INTEGER DEFAULT 0, status TEXT DEFAULT 'planned', reason TEXT, completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_learning_tasks_goal_date ON learning_tasks(goal_id,user_id,task_date);
+
+CREATE TABLE IF NOT EXISTS learning_checkpoint_attempts (
+ id INTEGER PRIMARY KEY,
+ task_id INTEGER NOT NULL REFERENCES learning_tasks(id),
+ milestone_id INTEGER REFERENCES learning_milestones(id),
+ session_id INTEGER NOT NULL REFERENCES quiz_sessions(id),
+ required_score REAL NOT NULL,
+ score REAL,
+ passed INTEGER,
+ created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+ graded_at TEXT,
+ UNIQUE(session_id)
+);
+CREATE INDEX IF NOT EXISTS ix_learning_checkpoint_task ON learning_checkpoint_attempts(task_id,id);
+
+
+-- Adaptive AI Micro-Course: weakness + lecture RAG -> short interactive lesson.
+CREATE TABLE IF NOT EXISTS micro_courses (
+ id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), subject_id INTEGER NOT NULL REFERENCES subjects(id),
+ concept_id INTEGER NOT NULL REFERENCES concepts(id), title TEXT NOT NULL, objective TEXT, reason TEXT,
+ estimated_minutes INTEGER DEFAULT 5, status TEXT DEFAULT 'active', generation_model TEXT,
+ evidence_chunk_ids TEXT DEFAULT '[]', weakness_snapshot TEXT DEFAULT '{}', created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+ completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS micro_course_steps (
+ id INTEGER PRIMARY KEY, course_id INTEGER NOT NULL REFERENCES micro_courses(id) ON DELETE CASCADE, step_no INTEGER NOT NULL,
+ step_type TEXT NOT NULL, title TEXT NOT NULL, content TEXT, question TEXT, answer_key TEXT, explanation TEXT,
+ user_answer TEXT, is_correct INTEGER, feedback TEXT, status TEXT DEFAULT 'planned'
+);
+CREATE TABLE IF NOT EXISTS micro_course_messages (
+ id INTEGER PRIMARY KEY, course_id INTEGER NOT NULL REFERENCES micro_courses(id) ON DELETE CASCADE, role TEXT NOT NULL,
+ content TEXT NOT NULL, context_chunk_ids TEXT DEFAULT '[]', model_name TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS ix_micro_course_user ON micro_courses(user_id,subject_id,concept_id,created_at);
+CREATE INDEX IF NOT EXISTS ix_micro_step_course ON micro_course_steps(course_id,step_no);
