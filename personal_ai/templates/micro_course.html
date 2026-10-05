@@ -11,7 +11,7 @@
   <p class="prewrap">{{st.content}}</p>
   {% if st.question %}<div class="notice"><strong>互動問題</strong><p>{{st.question}}</p>
     {% if st.status=='done' %}<p><b>你的回答：</b>{{st.user_answer}}</p><p><b>回饋：</b>{{st.feedback or st.explanation}}</p>
-    {% else %}<form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="answer"><input type="hidden" name="step_id" value="{{st.id}}"><textarea name="answer" rows="3" maxlength="1000" required placeholder="用自己的話回答，不用背原題"></textarea><button class="action">送出回答</button></form>{% endif %}
+    {% endif %}{% if not st.is_correct %}<form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="answer"><input type="hidden" name="step_id" value="{{st.id}}"><textarea name="answer" rows="3" maxlength="1000" required placeholder="依題目要求回答；答錯可以重新作答"></textarea><button class="action">{{'重新回答' if st.status=='done' else '送出回答'}}</button></form>{% endif %}
   </div>{% endif %}
 </article>{% endfor %}
 </section>

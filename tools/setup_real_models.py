@@ -190,8 +190,14 @@ print("[AI Butler] Voice model weights downloaded.")
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare real AI models for AI Butler.")
+    parser.add_argument("--legacy-local", action="store_true", help="明確啟用舊版 Ollama／語音下載與設定覆寫")
     parser.add_argument("--skip-voice", action="store_true", help="只下載 Ollama 模型，不下載 Whisper/Kokoro")
     args = parser.parse_args()
+
+    if not args.legacy_local:
+        run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(ROOT / 'tools' / 'setup_exam_ai.ps1'), '-Python', sys.executable])
+        print('CPU 模組已安裝。Groq 設定與金鑰保留；不下載或啟動本地 LLM。')
+        return
 
     print("=" * 66)
     print("AI Butler - REAL MODEL INSTALLER")

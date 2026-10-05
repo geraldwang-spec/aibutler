@@ -13,7 +13,7 @@ from functools import wraps
 from email_validator import validate_email, EmailNotValidError
 from flask import Blueprint, current_app, flash, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
-from storage import db, read_only, locked_sql, StorageIntegrityError
+from storage import db, backend, read_only, locked_sql, StorageIntegrityError
 
 auth = Blueprint('auth', __name__)
 _standby_limits=defaultdict(deque)
@@ -58,13 +58,14 @@ def limited(bucket, maximum, seconds):
     now = int(time.time())
     connection = db()
     connection.execute('BEGIN IMMEDIATE')
+    seed_sql='INSERT IGNORE' if backend()=='mariadb' else 'INSERT OR IGNORE'
+    connection.execute(seed_sql+' INTO rate_limits (bucket,count,started_at) VALUES (?,0,0)',(bucket,))
     row = connection.execute(locked_sql('SELECT * FROM rate_limits WHERE bucket=?'), (bucket,)).fetchone()
     if row and now-row['started_at'] < seconds and row['count'] >= maximum:
         connection.rollback()
         return True
     if not row or now-row['started_at'] >= seconds:
-        connection.execute('DELETE FROM rate_limits WHERE bucket=?', (bucket,))
-        connection.execute('INSERT INTO rate_limits (bucket,count,started_at) VALUES (?,1,?)', (bucket,now))
+        connection.execute('UPDATE rate_limits SET count=1,started_at=? WHERE bucket=?',(now,bucket))
     else:
         connection.execute('UPDATE rate_limits SET count=count+1 WHERE bucket=?', (bucket,))
     connection.commit()

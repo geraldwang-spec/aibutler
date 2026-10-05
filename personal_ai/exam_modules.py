@@ -81,8 +81,14 @@ def cpu(op, **payload):
 def rank(text, candidates):
     if not candidates:
         return []
-    vectors = cpu('embed', texts=['query: ' + text[:2000]] + ['passage: ' + c[:2000] for c in candidates])
-    scores = [sum(a*b for a,b in zip(vectors[0], vector)) for vector in vectors[1:]]
+    # Score overlapping windows so the end of a long chapter remains searchable.
+    windows = [(index, c[start:start+180]) for index,c in enumerate(candidates)
+               for start in range(0,max(1,len(c)),140)]
+    queries = [text[start:start+180] for start in range(0,max(1,len(text)),140)]
+    vectors = cpu('embed', texts=['query: '+q for q in queries] + ['passage: '+w for _,w in windows])
+    scores = [-1.0] * len(candidates)
+    for (index,_),vector in zip(windows,vectors[len(queries):]):
+        scores[index] = max(scores[index],max(sum(a*b for a,b in zip(query,vector)) for query in vectors[:len(queries)]))
     return sorted(enumerate(scores), key=lambda row: row[1], reverse=True)
 
 
@@ -139,7 +145,9 @@ def assess(items, evidence):
         if evidence:
             answer = ', '.join(str(options.get(k.strip(), k)) for k in str(item.get('answer_key','')).split(','))
             hypothesis = str(item.get('content','')) + ' 正確答案是：' + answer
-            scores = cpu('nli', pairs=[(evidence[:2500], hypothesis[:1000])])[0]
+            premises=[evidence[start:start+160] for start in range(0,len(evidence),120)]
+            judgments=cpu('nli', pairs=[(premise,hypothesis[:180]) for premise in premises])
+            scores=max(judgments,key=lambda result:result.get('entailment',0))
             report.update(evidence_scores=scores, evidence_status='語意支持初篩，不能取代答案驗證')
         reports.append(report)
     return reports

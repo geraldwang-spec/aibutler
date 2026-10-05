@@ -329,6 +329,6 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
         if items:
             return items, '自動：LLM 文字強化解析'
     except LLMError:
-        pass
+        raise
     return [], '自動：解析完整度不足'
 

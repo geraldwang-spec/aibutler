@@ -1,3 +1,5 @@
+# Legacy experimental infrastructure only. The current app has no PostgreSQL adapter.
+# For database recovery use docker-compose.standby.yml and doc/REMEDIATION_AND_RECOVERY.md.
 services:
   postgres:
     image: pgvector/pgvector:pg16

@@ -171,7 +171,7 @@ def create_app(test_config=None):
 
     @app.context_processor
     def common():
-        return dict(catalog=CATALOG, csrf_token=session.get('csrf_token',''), today=date.today().isoformat(), database_read_only=read_only())
+        return dict(catalog=CATALOG, csrf_token=session.get('csrf_token',''), today=date.today().isoformat(), database_read_only=read_only(), database_snapshot_at=getattr(g,'db_snapshot_at',None))
 
     @app.errorhandler(400)
     @app.errorhandler(404)
@@ -519,6 +519,8 @@ def register_learning(app):
                 rows=db().execute('SELECT * FROM import_items WHERE import_id=?',(batch,)).fetchall()
                 concept_mode=bool(rows and json.loads(rows[0]['parsed_json']).get('_import_strategy')=='concept')
                 concept_ids=set()
+                db().execute(locked_sql('SELECT id FROM subjects WHERE id=?'),(record['subject_id'],)).fetchone()
+                added_count=0
                 for row in rows:
                     item=json.loads(row['parsed_json'])
                     chapter=db().execute('SELECT id FROM chapters WHERE subject_id=? AND chapter_name=?',(record['subject_id'],item['chapter_name'])).fetchone()
@@ -541,6 +543,11 @@ def register_learning(app):
                             concept_id=concept['id']
                         concept_ids.add(int(concept_id))
                         options_json=json.dumps({label:text for label,text in opts},ensure_ascii=False)
+                        duplicate=db().execute('SELECT id FROM source_question_items WHERE user_id=? AND subject_id=? AND chapter_id=? AND raw_question=? AND q_type=? AND answer_key=? AND options_json=?',
+                            (g.user['id'],record['subject_id'],cid,data['content'],data['q_type'],data['answer_key'],options_json)).fetchone()
+                        if duplicate:
+                            db().execute('UPDATE import_items SET chapter_id=?,question_id=NULL,is_confirmed=1 WHERE id=?',(cid,row['id']))
+                            continue
                         insert('source_question_items',dict(
                             user_id=g.user['id'],subject_id=record['subject_id'],chapter_id=cid,import_id=batch,import_item_id=row['id'],
                             source_file=record['file_name'],raw_question=data['content'],q_type=data['q_type'],answer_key=data['answer_key'],
@@ -550,14 +557,23 @@ def register_learning(app):
                         ))
                         db().execute('UPDATE import_items SET chapter_id=?,question_id=NULL,is_confirmed=1 WHERE id=?',(cid,row['id']))
                     else:
+                        candidates=db().execute("SELECT id FROM questions WHERE chapter_id=? AND content=? AND q_type=? AND answer_key=? AND source='import'",(cid,data['content'],data['q_type'],data['answer_key'])).fetchall()
+                        duplicate=None
+                        for candidate in candidates:
+                            old=[(o['option_label'],o['option_text']) for o in db().execute('SELECT option_label,option_text FROM question_options WHERE question_id=? ORDER BY option_label',(candidate['id'],))]
+                            if old==sorted(opts): duplicate=candidate['id']; break
+                        if duplicate:
+                            db().execute('UPDATE import_items SET chapter_id=?,question_id=?,is_confirmed=1 WHERE id=?',(cid,duplicate,row['id']))
+                            continue
                         qid=insert('questions',dict(chapter_id=cid,source='import',**data))
                         for label,text in opts:
                             insert('question_options',dict(question_id=qid,option_label=label,option_text=text,order_no=ord(label)))
                         db().execute('UPDATE import_items SET chapter_id=?,question_id=?,is_confirmed=1 WHERE id=?',(cid,qid,row['id']))
+                    added_count+=1
                 if concept_mode:
-                    db().execute("UPDATE exam_imports SET status='已歸類',imported_count=total_rows WHERE id=?",(batch,))
+                    db().execute("UPDATE exam_imports SET status='已歸類',imported_count=? WHERE id=?",(added_count,batch))
                 else:
-                    db().execute("UPDATE exam_imports SET status='已匯入',imported_count=total_rows WHERE id=?",(batch,))
+                    db().execute("UPDATE exam_imports SET status='已匯入',imported_count=? WHERE id=?",(added_count,batch))
             db().commit()
             flash('已確認：概念型匯入會保留來源樣本但不加入固定考題池；傳統模式則已加入題庫。','success')
             return redirect(url_for('imports'))
@@ -617,6 +633,7 @@ def process_import_file(app,form,upload):
     folder.mkdir(parents=True,exist_ok=True)
     path=folder/(secrets.token_hex(16)+suffix)
     path.write_bytes(raw)
+    g.import_pending_path = path
 
     rows=None
     parser_name=''

@@ -25,6 +25,7 @@ def _subject(sid):
 def knowledge():
     error=None
     if request.method=='POST':
+        path=None
         try:
             sid=int(request.form.get('subject_id','0')); _subject(sid)
             chapter_id=int(request.form.get('chapter_id','0') or 0) or None
@@ -55,6 +56,7 @@ def knowledge():
             return redirect(url_for('personal_ai.knowledge'))
         except Exception as exc:
             db().rollback(); error=str(exc)
+            if path: path.unlink(missing_ok=True)
     mats=db().execute('''SELECT m.*,s.subject_name,(SELECT count(*) FROM rag_documents rd JOIN rag_chunks rc ON rc.doc_id=rd.id WHERE rd.material_id=m.id) chunk_count FROM materials m JOIN subjects s ON s.id=m.subject_id WHERE m.user_id=? ORDER BY m.id DESC''',(g.user['id'],)).fetchall()
     chapters=db().execute('''SELECT c.* FROM chapters c JOIN subjects s ON s.id=c.subject_id WHERE s.created_by=? ORDER BY c.subject_id,c.order_no,c.id''',(g.user['id'],)).fetchall()
     return render_template('knowledge.html',title='教材知識庫',subjects=_subjects(),chapters=chapters,materials=mats,error=error)
@@ -77,7 +79,7 @@ def ai_questions():
             return redirect(url_for('personal_ai.job_page',job_id=job_id))
         except (ValueError,LLMError,RuntimeError) as exc: error=str(exc)
     subjects=_subjects(); chapters=db().execute('''SELECT c.* FROM chapters c JOIN subjects s ON s.id=c.subject_id WHERE s.created_by=? ORDER BY c.subject_id,c.order_no,c.id''',(g.user['id'],)).fetchall()
-    drafts=db().execute('''SELECT d.*,s.subject_name,c.chapter_name FROM ai_question_drafts d JOIN subjects s ON s.id=d.subject_id LEFT JOIN chapters c ON c.id=d.chapter_id WHERE d.user_id=? ORDER BY d.id DESC LIMIT 50''',(g.user['id'],)).fetchall()
+    drafts=db().execute('''SELECT d.*,s.subject_name,c.chapter_name FROM ai_question_drafts d JOIN subjects s ON s.id=d.subject_id LEFT JOIN chapters c ON c.id=d.chapter_id WHERE d.user_id=? AND d.status='draft' ORDER BY d.id DESC''',(g.user['id'],)).fetchall()
     drafts=[dict(d,options=json.loads(d['options_json'] or '{}')) for d in drafts]
     return render_template('ai_questions.html',title='RAG + LLM 動態出題',subjects=subjects,chapters=chapters,drafts=drafts,error=error,llm_enabled=str(current_app.config.get('GENERATOR_PROVIDER') or current_app.config.get('LLM_PROVIDER','disabled'))!='disabled')
 

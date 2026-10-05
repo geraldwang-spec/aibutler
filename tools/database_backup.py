@@ -67,7 +67,9 @@ def backup():
         # Atomic publish; retain timestamped snapshot and schema for restoration.
         import shutil
         pending=folder/'standby.pending'; shutil.copyfile(snapshot,pending); pending.replace(folder/'standby.sqlite')
-        (folder/'standby.json').write_text(json.dumps(metadata,ensure_ascii=False,indent=2),encoding='utf-8')
+        meta_pending=folder/'standby-meta.pending'
+        meta_pending.write_text(json.dumps(metadata,ensure_ascii=False,indent=2),encoding='utf-8')
+        meta_pending.replace(folder/'standby.json')
         print(f'完整快照已建立：{snapshot}；{len(tables)} 個表、{sum(counts.values())} 筆。未修改主資料庫。')
     except Exception:
         target.close(); source.close(); temporary.unlink(missing_ok=True)
@@ -110,7 +112,9 @@ def restore(path,database):
 if __name__=='__main__':
     load_dotenv(ROOT/'.env')
     parser=argparse.ArgumentParser()
-    parser.add_argument('--restore'); parser.add_argument('--target-db')
+    parser.add_argument('--restore'); parser.add_argument('--target-db');parser.add_argument('--host');parser.add_argument('--port',type=int)
     args=parser.parse_args()
+    if args.host:os.environ['DB_HOST']=args.host
+    if args.port:os.environ['DB_PORT']=str(args.port)
     if args.restore: restore(args.restore,args.target_db)
     else: backup()

@@ -2,6 +2,8 @@
 
 個人化學習系統：題庫／教材匯入、RAG + LLM 動態出題、自動批閱、錯題與弱項分析、學習規劃、系統小考／Checkpoint、AI 微課程。
 
+目前採 MariaDB＋Groq GPT-OSS-20B＋CPU 輔助模型；資料庫故障使用唯讀快照。最新實作、限制與復原指令見 [完整性修正與備援](doc/REMEDIATION_AND_RECOVERY.md)。PostgreSQL compose 為舊實驗檔，目前應用未支援其 adapter。
+
 ## 快速啟動
 
 ### 本機開發

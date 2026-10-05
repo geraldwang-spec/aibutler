@@ -68,6 +68,10 @@ def guard(reserve=0):
     row=read(job['app'],job['id'],job['user_id'])
     if row['cancel']: raise RuntimeError('工作已取消；已送出的單次 API 請求仍需等待結束。')
     if time.monotonic()>job['deadline']: raise RuntimeError('AI 工作超過總時限，已停止後續呼叫。')
+    with ledger(job['app']) as con:
+        daily=con.execute('SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,COALESCE(SUM(calls),0) calls FROM jobs WHERE user_id=? AND created>?',(job['user_id'],time.time()-86400)).fetchone()
+    if daily['tokens']+reserve>int(os.getenv('AI_DAILY_MAX_TOKENS','100000')) or daily['calls']>=int(os.getenv('AI_DAILY_MAX_CALLS','100')):
+        raise RuntimeError('已達此帳號 24 小時 AI 用量上限，停止後續呼叫。')
     if row['calls']>=job['max_calls'] or row['input_tokens']+row['output_tokens']+reserve>job['max_tokens']:
         raise RuntimeError('AI 工作已達總請求數或 token 額度，請減少題數／範圍。')
     update(job['app'],job['id'],calls=row['calls']+1)
@@ -109,6 +113,8 @@ def run(app,job_id,user_id):
             update(app,job_id,status='completed',result=json.dumps(result,ensure_ascii=False),error=None)
         except Exception as exc:
             if getattr(g,'db',None): g.db.rollback()
+            pending=getattr(g,'import_pending_path',None)
+            if pending: pending.unlink(missing_ok=True)
             latest=read(app,job_id,user_id)
             update(app,job_id,status='cancelled' if latest['cancel'] else 'failed',error=str(exc)[:1000])
             app.logger.exception('AI job %s failed',job_id)

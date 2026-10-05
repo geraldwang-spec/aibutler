@@ -11,6 +11,8 @@ modules do not need database-specific SQL for ordinary queries.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import sqlite3
 from datetime import date, datetime
 from decimal import Decimal
@@ -214,6 +216,13 @@ def db():
             path = Path(standby).resolve()
             if not path.is_file():
                 raise DatabaseUnavailable('主資料庫無法連線，且沒有已建立的備援快照。') from None
+            try:
+                metadata=json.loads(path.with_suffix('.json').read_text(encoding='utf-8'))
+                if hashlib.sha256(path.read_bytes()).hexdigest()!=metadata['sha256']:
+                    raise ValueError('快照內容不符')
+                g.db_snapshot_at=metadata['created_at']
+            except (OSError, ValueError, KeyError):
+                raise DatabaseUnavailable('備援快照缺少資訊或完整性檢查失敗；請重新建立備份。') from None
             g.db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=10)
             g.db.row_factory = sqlite3.Row
             g.db_read_only = True
