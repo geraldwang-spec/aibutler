@@ -5,6 +5,7 @@ import json
 import math
 import os
 import secrets
+import time
 import sqlite3
 import zipfile
 from xml.etree.ElementTree import ParseError
@@ -135,6 +136,7 @@ def create_app(test_config=None):
 
     @app.before_request
     def security():
+        g.request_started = time.perf_counter()
         # Static files must never trigger a database lookup. CSS/JS/image requests
         # do not need user hydration and should remain fast.
         if request.endpoint == 'static':
@@ -161,6 +163,11 @@ def create_app(test_config=None):
 
     @app.after_request
     def headers(response):
+        elapsed = (time.perf_counter() - getattr(g, 'request_started', time.perf_counter())) * 1000
+        response.headers['Server-Timing'] = f"app;dur={elapsed:.1f}, dbconnect;dur={getattr(g, 'db_connect_ms', 0):.1f}"
+        if elapsed > 2000 and request.endpoint != 'static':
+            app.logger.warning('Slow page endpoint=%s duration_ms=%.0f db_connect_ms=%.0f',
+                               request.endpoint, elapsed, getattr(g, 'db_connect_ms', 0))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['X-Frame-Options'] = 'SAMEORIGIN'
         response.headers['Referrer-Policy'] = 'same-origin'
@@ -193,10 +200,12 @@ def create_app(test_config=None):
     @login_required
     def dashboard():
         pass # Statistics are updated after writes; viewing the dashboard never rewrites history.
-        counts = [db().execute('SELECT count(*) FROM subjects WHERE created_by=?',(g.user['id'],)).fetchone()[0],
-                  db().execute('SELECT count(*) FROM quiz_sessions WHERE user_id=? AND finished_at IS NOT NULL',(g.user['id'],)).fetchone()[0],
-                  db().execute("SELECT count(*) FROM wrong_answers WHERE user_id=? AND status='待複習'",(g.user['id'],)).fetchone()[0]]
-        plans = db().execute('SELECT * FROM study_plans WHERE user_id=? ORDER BY plan_date DESC LIMIT 10',(g.user['id'],)).fetchall()
+        count_row = db().execute(
+            "SELECT (SELECT count(*) FROM subjects WHERE created_by=?) AS subjects, "
+            "(SELECT count(*) FROM quiz_sessions WHERE user_id=? AND finished_at IS NOT NULL) AS exams, "
+            "(SELECT count(*) FROM wrong_answers WHERE user_id=? AND status='待複習') AS wrong",
+            (g.user['id'], g.user['id'], g.user['id'])).fetchone()
+        counts = [count_row['subjects'], count_row['exams'], count_row['wrong']]
         daily = db().execute('SELECT * FROM daily_summary WHERE user_id=? ORDER BY summary_date DESC LIMIT 14',(g.user['id'],)).fetchall()
         now = date.today()
         try:
@@ -205,30 +214,35 @@ def create_app(test_config=None):
             month = now.replace(day=1)
         month_end = month.replace(day=calendar.monthrange(month.year, month.month)[1])
         events = {}
-        calendar_plans = db().execute(
-            'SELECT * FROM study_plans WHERE user_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,id',
-            (g.user['id'], month.isoformat(), month_end.isoformat())).fetchall()
-        for plan in calendar_plans:
+        all_plans = db().execute(
+            'SELECT * FROM study_plans WHERE user_id=? AND (plan_date BETWEEN ? AND ? OR plan_date=?) ORDER BY plan_date,id',
+            (g.user['id'], month.isoformat(), month_end.isoformat(), now.isoformat())).fetchall()
+        for plan in all_plans:
+            if not month.isoformat() <= str(plan['plan_date'])[:10] <= month_end.isoformat():
+                continue
             events.setdefault(str(plan['plan_date'])[:10], []).append(dict(title=plan['title'], kind=plan['plan_type'],
                 status=plan['status'], url=url_for('records', table='study_plans', edit=plan['id'])))
+        tasks = []
         if 'personal_ai' in app.blueprints:
             tasks = db().execute(
                 'SELECT goal_id,task_date,title,status FROM learning_tasks WHERE user_id=? '
-                'AND task_date BETWEEN ? AND ? ORDER BY task_date,id',
-                (g.user['id'], month.isoformat(), month_end.isoformat())).fetchall()
+                'AND (task_date BETWEEN ? AND ? OR task_date=?) ORDER BY task_date,id',
+                (g.user['id'], month.isoformat(), month_end.isoformat(), now.isoformat())).fetchall()
             for task in tasks:
+                if not month.isoformat() <= str(task['task_date'])[:10] <= month_end.isoformat():
+                    continue
                 events.setdefault(str(task['task_date'])[:10], []).append(dict(title=task['title'], kind='study',
                     status=task['status'], url=url_for('personal_ai.adaptive_planner', goal_id=task['goal_id'])))
-        today_tasks = db().execute('SELECT * FROM study_plans WHERE user_id=? AND plan_date=? ORDER BY id',
-            (g.user['id'], now.isoformat())).fetchall()
+        today_tasks = [p for p in all_plans if str(p['plan_date'])[:10] == now.isoformat()]
         today_events = [dict(title=p['title'],kind=p['plan_type'],status=p['status'],
             url=url_for('records',table='study_plans',edit=p['id'])) for p in today_tasks]
         if 'personal_ai' in app.blueprints:
-            for t in db().execute('SELECT goal_id,title,status FROM learning_tasks WHERE user_id=? AND task_date=? ORDER BY id',
-                (g.user['id'],now.isoformat())).fetchall():
+            for t in tasks:
+                if str(t['task_date'])[:10] != now.isoformat():
+                    continue
                 today_events.append(dict(title=t['title'],kind='study',status=t['status'],
                     url=url_for('personal_ai.adaptive_planner',goal_id=t['goal_id'])))
-        return render_template('dashboard_live.html',title='學習與健康總覽',counts=counts,plans=plans,daily=daily,
+        return render_template('dashboard_live.html',title='學習與健康總覽',counts=counts,daily=daily,
             calendar_month=month, calendar_weeks=calendar.Calendar().monthdatescalendar(month.year,month.month),
             calendar_events=events, calendar_today=now, today_events=today_events,
             previous_month=(month-timedelta(days=1)).strftime('%Y-%m'),

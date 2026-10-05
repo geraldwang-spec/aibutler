@@ -8,6 +8,7 @@
   {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign'] %}<link rel="stylesheet" href="{{url_for('static',filename='css/'+name+'.css')}}">{% endfor %}
   {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/question-workspace.css')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/product.css',v='workspace-2')}}">{% endif %}
   <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-pane.css')}}">
+  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='decor-1')}}">{% endif %}
 </head>
 <body class="{{'workspace-body-pane' if body_page else 'product-ui workspace-pane'}}" data-page="{{request.endpoint}}">
   <main id="workspace-content" tabindex="-1" class="{{'templatemo-content col-1 light-gray-bg' if body_page else ''}}">

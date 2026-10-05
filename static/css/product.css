@@ -1,4 +1,4 @@
-/* Learning workspace. Loaded only by product_base; BODY keeps the legacy shell. */
+/* Learning workspace shell/content. BODY content keeps its original styles. */
 .product-ui{--ui-ink:#20232d;--ui-muted:#858997;--ui-accent:#635bdf;--ui-accent-dark:#5148c7;--ui-line:#e7e8ee;--select-accent:#635bdf;--select-accent-dark:#5148c7;--select-bg:#f0eefe;--select-bg-hover:#f7f6fe;--select-border:#c2bdf0;--select-focus:rgba(99,91,223,.18);background:#f8f9fc;color:var(--ui-ink);font-family:Inter,"Segoe UI","Microsoft JhengHei",sans-serif;font-size:14px;line-height:1.65;letter-spacing:0;-webkit-font-smoothing:antialiased}
 .product-ui *{box-sizing:border-box}
 .product-ui a{color:#635bdf;text-decoration:none}

@@ -4,6 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{ title }}｜考試智伴</title>
   {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign','question-workspace','product'] %}<link rel="stylesheet" href="{{ url_for('static',filename='css/'+name+'.css',v='workspace-2') }}">{% endfor %}
+  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='decor-1')}}">
 </head>
 <body class="product-ui {{'workspace-host' if workspace_shell else ''}}" data-page="{{ request.endpoint }}">
 <a class="skip-content" href="#workspace-content">跳到主要內容</a>

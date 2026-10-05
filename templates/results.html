@@ -1,5 +1,7 @@
 {% extends 'live_base.html' %}
 {% block content %}
+{% set chart_kind='sessions' %}{% set chart_rows=sessions %}{% set chart_note='依已完成測驗的答對題數與總題數計算；可按科目篩選，不含尚未交卷的測驗。' %}
+{% include '_learning_charts.html' %}
 <section class="panel-card">
   <h2>已完成測驗</h2>
   {% for row in sessions %}

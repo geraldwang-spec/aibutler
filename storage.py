@@ -14,6 +14,9 @@ import os
 import hashlib
 import json
 import sqlite3
+import threading
+import time
+from collections import deque
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -113,11 +116,15 @@ class MariaCursor:
 
 
 class MariaConnection:
-    def __init__(self, connection, pymysql_module):
+    def __init__(self, connection, pymysql_module, release=None):
         self._connection = connection
         self._pymysql = pymysql_module
+        self._release = release
+        self._closed = False
+        self._clean = True
 
     def execute(self, sql, params=()):
+        self._clean = False
         # Existing modules use this SQLite statement to request a write lock.
         # MariaDB starts a transaction instead; row-level locks are acquired by
         # the actual writes.
@@ -135,6 +142,7 @@ class MariaConnection:
 
     def executemany(self, sql, params):
         """Run a batch with SQLite-style placeholders in the current transaction."""
+        self._clean = False
         cursor = self._connection.cursor()
         try:
             cursor.executemany(
@@ -150,12 +158,62 @@ class MariaConnection:
 
     def commit(self):
         self._connection.commit()
+        self._clean = True
 
     def rollback(self):
-        self._connection.rollback()
+        try:
+            self._connection.rollback()
+        except Exception:
+            self._release = None
+            raise
+        self._clean = True
 
     def close(self):
+        if self._closed:
+            return
+        self._closed = True
+        # A connection is never shared while checked out. Only a successfully
+        # reset transaction may be returned for another request/user.
+        if self._release:
+            try:
+                if not self._clean:
+                    self._connection.rollback()
+                self._release(self._connection)
+                return
+            except Exception:
+                pass
         self._connection.close()
+
+
+class _MariaIdlePool:
+    """Keep at most four idle connections, with a 60-second idle lifetime."""
+    def __init__(self):
+        self._idle = deque()
+        self._lock = threading.Lock()
+
+    def acquire(self):
+        while True:
+            with self._lock:
+                if not self._idle:
+                    return None
+                raw, returned_at = self._idle.pop()
+            try:
+                if time.monotonic() - returned_at < 60:
+                    raw.ping(reconnect=False)
+                    return raw
+            except Exception:
+                pass
+            try:
+                raw.close()
+            except Exception:
+                pass
+
+    def release(self, raw):
+        with self._lock:
+            if raw.open and len(self._idle) < 4:
+                self._idle.append((raw, time.monotonic()))
+                return
+        raw.close()
 
 
 def _backend(app=None):
@@ -169,12 +227,17 @@ def backend(app=None):
 
 
 def _connect_mariadb(app=None):
-    config = (app or current_app).config
+    application = app or current_app
+    config = application.config
     try:
         import pymysql
     except ImportError as exc:
         raise RuntimeError("MariaDB 模式需要 PyMySQL，請先執行：pip install pymysql") from exc
 
+    pool = application.extensions.setdefault('mariadb_idle_pool', _MariaIdlePool())
+    raw = pool.acquire()
+    if raw is not None:
+        return MariaConnection(raw, pymysql, pool.release)
     raw = pymysql.connect(
         host=config["DB_HOST"],
         port=int(config.get("DB_PORT", 3306)),
@@ -188,9 +251,13 @@ def _connect_mariadb(app=None):
         read_timeout=20,
         write_timeout=20,
     )
-    with raw.cursor() as cursor:
-        cursor.execute('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED')
-    return MariaConnection(raw, pymysql)
+    try:
+        with raw.cursor() as cursor:
+            cursor.execute('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED')
+    except Exception:
+        raw.close()
+        raise
+    return MariaConnection(raw, pymysql, pool.release)
 
 
 def _connect_sqlite(app=None):
@@ -203,6 +270,7 @@ def _connect_sqlite(app=None):
 
 def db():
     if "db" not in g:
+        connect_started = time.perf_counter()
         kind = _backend()
         if kind not in ('mariadb', 'sqlite'):
             raise RuntimeError('不支援的 DB_TYPE；目前支援 mariadb 或 sqlite。PostgreSQL 不可當成未同步的備援。')
@@ -210,6 +278,7 @@ def db():
             g.db = _connect_mariadb() if kind == 'mariadb' else _connect_sqlite()
             g.db_read_only = bool(current_app.config.get('DB_READ_ONLY'))
         except Exception:
+            g.db_connect_ms = (time.perf_counter() - connect_started) * 1000
             standby = current_app.config.get('DB_STANDBY_PATH')
             if kind != 'mariadb' or not current_app.config.get('DB_STANDBY_ENABLED') or not standby:
                 raise DatabaseUnavailable('資料庫暫時無法連線。尚未啟用可用的唯讀快照，請稍後再試。') from None
@@ -227,6 +296,7 @@ def db():
             g.db.row_factory = sqlite3.Row
             g.db_read_only = True
             current_app.logger.warning('Primary database unavailable; using read-only standby snapshot')
+        g.db_connect_ms = (time.perf_counter() - connect_started) * 1000
     return g.db
 
 
