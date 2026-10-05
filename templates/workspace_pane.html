@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{title}}｜考試智伴</title>
+  {% set endpoint=request.endpoint or '' %}
+  {% set body_page=endpoint=='body.index' %}
+  {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign'] %}<link rel="stylesheet" href="{{url_for('static',filename='css/'+name+'.css')}}">{% endfor %}
+  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/question-workspace.css')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/product.css',v='workspace-2')}}">{% endif %}
+  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-pane.css')}}">
+  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='decor-1')}}">{% endif %}
+</head>
+<body class="{{'workspace-body-pane' if body_page else 'product-ui workspace-pane'}}" data-page="{{request.endpoint}}">
+  <main id="workspace-content" tabindex="-1" class="{{'templatemo-content col-1 light-gray-bg' if body_page else ''}}">
+    <div class="{{'templatemo-content-container' if body_page else 'workspace-content'}}">
+      {% if body_page or (endpoint!='dashboard' and not endpoint.startswith('personal_ai.chat')) %}<header class="page-heading"><p class="eyebrow">{{'EXAM STUDY COMPANION' if body_page else 'MY LEARNING SPACE'}}</p><h1>{{title}}</h1></header>{% endif %}
+      {% for category,message in get_flashed_messages(with_categories=true) %}<p class="notice {{category}}" role="status">{{message}}</p>{% endfor %}
+      {% if error %}<p class="notice error" role="alert">{{error}}</p>{% endif %}
+      {% if database_read_only %}<p class="notice error" role="alert">目前使用唯讀資料庫。{% if database_snapshot_at %}備份時間：{{database_snapshot_at}}。{% endif %}新增、交卷與 AI 工作已暫停。</p>{% endif %}
+      {% block content %}{% endblock %}
+      {% if body_page %}<footer>考試智伴 · SmartLife <span>每一天的小進步，都值得被記錄</span></footer>{% else %}<footer class="workspace-footer"><span>考試智伴</span><span>讓每一天的學習，有方向。</span></footer>{% endif %}
+    </div>
+  </main>
+  <script src="{{url_for('static',filename='js/live.js')}}"></script>
+  <script src="{{url_for('static',filename='js/workspace-pane.js')}}"></script>
+</body>
+</html>

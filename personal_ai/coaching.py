@@ -9,6 +9,7 @@ from flask import current_app
 from storage import db
 from .llm_provider import model_usage_label, get_llm, LLMError
 from .rag import retrieve
+from .prompt_budget import bounded_json
 
 RECENT_CONCEPT_LIMIT = 20
 MIN_CONCEPT_SAMPLE = 3
@@ -160,6 +161,8 @@ def wrong_question_context(user_id: int, question_id: int):
         try:
             snap = json.loads(latest["question_snapshot"] or "{}")
             item["options"] = snap.get("options", [])
+            for key in ('content','q_type','answer_key','explanation','chapter_id'):
+                if key in snap: item[key] = snap[key]
         except json.JSONDecodeError:
             item["options"] = []
     else:
@@ -245,7 +248,7 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
             "若證據不足，明確說教材中沒有足夠依據，不可自行補充未提供的事實。"
             "用繁體中文，先指出錯誤關鍵，再分步說明；追問也必須維持相同證據限制。只回 JSON。"
         )
-        user = json.dumps({
+        user = bounded_json({
             "question": q["content"],
             "question_type": q["q_type"],
             "user_answer": q.get("last_wrong_answer"),
@@ -256,7 +259,7 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
             "evidence": evidence,
             "conversation": history_text,
             "followup": followup,
-        }, ensure_ascii=False)
+        })
         user += '\n回傳 {"answer":"..."}。'
         try:
             data = llm.complete_json(system, user)
@@ -275,7 +278,9 @@ def _planner_concepts(user_id: int, subject_id: int, chapter_ids: list[int]):
     """Return ordered Concepts with current mastery metadata for the goal planner."""
     weakness = calculate_concept_weakness(user_id, subject_id)
     if chapter_ids:
-        weakness = [w for w in weakness if w.get("chapter_id") in chapter_ids]
+        marks=','.join('?' for _ in chapter_ids)
+        ids={int(r[0]) for r in db().execute('SELECT DISTINCT concept_id FROM source_question_items WHERE user_id=? AND subject_id=? AND chapter_id IN ('+marks+')',(user_id,subject_id,*chapter_ids))}
+        weakness=[w for w in weakness if w.get('chapter_id') in chapter_ids or w['concept_id'] in ids]
     if weakness:
         return weakness
 
@@ -289,8 +294,9 @@ def _planner_concepts(user_id: int, subject_id: int, chapter_ids: list[int]):
     """
     params = [subject_id]
     if chapter_ids:
-        sql += " AND co.chapter_id IN (" + ",".join("?" for _ in chapter_ids) + ")"
-        params.extend(chapter_ids)
+        marks=','.join('?' for _ in chapter_ids)
+        sql += ' AND (co.chapter_id IN ('+marks+') OR EXISTS(SELECT 1 FROM source_question_items sc WHERE sc.concept_id=co.id AND sc.chapter_id IN ('+marks+')))'
+        params.extend(chapter_ids+chapter_ids)
     sql += " ORDER BY COALESCE(ch.order_no,0), co.id"
     rows = db().execute(sql, tuple(params)).fetchall()
     if rows:
@@ -428,7 +434,7 @@ def create_learning_goal_plan(user_id: int, subject_id: int, goal_name: str, exa
 
     # Assign concepts to the non-final phases. Weak / unseen concepts appear earlier and recur later.
     learning_phases=phase_ids[:-1] if len(phase_ids)>1 else phase_ids
-    concepts=sorted(concepts,key=lambda x: x.get('_sort',50),reverse=True)
+    concepts=sorted(concepts,key=lambda x: x.get('_sort',50))
     for idx,c in enumerate(concepts):
         p=learning_phases[idx % len(learning_phases)]
         db().execute("""INSERT INTO learning_phase_concepts
@@ -454,12 +460,12 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
             FROM learning_tasks lt
             LEFT JOIN learning_checkpoint_attempts lca ON lca.task_id=lt.id
             WHERE lt.goal_id=? AND lt.user_id=?
-              AND (lt.status='done' OR lca.id IS NOT NULL)
+              AND (lt.status IN ('done','read') OR lca.id IS NOT NULL)
         """,(goal_id,user_id)).fetchall()
         preserve_dates={str(r['task_date'])[:10] for r in preserved}
         db().execute("""
             DELETE FROM learning_tasks
-            WHERE goal_id=? AND user_id=? AND status<>'done'
+            WHERE goal_id=? AND user_id=? AND status NOT IN ('done','read')
               AND id NOT IN (SELECT task_id FROM learning_checkpoint_attempts)
         """,(goal_id,user_id))
     else:
@@ -601,7 +607,7 @@ def register_planner_quiz_attempt(user_id: int, task_id: int, session_id: int):
     return cur.lastrowid
 
 
-def apply_planner_quiz_result(user_id: int, session_id: int):
+def apply_planner_quiz_result(user_id: int, session_id: int, commit=True):
     """Apply a finished quiz score to its planner task and milestone.
 
     Returns None for ordinary quizzes. A failed gate stays failed and can be retried;
@@ -648,7 +654,7 @@ def apply_planner_quiz_result(user_id: int, session_id: int):
     remaining=db().execute("SELECT COUNT(*) n FROM learning_milestones WHERE goal_id=? AND status<>'achieved'",(attempt['goal_id'],)).fetchone()
     if remaining and int(remaining['n'] or 0)==0:
         db().execute("UPDATE learning_goals SET status='ready' WHERE id=?",(attempt['goal_id'],))
-    db().commit()
+    if commit: db().commit()
     return {
         'task_id': attempt['task_id'], 'score': score, 'required_score': required,
         'passed': passed, 'goal_id': attempt['goal_id'], 'task_type': attempt['task_type'], 'title': attempt['title']

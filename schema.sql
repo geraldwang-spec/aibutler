@@ -218,3 +218,5 @@ CREATE TABLE IF NOT EXISTS micro_course_messages (
 );
 CREATE INDEX IF NOT EXISTS ix_micro_course_user ON micro_courses(user_id,subject_id,concept_id,created_at);
 CREATE INDEX IF NOT EXISTS ix_micro_step_course ON micro_course_steps(course_id,step_no);
+
+CREATE TABLE IF NOT EXISTS concept_change_log (id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL,subject_id INTEGER NOT NULL,old_name TEXT,new_name TEXT,action TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP);

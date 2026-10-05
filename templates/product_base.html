@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>{{ title }}｜考試智伴</title>
+  {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign','question-workspace','product'] %}<link rel="stylesheet" href="{{ url_for('static',filename='css/'+name+'.css',v='workspace-2') }}">{% endfor %}
+  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='decor-1')}}">
+</head>
+<body class="product-ui {{'workspace-host' if workspace_shell else ''}}" data-page="{{ request.endpoint }}">
+<a class="skip-content" href="#workspace-content">跳到主要內容</a>
+{% set endpoint=request.endpoint or '' %}
+{% set table=request.view_args.get('table','') if request.view_args else '' %}
+{% macro nav_item(target,label,icon,active=false,table_name=none,body_tab=none) %}
+<a class="workspace-nav-item {{'active' if active else ''}}" href="{{url_for(target,table=table_name) if table_name else (url_for(target,tab=body_tab) if body_tab else url_for(target))}}" {% if active %}aria-current="page"{% endif %}><i class="fa fa-{{icon}}" aria-hidden="true"></i><span>{{label}}</span>{% if active %}<span class="nav-current" aria-hidden="true"></span>{% endif %}</a>
+{% endmacro %}
+<div class="product-shell">
+  <aside class="workspace-sidebar">
+    <a class="workspace-brand" href="{{url_for('dashboard')}}"><span class="brand-mark"><i class="fa fa-book" aria-hidden="true"></i></span><span>考試智伴<small>你的學習工作室</small></span></a>
+    <button class="menu-toggle" aria-expanded="true" aria-controls="main-nav"><i class="fa fa-bars" aria-hidden="true"></i> 功能選單</button>
+    <nav id="main-nav" class="templatemo-left-nav workspace-nav is-open" aria-label="主要功能">
+      <span class="workspace-nav-label">我的工作室</span>
+      {{nav_item('dashboard','總覽與月曆','th-large',endpoint=='dashboard')}}
+      {{nav_item('personal_ai.adaptive_planner','學習計畫','calendar-o',endpoint=='personal_ai.adaptive_planner')}}
+      {{nav_item('records','考試準備設定','calendar',endpoint=='records' and table=='exam_plans','exam_plans')}}
+      {{nav_item('records','每日讀書與運動計畫','calendar-check-o',endpoint=='records' and table=='study_plans','study_plans')}}
+      {{nav_item('personal_ai.chat_index','AI 對話','comment-o',endpoint.startswith('personal_ai.chat'))}}
+      <span class="workspace-nav-label">學習資源</span>
+      {{nav_item('personal_ai.knowledge','教材與講義','folder-open-o',endpoint=='personal_ai.knowledge')}}
+      {{nav_item('personal_ai.micro_courses','我的課程','graduation-cap',endpoint.startswith('personal_ai.micro_course'))}}
+      {{nav_item('records','科目管理','book',endpoint=='records' and table=='subjects','subjects')}}
+      {{nav_item('records','章節管理','list',endpoint=='records' and table=='chapters','chapters')}}
+      {{nav_item('records','固定題庫','list-alt',endpoint=='records' and table=='questions','questions')}}
+      {{nav_item('imports','匯入工作區','upload',endpoint in ['imports','import_review'])}}
+      {{nav_item('personal_ai.concepts','概念來源','sitemap',endpoint=='personal_ai.concepts')}}
+      {{nav_item('personal_ai.ai_questions','AI 出題與草稿','magic',endpoint=='personal_ai.ai_questions')}}
+      {{nav_item('records','重點摘要與筆記','file-text-o',endpoint=='records' and table=='summaries','summaries')}}
+      <span class="workspace-nav-label">練習與回顧</span>
+      {{nav_item('quiz_start','模擬考與練習','pencil-square-o',endpoint in ['quiz_start','quiz_take'])}}
+      {{nav_item('results','成績與錯題','bar-chart',endpoint=='results')}}
+      {{nav_item('analysis','章節分析','pie-chart',endpoint=='analysis')}}
+      {{nav_item('personal_ai.concept_weakness','概念弱項','line-chart',endpoint=='personal_ai.concept_weakness')}}
+      <details class="workspace-tools" {% if endpoint=='personal_ai.ai_status' %}open{% endif %}>
+        <summary><i class="fa fa-sliders" aria-hidden="true"></i> 進階管理 <span>⌄</span></summary>
+        {{nav_item('personal_ai.ai_status','AI 環境','cog',endpoint=='personal_ai.ai_status')}}
+        <details><summary>其他資料管理</summary>{% for key,(label,icon,fields) in catalog.items() if key not in ['subjects','chapters','questions','summaries','exam_plans','study_plans','exercises','chat_sessions','chat_messages'] %}{{nav_item('records',label,'table',endpoint=='records' and table==key,key)}}{% endfor %}</details>
+        {{nav_item('records','問答記事資料','comments-o',endpoint=='records' and table=='chat_sessions','chat_sessions')}}
+        {{nav_item('records','提問紀錄資料','comment-o',endpoint=='records' and table=='chat_messages','chat_messages')}}
+      </details>
+      <span class="workspace-nav-label">生活與帳號</span>
+      {{nav_item('body.index','體育：訓練','heartbeat',endpoint=='body.index' and request.args.get('tab','train')=='train',none,'train')}}
+      {{nav_item('body.index','體育：體重','balance-scale',endpoint=='body.index' and request.args.get('tab')=='weight',none,'weight')}}
+      {{nav_item('body.index','體育：分析','area-chart',endpoint=='body.index' and request.args.get('tab')=='analysis',none,'analysis')}}
+      {{nav_item('records','運動動作庫','bolt',endpoint=='records' and table=='exercises','exercises')}}
+      {{nav_item('profile','個人資料','user-o',endpoint=='profile')}}
+    </nav>
+    <div class="workspace-account"><span class="account-avatar">{{(g.user.username if g.user else '訪')[:1]|upper}}</span><div><strong>{{g.user.username if g.user else '訪客'}}</strong><small>個人工作室</small></div>{% if g.user %}<form action="{{url_for('auth.logout')}}" method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="account-signout" title="登出帳號" aria-label="登出帳號"><i class="fa fa-sign-out" aria-hidden="true"></i></button></form>{% endif %}</div>
+  </aside>
+  <main id="workspace-content" tabindex="-1" class="workspace-main">
+    <div class="workspace-topbar"><div><span>我的工作室</span><span class="breadcrumb-separator">/</span><strong id="workspace-title">{{title}}</strong></div><a href="{{url_for('personal_ai.chat_index')}}" class="topbar-ai">✦ 問 AI 老師</a></div>
+    {% if workspace_shell %}
+    <iframe id="workspace-pane" name="workspace-pane" class="workspace-frame" src="{{workspace_url}}" title="{{title}}" aria-label="功能內容"></iframe>
+    <p class="workspace-loading" id="workspace-loading" role="status" hidden>內容載入中…</p>
+    <noscript><p class="notice error">請啟用 JavaScript，以同步導覽與目前頁面。</p></noscript>
+    {% else %}
+    <div class="workspace-content">
+      {% if endpoint!='dashboard' and not endpoint.startswith('personal_ai.chat') %}<header class="page-heading"><p class="eyebrow">MY LEARNING SPACE</p><h1>{{title}}</h1></header>{% endif %}
+      {% for category,message in get_flashed_messages(with_categories=true) %}<p class="notice {{category}}" role="status">{{message}}</p>{% endfor %}
+      {% if error %}<p class="notice error" role="alert">{{error}}</p>{% endif %}
+      {% if database_read_only %}<p class="notice error" role="alert">目前使用唯讀資料庫。{% if database_snapshot_at %}備份時間：{{database_snapshot_at}}。{% endif %}新增、交卷與 AI 工作已暫停。</p>{% endif %}
+      {% block content %}{% endblock %}
+      <footer class="workspace-footer"><span>考試智伴</span><span>讓每一天的學習，有方向。</span></footer>
+    </div>
+    {% endif %}
+  </main>
+</div>
+<script src="{{url_for('static',filename='js/exam.js')}}"></script><script src="{{url_for('static',filename='js/live.js')}}"></script>
+{% if workspace_shell %}<script src="{{url_for('static',filename='js/workspace-navigation.js',v='workspace-2')}}"></script>{% endif %}
+</body></html>

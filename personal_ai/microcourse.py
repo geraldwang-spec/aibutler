@@ -8,6 +8,7 @@ from storage import db
 from .coaching import calculate_concept_weakness
 from .llm_provider import LLMError, get_course_llm, get_tutor_llm, model_usage_label
 from .rag import retrieve
+from .prompt_budget import bounded_json
 
 
 def _concept_row(user_id: int, concept_id: int):
@@ -72,36 +73,7 @@ def _normalize_steps(data: dict, concept_name: str):
                 ).strip(),
             }
         )
-    if not out:
-        out = [
-            {
-                "step_no": 1,
-                "step_type": "teach",
-                "title": f"{concept_name} 核心概念",
-                "content": f"先重新建立「{concept_name}」的核心理解。",
-                "question": "",
-                "answer_key": "",
-                "explanation": "",
-            },
-            {
-                "step_no": 2,
-                "step_type": "check",
-                "title": "快速確認",
-                "content": "用自己的話確認剛才的概念。",
-                "question": f"請用一句話說明「{concept_name}」的核心概念。",
-                "answer_key": concept_name,
-                "explanation": "此為 DEV 流程檢查；真模型會依教材產生可判定的互動題。",
-            },
-            {
-                "step_no": 3,
-                "step_type": "summary",
-                "title": "本課總結",
-                "content": f"完成「{concept_name}」的短課程後，再進行一組同 Concept 的新題檢查掌握度。",
-                "question": "",
-                "answer_key": "",
-                "explanation": "",
-            },
-        ]
+    if not out: raise ValueError("課程沒有有效步驟。")
     return out
 
 
@@ -186,14 +158,21 @@ def create_micro_course(user_id: int, concept_id: int, minutes: int = 5):
                 "do_not_copy_source_question": True,
             },
         }
-        user = json.dumps(payload, ensure_ascii=False)
-        user += (
-            '\n回傳格式：{"title":"...","objective":"...","steps":['
-            '{"type":"teach|example|check|summary","title":"...","content":"...",'
-            '"question":"...","answer_key":"...","explanation":"..."}]}'
-        )
+        if not evidence:
+            samples=db().execute('SELECT raw_question,explanation FROM source_question_items WHERE user_id=? AND concept_id=? LIMIT 4',(user_id,concept_id)).fetchall()
+            payload['evidence']='\n'.join(str(r['raw_question'])+' '+str(r['explanation'] or '') for r in samples)
+            if not payload['evidence']: raise ValueError('沒有教材或來源樣本支持此課程，請先加入教材。')
+        lesson={'title':f"{concept['name']} 補強課",'objective':f"理解並應用 {concept['name']}",'steps':[]}
         try:
-            lesson = model.complete_json(system, user)
+            for kind in ('teach','example','check','summary'):
+                part=model.complete_json(system,bounded_json(payload)+
+                    '\n本次只產生 '+kind+' 一個步驟，內容最多三句。check 必須為是非或簡短填空，答案不超過 20 字；多個可接受答案用 | 分隔。'+
+                    '\n回傳 {"type":"'+kind+'","title":"...","content":"...","question":"check 才填","answer_key":"...","explanation":"..."}。')
+                if not isinstance(part,dict) or not part.get('content'): raise ValueError('模型課程步驟不完整。')
+                part['type']=kind
+                if kind=='check' and (not part.get('question') or not part.get('answer_key')):
+                    raise ValueError('互動題缺少問題或可判定答案。')
+                lesson['steps'].append(part)
         except LLMError as exc:
             raise ValueError(str(exc)) from exc
         model_name = model_usage_label(model)
@@ -319,7 +298,7 @@ def _simple_correct(user_answer: str, answer_key: str):
     ak = re.sub(r"\s+", "", str(answer_key or "")).lower()
     if not ak:
         return None
-    return ua == ak or (len(ak) >= 2 and ak in ua)
+    return ua in [re.sub(r"\s+", "", x).lower() for x in ak.split("|")]
 
 
 def answer_step(user_id: int, course_id: int, step_id: int, user_answer: str):
@@ -384,7 +363,7 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
             "你是互動式 AI Tutor。只能依目前微課程、Concept、教材 RAG 證據回答。若證據不足要明說。"
             "用繁體中文、短句、蘇格拉底式引導；不要直接暴露未作答 Checkpoint 的答案。只回 JSON。"
         )
-        payload = json.dumps(
+        payload = bounded_json(
             {
                 "course_title": course["title"],
                 "concept": course["concept_name"],
@@ -397,7 +376,6 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
                 "conversation": history,
                 "question": question,
             },
-            ensure_ascii=False,
         )
         try:
             data = model.complete_json(system, payload + '\n回傳 {"answer":"..."}')
@@ -426,6 +404,9 @@ def complete_course(user_id: int, course_id: int):
     course = get_course(user_id, course_id)
     if not course:
         raise ValueError("找不到這堂課。")
+    checks = [s for s in course['steps'] if s.get('question')]
+    if not checks or any(s['status'] != 'done' or s.get('is_correct') != 1 for s in checks):
+        raise ValueError('請先完成並答對所有互動題，再完成課程。課程完成不代表已通過概念驗收。')
     db().execute(
         "UPDATE micro_courses SET status='completed',completed_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
         (course_id, user_id),

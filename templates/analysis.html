@@ -1,5 +1,7 @@
 {% extends 'live_base.html' %}
 {% block content %}
+{% set chart_kind='chapters' %}{% set chart_rows=rows %}{% set chart_note='每章僅採最近 '+recent_limit|string+' 次已完成測驗的實際作答；圓餅圖為這些樣本合計，並非全部歷史作答。' %}
+{% include '_learning_charts.html' %}
 <section class="panel-card">
   <h2>章節弱項分析</h2>
   <p>每個章節最多採最近 {{ recent_limit }} 次實際作答，依正確率由低到高排序；少於 {{ minimum_sample }} 次會標示「資料不足」，避免把單一失誤直接解讀成穩定弱項。</p>

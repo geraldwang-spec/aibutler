@@ -1,9 +1,9 @@
 {% extends 'live_base.html' %}
-{% block content %}
+{% block content %}<nav class="exam-workspace-nav" aria-label="考題工作區"><a href="{{ url_for('imports') }}">匯入題庫</a><a href="{{ url_for('records',table='questions') }}">固定題庫</a><a href="{{ url_for('personal_ai.concepts') }}">概念題庫</a><a class="active" href="{{ url_for('quiz_start') }}">建立模擬考</a></nav><div class="exam-step-bar"><span><b>1</b> 選擇科目與範圍</span><span><b>2</b> 選擇出題方式</span><span><b>3</b> 開始作答</span></div>
 <section class="panel-card">
-  <h2>模擬考設定</h2>
+  <h2>準備好，開始一場練習。</h2>
   <p>模擬考 / 練習可選擇 Concept 動態出題，或直接從固定題庫隨機抽題。錯題複習則保留原題。</p>
-  <p class="notice info"><strong>動態出題：</strong>題數是「這次要考幾題」，不是題庫最低門檻。再次建立考卷時會重新生成敘述、數值或情境，但維持相同 Concept / Skill 範圍。</p>
+  <p class="notice info"><strong>動態出題：</strong>使用概念來源設計新題，需要等待模型生成。若想立即開始，請選普通隨機出題。</p>
   {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

@@ -224,7 +224,7 @@ def _materialize_dynamic_questions(subject_id: int, chapter_ids: list[int], q_ty
                 "evidence_chunk_ids": d["evidence_chunk_ids"] or "[]",
                 "concepts_json": d["concepts_json"] or "[]",
                 "skill": d["skill"] or "",
-                "is_verified": 1,
+                "is_verified": 0,
             })
             try:
                 concept_names = json.loads(d["concepts_json"] or "[]")
@@ -262,7 +262,7 @@ def _materialize_dynamic_questions(subject_id: int, chapter_ids: list[int], q_ty
     return created_questions
 
 
-def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], q_types: list[str], random_order: bool, question_source: str = "auto"):
+def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], q_types: list[str], random_order: bool, question_source: str = "auto", commit=True):
     """Create a quiz from Concept generation or, when unavailable, the legacy fixed bank."""
     _owned_subject(subject_id)
     if mode not in ALLOWED_MODES or not 1 <= count <= 100:
@@ -342,7 +342,7 @@ def create_quiz(subject_id: int, count: int, mode: str, chapter_ids: list[int], 
             for question, snapshot in zip(chosen, snapshots)
         ],
     )
-    db().commit()
+    if commit: db().commit()
     return session_id
 
 
@@ -373,8 +373,15 @@ def add_wrong_question(user_id: int, question_id: int):
 
 def grade_quiz(session_id: int):
     """批閱一份考卷。重複交卷不重新計分或累加錯題。"""
-    exam = _owned_quiz(session_id)
+    from storage import locked_sql
+    from personal_ai.question_validation import correct as answer_correct
+    db().execute('BEGIN IMMEDIATE')
+    exam = db().execute(locked_sql('SELECT * FROM quiz_sessions WHERE id=? AND user_id=?'),(session_id,g.user['id'])).fetchone()
+    if not exam:
+        abort(404)
     if exam["finished_at"]:
+        from personal_ai.coaching import apply_planner_quiz_result
+        apply_planner_quiz_result(g.user['id'],session_id)
         return False
 
     answers = db().execute(
@@ -398,7 +405,11 @@ def grade_quiz(session_id: int):
 
     correct = 0
     for row, snapshot, answer in prepared:
-        is_correct = answer == str(snapshot.get("answer_key", "")).strip()
+        if snapshot['q_type'] in ('單選','多選'):
+            labels={str(o['option_label']) for o in snapshot['options']}
+            if not set(answer.split(',')).issubset(labels):
+                raise ValueError('作答包含不存在的選項。')
+        is_correct = answer_correct(snapshot['q_type'],answer,snapshot.get('answer_key',''))
         correct += int(is_correct)
         db().execute(
             """
@@ -420,20 +431,21 @@ def grade_quiz(session_id: int):
         "UPDATE quiz_sessions SET correct_count=?, finished_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",
         (correct, session_id, g.user["id"]),
     )
-    db().commit()
 
     # Planner-linked quizzes are scored gates. The learner cannot manually mark
     # them complete; this hook decides pass/fail from the submitted quiz score.
     try:
         from personal_ai.coaching import apply_planner_quiz_result
-        outcome = apply_planner_quiz_result(g.user["id"], session_id)
+        outcome = apply_planner_quiz_result(g.user["id"], session_id, commit=False)
         if outcome:
             if outcome['passed']:
                 flash(f"學習規劃驗收通過：{outcome['score']:.1f} 分（門檻 {outcome['required_score']:.0f} 分）。", "success")
             else:
                 flash(f"本次尚未達標：{outcome['score']:.1f} 分（門檻 {outcome['required_score']:.0f} 分）。請補強後重新挑戰。", "error")
     except Exception as exc:
-        current_app.logger.exception("Failed to apply planner checkpoint result: %s", exc)
+        db().rollback()
+        raise ValueError("交卷與規劃更新未完成，資料已回復，請重新交卷。") from exc
+    db().commit()
     return True
 
 
@@ -560,15 +572,11 @@ def register_tye_exam(app):
                 chapter_ids = _parse_id_list(request.form.getlist("chapter_ids"))
                 q_types = request.form.getlist("q_types")
                 random_order = request.form.get("random_order", "1") == "1"
-                session_id = create_quiz(
-                    subject_id,
-                    count,
-                    request.form.get("mode", "模擬考"),
-                    chapter_ids,
-                    q_types,
-                    random_order,
-                    question_source=selected["question_source"],
-                )
+                from personal_ai.jobs import submit
+                if selected['question_source']=='auto' and selected['mode']!='錯題複習' and _concept_source_count(subject_id,chapter_ids)>0:
+                    job_id=submit(current_app._get_current_object(),g.user['id'],'quiz',dict(subject_id=subject_id,count=count,mode=selected['mode'],chapter_ids=chapter_ids,q_types=q_types,random_order=random_order,question_source='auto'))
+                    return redirect(url_for('personal_ai.job_page',job_id=job_id))
+                session_id=create_quiz(subject_id,count,selected['mode'],chapter_ids,q_types,random_order,question_source=selected['question_source'])
                 return redirect(url_for("quiz_take", sid=session_id))
             except ValueError as exc:
                 db().rollback()

@@ -27,7 +27,7 @@ def create_app(test_config=None):
     # BODY 的既有 schema 不在這裡重建；此處只補 TYE / Personal AI 自己新增的資料表。
     # 注意：舊專案 .env 可能有 AUTO_INIT_DB=false，這個旗標只控制「完整 schema」初始化，
     # 不應阻止整合模組建立自己的 extension tables。
-    if str(flask_app.config.get("DB_TYPE", "")).lower() == "mariadb":
+    if str(flask_app.config.get("DB_TYPE", "")).lower() == "mariadb" and not flask_app.config.get("TESTING") and os.getenv("AUTO_MIGRATE", "false").lower() == "true":
         from storage import _connect_mariadb, _split_sql_script
 
         extension_schema = BASE_DIR / "schema_tye_personal_mariadb.sql"
@@ -69,62 +69,17 @@ def create_app(test_config=None):
     # 模組保持獨立：只在組裝入口註冊，不修改 body/ 與 TYE/ 內部內容。
     flask_app.register_blueprint(body)
     register_tye_exam(flask_app)
-    flask_app.config.update(
-        APP_MODE=os.getenv("APP_MODE", flask_app.config.get("APP_MODE", "dev")),
-        GROQ_API_KEY=os.getenv("GROQ_API_KEY", flask_app.config.get("GROQ_API_KEY", "")),
-        LLM_PROVIDER=os.getenv("LLM_PROVIDER", flask_app.config.get("LLM_PROVIDER", "groq")),
-        LLM_BASE_URL=os.getenv("LLM_BASE_URL", flask_app.config.get("LLM_BASE_URL", "https://api.groq.com/openai/v1")),
-        LLM_API_KEY=os.getenv("LLM_API_KEY", flask_app.config.get("LLM_API_KEY", "")),
-        LLM_MODEL=os.getenv("LLM_MODEL", flask_app.config.get("LLM_MODEL", "qwen/qwen3.8-27b")),
-        CLASSIFIER_PROVIDER=os.getenv("CLASSIFIER_PROVIDER", flask_app.config.get("CLASSIFIER_PROVIDER", "groq")),
-        CLASSIFIER_BASE_URL=os.getenv("CLASSIFIER_BASE_URL", flask_app.config.get("CLASSIFIER_BASE_URL", "https://api.groq.com/openai/v1")),
-        CLASSIFIER_API_KEY=os.getenv("CLASSIFIER_API_KEY", flask_app.config.get("CLASSIFIER_API_KEY", "")),
-        CLASSIFIER_MODEL=os.getenv("CLASSIFIER_MODEL", flask_app.config.get("CLASSIFIER_MODEL", "qwen/qwen3.8-27b")),
-        PARSER_PROVIDER=os.getenv("PARSER_PROVIDER", flask_app.config.get("PARSER_PROVIDER", "groq")),
-        PARSER_BASE_URL=os.getenv("PARSER_BASE_URL", flask_app.config.get("PARSER_BASE_URL", "https://api.groq.com/openai/v1")),
-        PARSER_API_KEY=os.getenv("PARSER_API_KEY", flask_app.config.get("PARSER_API_KEY", "")),
-        PARSER_MODEL=os.getenv("PARSER_MODEL", flask_app.config.get("PARSER_MODEL", "qwen/qwen3.8-27b")),
-        GENERATOR_PROVIDER=os.getenv("GENERATOR_PROVIDER", flask_app.config.get("GENERATOR_PROVIDER", "groq")),
-        GENERATOR_BASE_URL=os.getenv("GENERATOR_BASE_URL", flask_app.config.get("GENERATOR_BASE_URL", "https://api.groq.com/openai/v1")),
-        GENERATOR_API_KEY=os.getenv("GENERATOR_API_KEY", flask_app.config.get("GENERATOR_API_KEY", "")),
-        GENERATOR_MODEL=os.getenv("GENERATOR_MODEL", flask_app.config.get("GENERATOR_MODEL", "qwen/qwen3.8-27b")),
-        REVIEWER_PROVIDER=os.getenv("REVIEWER_PROVIDER", flask_app.config.get("REVIEWER_PROVIDER", "groq")),
-        REVIEWER_BASE_URL=os.getenv("REVIEWER_BASE_URL", flask_app.config.get("REVIEWER_BASE_URL", "https://api.groq.com/openai/v1")),
-        REVIEWER_API_KEY=os.getenv("REVIEWER_API_KEY", flask_app.config.get("REVIEWER_API_KEY", "")),
-        REVIEWER_MODEL=os.getenv("REVIEWER_MODEL", flask_app.config.get("REVIEWER_MODEL", "qwen/qwen3.8-27b")),
-        COURSE_PROVIDER=os.getenv("COURSE_PROVIDER", flask_app.config.get("COURSE_PROVIDER", "groq")),
-        COURSE_BASE_URL=os.getenv("COURSE_BASE_URL", flask_app.config.get("COURSE_BASE_URL", "https://api.groq.com/openai/v1")),
-        COURSE_API_KEY=os.getenv("COURSE_API_KEY", flask_app.config.get("COURSE_API_KEY", "")),
-        COURSE_MODEL=os.getenv("COURSE_MODEL", flask_app.config.get("COURSE_MODEL", "qwen/qwen3.8-27b")),
-        TUTOR_PROVIDER=os.getenv("TUTOR_PROVIDER", flask_app.config.get("TUTOR_PROVIDER", "groq")),
-        TUTOR_BASE_URL=os.getenv("TUTOR_BASE_URL", flask_app.config.get("TUTOR_BASE_URL", "https://api.groq.com/openai/v1")),
-        TUTOR_API_KEY=os.getenv("TUTOR_API_KEY", flask_app.config.get("TUTOR_API_KEY", "")),
-        TUTOR_MODEL=os.getenv("TUTOR_MODEL", flask_app.config.get("TUTOR_MODEL", "qwen/qwen3.8-27b")),
-    )
     register_personal_ai(flask_app)
-    if str(flask_app.config.get('APP_MODE','dev')).lower() == 'dev' and flask_app.config.get('DB_TYPE') == 'sqlite':
+    from workspace_ui import register_workspace_ui
+    register_workspace_ui(flask_app)
+    if not flask_app.config.get('TESTING') and not flask_app.config.get('DB_READ_ONLY') and str(flask_app.config.get('APP_MODE','dev')).lower() == 'dev' and flask_app.config.get('DB_TYPE') == 'sqlite':
         from dev_seed import ensure_dev_seed
         with flask_app.app_context():
             ensure_dev_seed()
     return flask_app
 
 
-app = create_app()
-
-app.config.update(
-    SECRET_KEY=os.getenv("SECRET_KEY") or app.config.get("SECRET_KEY"),
-    SMTP_HOST=os.getenv("SMTP_HOST", app.config.get("SMTP_HOST", "")),
-    SMTP_PORT=os.getenv("SMTP_PORT", app.config.get("SMTP_PORT", "587")),
-    SMTP_USERNAME=os.getenv("SMTP_USERNAME", app.config.get("SMTP_USERNAME", "")),
-    SMTP_PASSWORD=os.getenv("SMTP_PASSWORD", app.config.get("SMTP_PASSWORD", "")),
-    SMTP_FROM_EMAIL=os.getenv("SMTP_FROM_EMAIL", app.config.get("SMTP_FROM_EMAIL", "")),
-    SMTP_FROM_NAME=os.getenv("SMTP_FROM_NAME", app.config.get("SMTP_FROM_NAME", "考試智伴")),
-    SMTP_SECURITY=os.getenv("SMTP_SECURITY", app.config.get("SMTP_SECURITY", "starttls")).lower(),
-    SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "false").lower() == "true",
-)
-
-
-def check_environment():
+def check_environment(app):
     print("=" * 50)
     print("環境設定檢查")
     print("=" * 50)
@@ -160,5 +115,6 @@ def check_environment():
 
 
 if __name__ == "__main__":
-    check_environment()
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    app = create_app()
+    check_environment(app)
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)

@@ -19,7 +19,7 @@
 <p class="notice info">共 {{ exam.total_count }} 題。交卷前不顯示答案；所有題目完成後才能交卷。填空會忽略前後空白，其餘文字需與標準答案完全一致。</p>
 {% endif %}
 
-<form method="post" autocomplete="off">
+<form method="post" autocomplete="off" id="quiz-form" data-quiz-id="{{exam.id}}" data-finished="{{1 if exam.finished_at else 0}}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% for row,q in items %}
   {% set question_no = loop.index %}
@@ -73,4 +73,4 @@
   <button class="action">交卷並查看成績</button>
   {% endif %}
 </form>
-{% endblock %}
+<script src="{{url_for('static',filename='js/quiz-draft.js')}}" defer></script>{% endblock %}

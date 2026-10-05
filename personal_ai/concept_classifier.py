@@ -27,6 +27,9 @@ def _question_text(item):
 def _heuristic(item):
     text = _question_text(item).lower()
     rules = [
+        (('range(', '串列', 'list('), '迴圈與串列', '索引、長度與迴圈判讀'),
+        (('type(', 'int', '字串', '變數', '型別'), '變數與型別', '辨識資料型別'),
+        (('if ', '條件判斷', '比較運算'), '條件判斷', '判讀條件結果'),
         (('二元一次', '聯立方程'), '二元一次聯立方程式', '求解與建模'),
         (('primary key', '主索引鍵', '主鍵'), '主索引鍵與資料唯一性', '辨識主索引鍵用途'),
         (('foreign key', '外部索引鍵', '外鍵'), '外部索引鍵與參照完整性', '建立資料表關聯'),
@@ -116,6 +119,34 @@ def classify_question_batch(items, subject_id, config):
     """
     concepts = _existing(subject_id)
     existing_ids = {int(c['id']) for c in concepts}
+    from .exam_modules import enabled, classify, specialist_heads
+    if enabled(config):
+        final = get_classifier_llm(config)
+        if not final.enabled:
+            raise LLMError('分工模式需要最終 LLM，請設定 CLASSIFIER_PROVIDER。')
+        output = []
+        # Keep each final response within the Groq output cap.
+        for start in range(0, len(items), 2):
+            batch = items[start:start+2]
+            proposals = [classify(item, concepts, _heuristic(item)[0]) for item in batch]
+            for item,proposal in zip(batch,proposals):
+                proposal['specialist_heads']=specialist_heads(item,subject_id)
+            payload = [dict(index=i, question=item.get('content','')[:700],
+                            answer=item.get('answer_key'), chapter=item.get('chapter_name'),
+                            proposal=proposal) for i,(item,proposal) in enumerate(zip(batch,proposals))]
+            data = final.complete_json(
+                '你是考題分類的最終裁決者。CPU 分數未校準，不代表正確率。檢查候選概念，'
+                '低信心時用簡短穩定的概念名稱。只能選提供的 concept id 或 null。'
+                '每題回傳 index、existing_concept_id、concept_name、skill、cognitive_level、confidence。只回 JSON。',
+                json.dumps(payload,ensure_ascii=False)+'\n格式：{"classifications":[{"index":0,"concept_name":"...","existing_concept_id":null,"skill":"...","cognitive_level":"understand","confidence":0.5}]}')
+            mapped = {r.get('index'):r for r in data.get('classifications',[]) if isinstance(r,dict)} if isinstance(data,dict) else {}
+            for i,(item,proposal) in enumerate(zip(batch,proposals)):
+                if i not in mapped:
+                    raise LLMError('最終分類裁決未回傳全部題目，請減少匯入題數後重試。')
+                raw = mapped[i]
+                raw['reason'] = proposal['reason'] + (' 低信心，已交 LLM 裁決。' if proposal['needs_review'] else ' 已交 LLM 最終確認。')
+                output.append(_normalize_classification(raw,item,existing_ids))
+        return output, 'CPU E5 + MiniLM NLI → ' + model_usage_label(final)
     candidates = _embedding_candidates(items, concepts, config)
     classifier = get_classifier_llm(config)
 

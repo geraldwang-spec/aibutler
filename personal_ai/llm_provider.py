@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
+import threading
 import urllib.error
 import urllib.request
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
+_OLLAMA_GATE = threading.Lock()
 
 
 class LLMError(RuntimeError):
@@ -141,7 +144,7 @@ class OpenAICompatibleLLM(BaseLLM):
         try:
             data = self._request(
                 [
-                    {"role": "system", "content": "只回答 OK。"},
+                    {"role": "system", "content": '只回 JSON：{"status":"OK"}。'},
                     {"role": "user", "content": "連線測試"},
                 ],
                 temperature=0,
@@ -159,6 +162,17 @@ class OllamaLLM(OpenAICompatibleLLM):
         super().__init__(base_url, model, api_key, timeout=timeout)
 
     def _native_chat(self, messages, temperature=0.2, images=None, num_predict=4096):
+        deadline=time.monotonic()+(self.timeout or 60)
+        if not _OLLAMA_GATE.acquire(timeout=self.timeout or 60):
+            raise LLMError('本機模型忙碌超過 60 秒，請稍後再試。')
+        try:
+            if time.monotonic() >= deadline:
+                raise LLMError('本機模型等待超過 60 秒，尚未開始生成。')
+            return self._native_chat_impl(messages,temperature,images,num_predict,deadline)
+        finally:
+            _OLLAMA_GATE.release()
+
+    def _native_chat_impl(self, messages, temperature=0.2, images=None, num_predict=4096, deadline=None):
         """Call Ollama native /api/chat with thinking explicitly disabled."""
         root = self.base_url.rstrip("/")
         if root.endswith("/v1"):
@@ -172,15 +186,36 @@ class OllamaLLM(OpenAICompatibleLLM):
         payload = json.dumps({
             "model": self.model,
             "messages": native_messages,
-            "stream": False,
+            "stream": True,
             "think": False,
             "options": {"temperature": temperature, "num_predict": int(num_predict)},
         }, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(root + "/api/chat", data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
+        deadline=deadline or time.monotonic()+(self.timeout or 60)
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                data = json.loads(response.read().decode("utf-8"))
+            with urllib.request.urlopen(req, timeout=max(.1,deadline-time.monotonic())) as response:
+                pieces=[]
+                data={}
+                for line in response:
+                    remaining=deadline-time.monotonic()
+                    if remaining <= 0:
+                        raise LLMError('本機模型生成超過 60 秒，已關閉串流，不再執行後續模型任務。')
+                    try:
+                        response.fp.raw._sock.settimeout(remaining)
+                    except AttributeError:
+                        pass
+                    if not line.strip():
+                        continue
+                    data=json.loads(line.decode('utf-8'))
+                    if data.get('error'):
+                        raise LLMError('Ollama：'+str(data['error']))
+                    pieces.append((data.get('message') or {}).get('content') or '')
+                    if data.get('done'):
+                        break
+                if not data.get('done'):
+                    raise LLMError('本機模型串流中斷，尚未完成回應。')
+                data['message']={'content':''.join(pieces)}
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
@@ -192,7 +227,8 @@ class OllamaLLM(OpenAICompatibleLLM):
         except Exception as exc:
             raise LLMError(f"Ollama API 呼叫失敗：{exc}") from exc
         content = ((data.get("message") or {}).get("content") or "")
-        return {"choices": [{"message": {"role": "assistant", "content": content}}], "_ollama": data}
+        return {"choices": [{"message": {"role": "assistant", "content": content},
+                             "finish_reason":"length" if data.get('done_reason')=='length' else 'stop'}], "_ollama": data}
 
     def _request(self, messages, temperature=0.2):
         return self._native_chat(messages, temperature=temperature, num_predict=4096)
@@ -212,36 +248,44 @@ class OllamaLLM(OpenAICompatibleLLM):
 class GroqLLM(OpenAICompatibleLLM):
     provider = "groq"
 
-    def __init__(self, model, api_key="", base_url=GROQ_BASE_URL, timeout=120):
+    def __init__(self, model, api_key="", base_url=GROQ_BASE_URL, timeout=60):
         super().__init__(base_url, model, api_key, timeout=timeout)
+        self.max_output_tokens = max(128, min(800, int(os.getenv('GROQ_MAX_OUTPUT_TOKENS', '800'))))
+        self.max_input_bytes = max(2000, min(24000, int(os.getenv('GROQ_MAX_INPUT_BYTES', '16000'))))
 
     def _request_options(self):
-        # Explicitly stay below the account's 1000 output tokens/minute limit.
-        options = {"max_completion_tokens": 800}
+        # A per-request cap; this does not replace Groq's per-minute quota.
+        options = {"max_completion_tokens": self.max_output_tokens}
+        if self.model.startswith('openai/gpt-oss-'):
+            options.update(reasoning_effort='low', include_reasoning=False,
+                           response_format={'type': 'json_object'})
         if self.model == "qwen/qwen3.8-27b":
             options["reasoning_effort"] = "none"
         return options
 
     def _request(self, messages, temperature=0.2):
-        for attempt in range(3):
+        # UTF-8 bytes are a conservative bound, not an exact tokenizer count.
+        size = len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
+        if size > self.max_input_bytes:
+            raise LLMError(f'送入模型的內容超過 {self.max_input_bytes} bytes 上限，請縮短內容或分批匯入。尚未呼叫 API。')
+        if __package__:
+            from .jobs import guard, usage
+            guard(size+self.max_output_tokens+512)
+        else:
+            usage=lambda *args:None
+        started=time.monotonic()
+        try:
+            data=super()._request(messages, temperature)
             try:
-                return super()._request(messages, temperature)
-            except LLMError as exc:
-                cause = exc.__cause__
-                if not isinstance(cause, urllib.error.HTTPError) or cause.code != 429:
-                    raise
-                # Oversized requests cannot be repaired by waiting.
-                if "request too large" in str(exc).lower():
-                    raise
-                if attempt == 2:
-                    raise LLMError("Groq 每分鐘額度仍不足，請稍後再試。") from exc
-                try:
-                    delay = float(cause.headers.get("Retry-After", "60"))
-                except (TypeError, ValueError):
-                    delay = 60
-                if delay > 60:
-                    raise LLMError("Groq 額度不足，需等待超過一分鐘，請稍後再試。") from exc
-                time.sleep(max(1, delay))
+                usage(data,self.model,time.monotonic()-started)
+            except OSError:
+                pass
+            return data
+        except LLMError as exc:
+            cause = exc.__cause__
+            if isinstance(cause, urllib.error.HTTPError) and cause.code == 429:
+                raise LLMError('Groq 額度不足或單次內容超過限制，請減少內容或稍後重試。已停止後續呼叫。') from exc
+            raise
 
     def complete_json(self, system, user):
         if not self.api_key:
@@ -341,16 +385,16 @@ def _api_key_for(config, prefix: str, provider: str, fallback_prefix: str | None
 
 
 def get_llm(config):
-    provider = str(config.get("LLM_PROVIDER", "ollama")).lower()
-    model = str(config.get("LLM_MODEL") or "qwen3.5:4b").strip()
+    provider = str(config.get("LLM_PROVIDER", "groq")).lower()
+    model = str(config.get("LLM_MODEL") or "openai/gpt-oss-20b").strip()
     base = config.get("LLM_BASE_URL") or (GROQ_BASE_URL if provider == "groq" else OLLAMA_BASE_URL)
     key = _api_key_for(config, "LLM", provider)
     return _provider_instance(provider, base, model, key)
 
 
 def get_classifier_llm(config):
-    provider = str(config.get("CLASSIFIER_PROVIDER") or "ollama").lower()
-    model = str(config.get("CLASSIFIER_MODEL") or "qwen3.5:4b").strip()
+    provider = str(config.get("CLASSIFIER_PROVIDER") or "groq").lower()
+    model = str(config.get("CLASSIFIER_MODEL") or "openai/gpt-oss-20b").strip()
     base = config.get("CLASSIFIER_BASE_URL") or (GROQ_BASE_URL if provider == "groq" else OLLAMA_BASE_URL)
     key = _api_key_for(config, "CLASSIFIER", provider, "LLM")
     primary = _provider_instance(provider, base, model, key)
@@ -368,12 +412,12 @@ def _get_role_llm(config, prefix: str, fallback_prefix: str = "LLM"):
     provider = str(
         config.get(f"{prefix}_PROVIDER")
         or config.get(f"{fallback_prefix}_PROVIDER")
-        or config.get("LLM_PROVIDER", "ollama")
+        or config.get("LLM_PROVIDER", "groq")
     ).lower()
     model = str(
         config.get(f"{prefix}_MODEL")
         or config.get(f"{fallback_prefix}_MODEL")
-        or config.get("LLM_MODEL", "qwen3.5:4b")
+        or config.get("LLM_MODEL", "openai/gpt-oss-20b")
     ).strip()
     base = (
         config.get(f"{prefix}_BASE_URL")
@@ -395,8 +439,8 @@ def _get_role_llm(config, prefix: str, fallback_prefix: str = "LLM"):
 
 
 def get_parser_llm(config):
-    provider = str(config.get("PARSER_PROVIDER") or "ollama").lower()
-    model = str(config.get("PARSER_MODEL") or "qwen3.5:4b").strip()
+    provider = str(config.get("PARSER_PROVIDER") or "groq").lower()
+    model = str(config.get("PARSER_MODEL") or "openai/gpt-oss-20b").strip()
     base = config.get("PARSER_BASE_URL") or (GROQ_BASE_URL if provider == "groq" else OLLAMA_BASE_URL)
     key = _api_key_for(config, "PARSER", provider, "LLM")
     return _provider_instance(provider, base, model, key)

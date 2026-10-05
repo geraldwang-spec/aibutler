@@ -43,6 +43,11 @@ def _lexical(user_id, subject_id, query, chapter_ids=None, limit=8):
 
 def retrieve(user_id, subject_id, query, chapter_ids=None, limit=8):
     """Use pgvector cosine distance when possible; otherwise lexical fallback."""
+    if str(current_app.config.get('EMBEDDING_PROVIDER', '')).lower() == 'cpu':
+        from .exam_modules import rank
+        candidates = [dict(row) for row in _lexical(user_id,subject_id,query,chapter_ids,max(limit,24))]
+        order = rank(query,[row['content'] for row in candidates])
+        return [candidates[i] for i,_ in order[:limit]]
     if backend() == "postgresql":
         embedder = get_embedder(current_app.config)
         if embedder.enabled:

@@ -1,0 +1,10 @@
+<section class="panel-card learning-charts" data-chart-kind="{{chart_kind}}">
+  <div class="section-heading"><div><p class="eyebrow">LEARNING INSIGHTS</p><h2>學習狀況分析</h2><p>{{chart_note}}</p></div><label class="chart-filter">分析科目<select aria-label="選擇圖表科目"><option value="">全部科目</option></select></label></div>
+  <script type="application/json" class="learning-chart-data">{{chart_rows|tojson}}</script>
+  <div class="learning-chart-grid">
+    <article class="learning-chart-card"><h3>答對與答錯分布</h3><div class="learning-pie"></div><p class="learning-chart-summary" role="status"></p><div class="learning-chart-legend"><span><i class="chart-dot correct"></i>答對</span><span><i class="chart-dot wrong"></i>答錯／未答對</span></div></article>
+    <article class="learning-chart-card"><h3>{{'章節正確率' if chart_kind=='chapters' else '最近測驗正確率'}}</h3><p class="chart-bar-note">{{'依正確率由低到高顯示最多 12 個章節；資料不足以淡色標示。' if chart_kind=='chapters' else '顯示最近 10 場已完成測驗，依時間由舊到新排列。'}}</p><div class="learning-bars"></div></article>
+  </div>
+</section>
+<link rel="stylesheet" href="{{url_for('static',filename='css/learning-charts.css')}}">
+<script src="{{url_for('static',filename='js/learning-charts.js')}}" defer></script>
