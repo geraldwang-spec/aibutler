@@ -459,7 +459,13 @@
 
   async function uploadDoc(form) {
     const file = form.elements.file.files[0];
-    if (!file || docs.busy) { if (!file) showMessage('請選擇 .txt 或 .md 檔案。', 'error'); return; }
+    if (!file || docs.busy) { if (!file) showMessage('請先選擇檔案。', 'error'); return; }
+    const maxBytes = (docs.data && docs.data.limits.max_bytes) || 5 * 1024 * 1024;
+    const mb = (n) => `${(n / 1024 / 1024).toFixed(1)} MB`;
+    if (file.size > maxBytes) {       // 先在瀏覽器擋下，不用等上傳完才知道
+      showMessage(`檔案太大（${mb(file.size)}），上限是 ${mb(maxBytes)}。請只上傳需要的章節，或改用文字版（.txt、.docx）。`, 'error');
+      return;
+    }
     const body = new FormData();
     body.append('file', file);
     body.append('title', form.elements.title.value.trim());
@@ -467,7 +473,9 @@
     try {
       const response = await fetch(`${API}/docs`, { method: 'POST', body, credentials: 'same-origin',
         headers: { 'X-CSRF-Token': CSRF, Accept: 'application/json' } });
-      const data = await response.json().catch(() => ({ ok: false, error: `伺服器回應錯誤（${response.status}）。` }));
+      const data = response.status === 413
+        ? { ok: false, error: `檔案太大，上限是 ${mb(maxBytes)}。` }
+        : await response.json().catch(() => ({ ok: false, error: `伺服器回應錯誤（${response.status}）。` }));
       if (!data.ok) throw new Error(data.error || '上傳失敗。');
       docs.data = data;
       showMessage(`已上傳「${data.uploaded.title}」，切成 ${data.uploaded.chunks} 段。下次產生 AI 說明時會參考它。`);
@@ -496,7 +504,7 @@
     }
     const full = d.documents.length >= d.limits.max_documents;
     return h('section', { class: 'bd-report__block bd-docs' }, head,
-      h('p', { class: 'bd-muted', text: `上傳教練給的文章、訓練原則或課表（${d.limits.file_types.map((t) => '.' + t).join('、')}；最多 ${d.limits.max_chars.toLocaleString()} 字、${d.limits.max_documents} 篇）。產生 AI 說明時會找出相關段落，並在建議後面標出處。掃描檔或圖片無法讀取。` }),
+      h('p', { class: 'bd-muted', text: `上傳教練給的文章、訓練原則或課表（${d.limits.file_types.map((t) => '.' + t).join('、')}；每篇最多 ${(d.limits.max_bytes / 1024 / 1024).toFixed(0)} MB、${d.limits.max_chars.toLocaleString()} 字，最多 ${d.limits.max_documents} 篇）。產生 AI 說明時會找出相關段落，並在建議後面標出處。掃描檔或圖片無法讀取。` }),
       h('form', { class: 'bd-docs__form', dataset: { form: 'doc-upload' } },
         h('label', { class: 'bd-sr', for: 'bd-doc-file', text: '選擇檔案' }),
         h('input', { id: 'bd-doc-file', name: 'file', type: 'file', accept: d.limits.file_types.map((t) => '.' + t).join(','), disabled: full || docs.busy }),

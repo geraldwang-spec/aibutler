@@ -121,6 +121,7 @@ LLM_REPORT_PER_HOUR = 10
 class DocumentRules:
     """教練文章（RAG）的限制：控制 embedding 費用與檢索品質。"""
     FILE_TYPES = ('txt', 'md', 'pdf', 'docx', 'xlsx', 'csv')   # 轉換由共用的 modules.document_parser 負責
+    MAX_BYTES = 5 * 1024 * 1024   # 檔案大小上限，與 smartlife.py 的 MAX_CONTENT_LENGTH 相同
     MAX_CHARS = 20000          # 一篇最多幾個字
     MAX_DOCUMENTS = 10         # 每人最多幾篇
     MAX_CHUNKS = 80            # 一篇最多切成幾段
@@ -439,7 +440,7 @@ class BodyService:
                      model=(d['file_path'] or '').replace('embedding:', '', 1), usable=d['file_path'] == tag)
                 for d in self.sql.documents()]
         return dict(enabled=self.embedder is not None, documents=docs, limits=dict(
-            max_chars=DocumentRules.MAX_CHARS, max_documents=DocumentRules.MAX_DOCUMENTS,
+            max_chars=DocumentRules.MAX_CHARS, max_documents=DocumentRules.MAX_DOCUMENTS, max_bytes=DocumentRules.MAX_BYTES,
             file_types=list(DocumentRules.FILE_TYPES)))
 
     def upload_document(self, filename, raw, title=''):
