@@ -1,5 +1,5 @@
 {% extends 'live_base.html' %}
-{% block content %}
+{% block content %}<section class="panel-card"><h2>考題分工模式</h2><p>狀態：{{ '已啟用' if exam_modular_enabled else '未啟用' }} · CPU 模型檔案：{{ '已下載（尚未推論驗證）' if exam_cpu_models_ready else '尚未完整下載' }}</p><div class="table-scroll"><table><thead><tr><th>模組</th><th>執行位置</th><th>工作</th></tr></thead><tbody><tr><td>Multilingual E5 Small</td><td>CPU</td><td>概念候選、教材片段排序、語意近似初篩</td></tr><tr><td>MiniLM NLI</td><td>CPU</td><td>概念分類與教材支持／矛盾初篩；分數未校準</td></tr><tr><td>題型／概念／技能專用分類頭</td><td>CPU</td><td>人工標註資料足夠後訓練；未訓練時不當成可靠判斷</td></tr><tr><td>入門模板與格式檢查</td><td>CPU</td><td>程式計算答案、選項完整性檢查</td></tr><tr><td>Groq GPT-OSS 20B 最終裁決</td><td>Groq 雲端</td><td>必要新題生成、每兩題短批次審題；輸出最多 800 tokens</td></tr></tbody></table></div><p>普通固定抽題不使用 AI。模型只在首次使用載入 CPU，啟動頁面不會自動測試模型。</p></section>
 <section class="panel-card"><h2>目前執行模式</h2><div class="stats-grid">
 <div class="stat-card"><strong>APP_MODE</strong><span>{{ app_mode }}</span></div>
 <div class="stat-card"><strong>Database</strong><span>{{ db_type }}</span></div>
@@ -8,14 +8,14 @@
 <div class="stat-card"><strong>Reviewer</strong><span>{{ reviewer_provider }} / {{ reviewer_model or '未指定' }}</span></div>
 <div class="stat-card"><strong>Embedding</strong><span>{{ embedding_provider }} / {{ embedding_model or '未指定' }}</span></div>
 </div>
-<p class="notice {{'success' if groq_key_configured else 'info'}}"><strong>Groq API：</strong>{{'已設定 API Key，優先使用雲端高算力模型。' if groq_key_configured else '尚未設定 API Key；Generator / Reviewer / Course / Tutor 會自動改走本機 qwen3.5:4b fallback。'}}</p>
+<p class="notice {{'success' if groq_key_configured else 'info'}}"><strong>Groq API：</strong>{{'已設定 API Key；各角色依自己的 Provider 設定執行。' if groq_key_configured else '尚未設定 API Key；本機 Ollama 角色不需要金鑰。'}}</p>
 </section>
 
 <section class="panel-card"><h2>模型分工（正式驗證設定）</h2><table class="data-table"><thead><tr><th>角色</th><th>Primary</th><th>Fallback / 本機</th><th>用途</th></tr></thead><tbody>
 <tr><td>Concept Classifier</td><td>{{ classifier_provider }} / {{ classifier_model }}</td><td>—</td><td>文件/題目概念、Skill、認知層次與 Concept 合併判斷。</td></tr>
 <tr><td>Question Generator</td><td>{{ generator_provider }} / {{ generator_model }}</td><td>{{ generator_fallback_model or '—' }}</td><td>依 Concept + RAG + 題目樣本建立全新考題。</td></tr>
 <tr><td>Question Reviewer</td><td>{{ reviewer_provider }} / {{ reviewer_model }}</td><td>{{ reviewer_fallback_model or '—' }}</td><td>答案一致性、歧義、超範圍與近似題檢查。</td></tr>
-<tr><td>Embedding</td><td>{{ embedding_provider }} / {{ embedding_model }}</td><td>—</td><td>Concept 相似度、教材 RAG、pgvector。</td></tr>
+<tr><td>Embedding</td><td>{{ embedding_provider }} / {{ embedding_model }}</td><td>—</td><td>Concept 相似度、教材 RAG 候選排序（CPU）。</td></tr>
 <tr><td>Micro-course Builder</td><td>{{ course_provider }} / {{course_model}}</td><td>{{course_fallback_model or '—'}}</td><td>弱項 + 講義 RAG → 3～15 分鐘互動補強課。</td></tr>
 <tr><td>Interactive Tutor</td><td>{{ tutor_provider }} / {{tutor_model}}</td><td>{{tutor_fallback_model or '—'}}</td><td>課程/錯題追問、換例子、釐清誤解。</td></tr>
 <tr><td>Speech-to-Text</td><td>{{stt_model}}（{{stt_provider}}）</td><td>—</td><td>語音輸入；目前 {{'已啟用' if voice_enabled else '模型可先下載，UI 語音模式尚未啟用'}}。</td></tr>
@@ -28,15 +28,5 @@
 {% if result %}<p class="notice {{'success' if result.ok else 'error'}}">{{label}}：{{result.message}}</p>{% endif %}
 {% endfor %}</section>
 
-<section class="panel-card"><h2>目前 Hybrid Routing</h2><pre>Local / Ollama
-  qwen3.5:4b      → Classifier + 所有雲端角色 fallback
-  bge-m3          → Embedding / RAG
 
-Groq (GROQ_API_KEY 設定後)
-  qwen/qwen3.8-27b    → Generator / Reviewer
-  openai/gpt-oss-120b → Micro-course / Tutor
-
-Voice (本機下載、後續啟用)
-  Whisper large-v3
-  Kokoro-82M-v1.1-zh</pre></section>
 {% endblock %}

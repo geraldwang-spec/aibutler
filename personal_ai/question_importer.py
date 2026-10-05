@@ -225,17 +225,33 @@ def extract_with_llm(sections, default_chapter: str, config):
     llm = get_parser_llm(config)
     if not llm.enabled or getattr(llm, 'provider', '') == 'mock':
         raise LLMError('目前沒有可用的真實 LLM 題庫解析器；DEV Mock 只測流程，不拿來判讀題庫。')
-    source = '\n\n'.join(f"[{s.get('locator','')}]\n{s.get('text','')}" for s in sections)
-    # Keep the request bounded for local models. Larger documents should later be handled page-by-page.
-    source = source[:20000]
-    system = '''你是題庫文件解析器。你的工作是忠實擷取文件中已存在的考題，不得自行創作新題或改寫答案。\n只回傳 JSON，不要 Markdown。若答案在文件後方的答案區，必須正確對應題號。'''
-    user = f'''請從以下文件擷取考題。支援單選、多選、是非、填空。\n預設章節：{default_chapter}\n\nJSON 格式：\n{{"questions":[{{"chapter_name":"...","q_type":"單選|多選|是非|填空","content":"...","options":{{"A":"...","B":"...","C":"...","D":"..."}},"answer_key":"B 或 A,C 或 是/否 或填空文字","explanation":"文件有就保留，沒有則空字串","difficulty":2}}]}}\n\n文件內容：\n{source}'''
-    data = llm.complete_json(system, user)
-    result = []
-    for raw in (data.get('questions') if isinstance(data, dict) else []) or []:
-        item = _normalize_llm_item(raw, default_chapter)
-        if item:
-            result.append(item)
+    source='\n'.join(section.get('text','') for section in sections)
+    answer_keys,answer_notes=_answer_key(source)
+    main=re.split(r'(?im)^.*(?:答案區|Answer\s*Key).*$',source,maxsplit=1)[0]
+    blocks=[];current=[];number=None
+    for line in main.splitlines():
+        found=_question_start(line)
+        if found is not None:
+            if current and number is not None: blocks.append((number,'\n'.join(current)))
+            current=[line];number=found
+        else: current.append(line)
+    if current: blocks.append((number,'\n'.join(current)))
+    if not blocks: raise LLMError('沒有可辨識的題目區塊。請加上題號後重試。')
+    result=[]
+    for number,block in blocks:
+        if not block.strip(): continue
+        if len(block.encode('utf-8'))>7000:
+            raise LLMError('單一題目區塊太長，請依題號拆分。尚未省略任何尾段內容。')
+        answer=answer_keys.get(number,'');note=answer_notes.get(number,'')
+        system='你是文件題庫解析器，只擷取本區塊的一道既有完整題目，禁止自行創作或補答案。使用繁體中文，短 JSON。'
+        prompt=f'預設章節：{default_chapter}\n題目區塊：\n{block}\n對應答案區：{answer}\n解析：{note}\n'
+        prompt+='回傳 {"questions":[{"chapter_name":"...","q_type":"單選|多選|是非|填空","content":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"answer_key":"...","explanation":"文件有就保留，沒有則空字串","difficulty":2}]}。只回一題；沒有答案不得猜測。'
+        data=llm.complete_json(system,prompt)
+        raw=data.get('questions',[]) if isinstance(data,dict) else []
+        if len(raw)!=1: raise LLMError('模型未完整擷取此題，請在文字編輯區修正後重試。')
+        item=_normalize_llm_item(raw[0],default_chapter)
+        if not item: raise LLMError('題目擷取缺少內容或答案，已停止整批匯入。')
+        result.append(item)
     return result
 
 
@@ -247,7 +263,7 @@ def extract_pdf_with_vision(path: Path, default_chapter: str, config):
     if not llm.enabled or getattr(llm, 'provider', '') == 'mock':
         raise LLMError('Vision 解析需要真實模型。')
     if getattr(llm, 'provider', '') != 'ollama':
-        raise LLMError('目前 PDF Vision fallback 需要本機 Ollama 多模態模型。')
+        raise LLMError('目前的 Groq GPT-OSS 使用文字輸入。掃描 PDF 請先轉為可選取文字的 PDF 或文字題庫再匯入。')
     try:
         import fitz
     except ImportError as exc:
@@ -300,24 +316,14 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
         return by_rules, '快速規則解析'
 
     if mode == 'llm':
-        if is_pdf and not rule_reliable:
-            return extract_pdf_with_vision(path, default_chapter, config), 'AI Vision 強化解析'
         items = extract_with_llm(sections, default_chapter, config)
         if items:
             return items, 'LLM 文字強化解析'
-        if is_pdf:
-            return extract_pdf_with_vision(path, default_chapter, config), 'AI Vision 強化解析'
+
         return [], 'LLM 文字強化解析'
 
     if rule_reliable and len(by_rules) >= 2:
         return by_rules, '自動：快速規則解析'
-    if is_pdf and not rule_reliable:
-        try:
-            items = extract_pdf_with_vision(path, default_chapter, config)
-            if items:
-                return items, '自動：AI Vision 解析'
-        except LLMError:
-            pass
     try:
         items = extract_with_llm(sections, default_chapter, config)
         if items:

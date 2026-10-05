@@ -4,6 +4,7 @@ from pathlib import Path
 from flask import Blueprint,current_app,g,redirect,render_template,request,flash,url_for,abort
 from auth import login_required
 from storage import db, backend
+from .jobs import submit, read as read_job, update as update_job
 from .parsers import parse_file,chunk_sections
 from .services import generate_question_drafts
 from .llm_provider import LLMError, get_llm, get_classifier_llm, get_generator_llm, get_reviewer_llm, get_course_llm, get_tutor_llm
@@ -39,7 +40,7 @@ def knowledge():
             sections=parse_file(path); chunks=chunk_sections(sections)
             vectors=None; embedding_model=None
             embedder=get_embedder(current_app.config)
-            if backend()=='postgresql' and embedder.enabled and chunks:
+            if backend()=='postgresql' and embedder.enabled and embedder.provider != 'cpu' and chunks:
                 vectors=embedder.embed([c['text'] for c in chunks]); embedding_model=embedder.model
                 if len(vectors)!=len(chunks): raise RuntimeError('Embedding 回傳數量與 chunks 不一致。')
             mid=db().execute('INSERT INTO materials(user_id,subject_id,title,file_path,file_type,page_count,parse_status) VALUES (?,?,?,?,?,?,?)',(g.user['id'],sid,Path(f.filename).name,str(path),ext.lstrip('.'),len(sections),'完成')).lastrowid
@@ -68,8 +69,12 @@ def ai_questions():
             chapter_ids=[int(x) for x in request.form.getlist('chapter_ids') if x.isdigit()]
             count=max(1,min(20,int(request.form.get('count','5')))); difficulty=max(1,min(5,int(request.form.get('difficulty','3'))))
             qtypes=request.form.getlist('q_types') or ['單選']
-            ids=generate_question_drafts(current_app.config,g.user['id'],sid,chapter_ids,count,qtypes,difficulty,request.form.get('focus','').strip())
-            flash(f'已產生 {len(ids)} 題草稿，請先人工審核再加入正式題庫。','success'); return redirect(url_for('personal_ai.ai_questions'))
+            generation_mode=request.form.get('generation_mode','hybrid')
+            if generation_mode not in ('hybrid','novel'):
+                raise ValueError('出題策略設定不正確。')
+            generation_config=dict(current_app.config,EXAM_GENERATION_MODE=generation_mode)
+            job_id=submit(current_app._get_current_object(),g.user['id'],'questions',dict(generation_mode=generation_mode,arguments=dict(subject_id=sid,chapter_ids=chapter_ids,count=count,q_types=qtypes,difficulty=difficulty,focus=request.form.get('focus','').strip())))
+            return redirect(url_for('personal_ai.job_page',job_id=job_id))
         except (ValueError,LLMError,RuntimeError) as exc: error=str(exc)
     subjects=_subjects(); chapters=db().execute('''SELECT c.* FROM chapters c JOIN subjects s ON s.id=c.subject_id WHERE s.created_by=? ORDER BY c.subject_id,c.order_no,c.id''',(g.user['id'],)).fetchall()
     drafts=db().execute('''SELECT d.*,s.subject_name,c.chapter_name FROM ai_question_drafts d JOIN subjects s ON s.id=d.subject_id LEFT JOIN chapters c ON c.id=d.chapter_id WHERE d.user_id=? ORDER BY d.id DESC LIMIT 50''',(g.user['id'],)).fetchall()
@@ -79,17 +84,46 @@ def ai_questions():
 @bp.post('/ai/questions/<int:draft_id>/approve')
 @login_required
 def approve_question(draft_id):
-    d=db().execute('SELECT * FROM ai_question_drafts WHERE id=? AND user_id=?',(draft_id,g.user['id'])).fetchone()
-    if not d or d['status']!='draft': abort(404)
-    chapter_id=d['chapter_id']
-    if not chapter_id:
-        flash('跨章節草稿請先指定章節後再核准。','error'); return redirect(url_for('personal_ai.ai_questions'))
-    qid=db().execute('INSERT INTO questions(chapter_id,q_type,content,answer_key,explanation,difficulty,source) VALUES (?,?,?,?,?,?,?)',(chapter_id,d['q_type'],d['content'],d['answer_key'],d['explanation'],d['difficulty'],'rag_llm')).lastrowid
-    opts=json.loads(d['options_json'] or '{}')
-    for n,(label,text) in enumerate(opts.items(),1): db().execute('INSERT INTO question_options(question_id,option_label,option_text,order_no) VALUES (?,?,?,?)',(qid,label,text,n))
-    db().execute('INSERT INTO question_metadata(question_id,source_type,generation_model,evidence_chunk_ids,concepts_json,skill,is_verified) VALUES (?,?,?,?,?,?,1)',(qid,'rag_llm',d['model_name'],d['evidence_chunk_ids'],d['concepts_json'],d['skill']))
-    db().execute("UPDATE ai_question_drafts SET status='approved',approved_question_id=? WHERE id=?",(qid,draft_id)); db().commit()
-    flash('已加入正式題庫。','success'); return redirect(url_for('personal_ai.ai_questions'))
+    from storage import locked_sql
+    from .question_validation import validate
+    db().execute('BEGIN IMMEDIATE')
+    d=db().execute(locked_sql('SELECT * FROM ai_question_drafts WHERE id=? AND user_id=?'),(draft_id,g.user['id'])).fetchone()
+    if not d: abort(404)
+    if d['status']!='draft':
+        db().rollback()
+        return redirect(url_for('personal_ai.ai_questions'))
+    action=request.form.get('action','approve')
+    if action=='reject':
+        db().execute("UPDATE ai_question_drafts SET status='rejected' WHERE id=?",(draft_id,)); db().commit()
+        return redirect(url_for('personal_ai.ai_questions'))
+    try:
+        data={k:request.form.get(k,d[k]) for k in ('q_type','content','answer_key','explanation','difficulty')}
+        options=json.loads(d['options_json'] or '{}')
+        options={k:request.form.get('option_'+k,options.get(k,'')) for k in 'ABCD'}
+        data,pairs=validate(data,options)
+        chapter_id=int(request.form.get('chapter_id') or d['chapter_id'] or 0)
+        if not db().execute('SELECT 1 FROM chapters WHERE id=? AND subject_id=?',(chapter_id,d['subject_id'])).fetchone():
+            raise ValueError('請指定此科目的章節。')
+        db().execute('UPDATE ai_question_drafts SET chapter_id=?,content=?,answer_key=?,explanation=?,options_json=?,difficulty=? WHERE id=?',
+                     (chapter_id,data['content'],data['answer_key'],data['explanation'],json.dumps(dict(pairs),ensure_ascii=False),data['difficulty'],draft_id))
+        if action=='save':
+            db().commit(); flash('草稿已修正。','success')
+            return redirect(url_for('personal_ai.ai_questions'))
+        qid=db().execute('INSERT INTO questions(chapter_id,q_type,content,answer_key,explanation,difficulty,source) VALUES (?,?,?,?,?,?,?)',
+             (chapter_id,data['q_type'],data['content'],data['answer_key'],data['explanation'],data['difficulty'],'rag_llm')).lastrowid
+        for n,(label,text) in enumerate(pairs,1):
+            db().execute('INSERT INTO question_options(question_id,option_label,option_text,order_no) VALUES (?,?,?,?)',(qid,label,text,n))
+        db().execute('INSERT INTO question_metadata(question_id,source_type,generation_model,evidence_chunk_ids,concepts_json,skill,is_verified) VALUES (?,?,?,?,?,?,1)',
+             (qid,'human_approved',d['model_name'],d['evidence_chunk_ids'],d['concepts_json'],d['skill']))
+        for name in json.loads(d['concepts_json'] or '[]'):
+            co=db().execute('SELECT id FROM concepts WHERE subject_id=? AND lower(name)=lower(?)',(d['subject_id'],str(name))).fetchone()
+            if co:
+                db().execute('INSERT INTO question_concepts(question_id,concept_id,weight) VALUES (?,?,1)',(qid,co['id']))
+        db().execute("UPDATE ai_question_drafts SET status='approved',approved_question_id=? WHERE id=?",(qid,draft_id)); db().commit()
+        flash('已加入正式題庫並建立概念關聯。','success')
+    except (ValueError,TypeError) as exc:
+        db().rollback(); flash(str(exc),'error')
+    return redirect(url_for('personal_ai.ai_questions'))
 
 
 @bp.get('/ai/concepts')
@@ -167,6 +201,8 @@ def ai_status():
         tutor_model=current_app.config.get('TUTOR_MODEL','') or getattr(tutor,'model',''),
         tutor_fallback_model=current_app.config.get('TUTOR_FALLBACK_MODEL',''),
         groq_key_configured=bool(current_app.config.get('GROQ_API_KEY')),
+        exam_modular_enabled=str(current_app.config.get('EXAM_MODULAR_AI','false')).lower()=='true',
+        exam_cpu_models_ready=all((Path(__file__).resolve().parents[1]/'models'/'exam'/name/'onnx'/'model.onnx').is_file() for name in ('embedding','nli')),
         voice_enabled=current_app.config.get('VOICE_ENABLED',False),
         stt_provider=current_app.config.get('STT_PROVIDER','faster_whisper'),
         stt_model=current_app.config.get('STT_MODEL','large-v3'),
@@ -192,9 +228,14 @@ def wrong_tutor(question_id):
             followup=(request.form.get('followup') or '').strip()
             if len(followup)>1500:
                 raise ValueError('追問內容不可超過 1500 字。')
-            result=answer_wrong_question(g.user['id'],question_id,followup)
+            job_id=submit(current_app._get_current_object(),g.user['id'],'wrong_tutor',dict(question_id=question_id,followup=followup))
+            return redirect(url_for('personal_ai.job_page',job_id=job_id))
         else:
-            result=answer_wrong_question(g.user['id'],question_id,'')
+            from .coaching import wrong_question_context
+            q = wrong_question_context(g.user['id'],question_id)
+            if not q: abort(404)
+            history = tutor_history(g.user['id'],question_id)
+            result = dict(question=q,answer=history[-1]['content'] if history else '',chunks=[],mode='已儲存教學')
     except (ValueError,RuntimeError) as exc:
         error=str(exc)
     history=tutor_history(g.user['id'],question_id)
@@ -247,7 +288,7 @@ def adaptive_planner():
             phases=db().execute("SELECT * FROM learning_phases WHERE goal_id=? ORDER BY phase_no",(goal_id,)).fetchall()
             milestones=db().execute("SELECT * FROM learning_milestones WHERE goal_id=? ORDER BY target_date,id",(goal_id,)).fetchall()
             raw_tasks=db().execute("""SELECT lt.*,lp.name phase_name FROM learning_tasks lt LEFT JOIN learning_phases lp ON lp.id=lt.phase_id
-                WHERE lt.goal_id=? AND lt.user_id=? ORDER BY lt.task_date,lt.id LIMIT 366""",(goal_id,g.user['id'])).fetchall()
+                WHERE lt.goal_id=? AND lt.user_id=? ORDER BY lt.task_date,lt.id""",(goal_id,g.user['id'])).fetchall()
             attempts=db().execute("""SELECT lca.* FROM learning_checkpoint_attempts lca
                 JOIN learning_tasks lt ON lt.id=lca.task_id WHERE lt.goal_id=? AND lt.user_id=? ORDER BY lca.id DESC""",(goal_id,g.user['id'])).fetchall()
             latest={}
@@ -316,11 +357,8 @@ def adaptive_plan_checkpoint_start(task_id):
 
     from TYE.exam_module import create_quiz
     try:
-        session_id=create_quiz(int(task['subject_id']),int(task['question_count']), '模擬考', chapter_ids,
-                               ['單選','多選','是非','填空'], True)
-        register_planner_quiz_attempt(g.user['id'],task_id,session_id)
-        flash(f"已建立系統測驗：{task['title']}。成績達 {planner_task_required_score(task):.0f}% 才算通過。",'info')
-        return redirect(url_for('quiz_take',sid=session_id))
+        job_id=submit(current_app._get_current_object(),g.user['id'],'quiz',dict(subject_id=int(task['subject_id']),count=int(task['question_count']),mode='模擬考',chapter_ids=chapter_ids,q_types=['單選','多選','是非','填空'],random_order=True,question_source='auto',planner_task_id=task_id))
+        return redirect(url_for('personal_ai.job_page',job_id=job_id))
     except (ValueError,RuntimeError,LLMError) as exc:
         db().rollback(); flash(str(exc),'error')
         return redirect(url_for('personal_ai.adaptive_planner',goal_id=task['goal_id']))
@@ -346,9 +384,8 @@ def micro_courses():
         try:
             concept_id=int(request.form.get('concept_id','0'))
             minutes=max(3,min(15,int(request.form.get('minutes','5'))))
-            course_id=create_micro_course(g.user['id'],concept_id,minutes)
-            flash('已依目前弱項與教材建立一堂短課程。','success')
-            return redirect(url_for('personal_ai.micro_course',course_id=course_id))
+            job_id=submit(current_app._get_current_object(),g.user['id'],'course',dict(concept_id=concept_id,minutes=minutes))
+            return redirect(url_for('personal_ai.job_page',job_id=job_id))
         except (ValueError,TypeError,RuntimeError) as exc:
             db().rollback(); error=str(exc)
     subjects=_subjects()
@@ -374,7 +411,8 @@ def micro_course(course_id):
                 correct,feedback=answer_step(g.user['id'],course_id,step_id,answer)
                 flash(('答對了。' if correct else '回答已記錄。')+' '+feedback,'success' if correct else 'info')
             elif action=='ask':
-                ask_course_tutor(g.user['id'],course_id,request.form.get('question',''))
+                job_id=submit(current_app._get_current_object(),g.user['id'],'course_tutor',dict(course_id=course_id,question=request.form.get('question','')))
+                return redirect(url_for('personal_ai.job_page',job_id=job_id))
             elif action=='complete':
                 complete_course(g.user['id'],course_id)
                 flash('這堂微課程已完成。接下來可回到模擬考，用全新題目確認是否真正掌握。','success')
@@ -388,3 +426,97 @@ def micro_course(course_id):
                            voice_enabled=current_app.config.get('VOICE_ENABLED',False),
                            stt_model=current_app.config.get('STT_MODEL','large-v3'),
                            tts_model=current_app.config.get('TTS_MODEL','hexgrad/Kokoro-82M'))
+
+
+@bp.get('/ai/jobs/<job_id>')
+@login_required
+def job_page(job_id):
+    job=read_job(current_app,job_id,g.user['id'])
+    if not job: abort(404)
+    return render_template('ai_job.html',title='AI 工作',job=job,result=json.loads(job['result']) if job['result'] else None)
+
+@bp.get('/ai/jobs/<job_id>/status')
+@login_required
+def job_status(job_id):
+    from flask import jsonify
+    job=read_job(current_app,job_id,g.user['id'])
+    if not job: abort(404)
+    return jsonify({k:job[k] for k in ('status','calls','input_tokens','output_tokens','error')},result=json.loads(job['result']) if job['result'] else None)
+
+@bp.post('/ai/jobs/<job_id>/cancel')
+@login_required
+def job_cancel(job_id):
+    job=read_job(current_app,job_id,g.user['id'])
+    if not job: abort(404)
+    if job['status'] in ('queued','running'): update_job(current_app,job_id,cancel=1)
+    return redirect(url_for('personal_ai.job_page',job_id=job_id))
+
+
+@bp.get('/chat')
+@login_required
+def chat_index():
+    chats=db().execute('SELECT * FROM chat_sessions WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall()
+    return render_template('chat.html',title='AI 對話',chats=chats,chat=None,subjects=_subjects())
+
+@bp.post('/chat/new')
+@login_required
+def chat_new():
+    title=(request.form.get('title') or '').strip()
+    if not title or len(title)>120: abort(400,'對話主題需為 1–120 字。')
+    cid=db().execute('INSERT INTO chat_sessions(user_id,title) VALUES (?,?)',(g.user['id'],title)).lastrowid; db().commit()
+    return redirect(url_for('personal_ai.chat_page',chat_id=cid))
+
+@bp.route('/chat/<int:chat_id>',methods=['GET','POST'])
+@login_required
+def chat_page(chat_id):
+    chat=db().execute('SELECT * FROM chat_sessions WHERE id=? AND user_id=?',(chat_id,g.user['id'])).fetchone()
+    if not chat: abort(404)
+    if request.method=='POST':
+        try:
+            job_id=submit(current_app._get_current_object(),g.user['id'],'chat',dict(chat_id=chat_id,question=request.form.get('question',''),subject_id=request.form.get('subject_id',type=int)))
+            return redirect(url_for('personal_ai.job_page',job_id=job_id))
+        except ValueError as exc: flash(str(exc),'error')
+    chats=db().execute('SELECT * FROM chat_sessions WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall()
+    messages=db().execute('SELECT * FROM chat_messages WHERE chat_id=? ORDER BY id',(chat_id,)).fetchall()
+    return render_template('chat.html',title=chat['title'],chat=chat,chats=chats,messages=messages,subjects=_subjects())
+
+
+@bp.post('/ai/concepts/<int:concept_id>/change')
+@login_required
+def concept_change(concept_id):
+    from .concept_admin import change
+    try:
+        change(g.user['id'],concept_id,request.form.get('action','rename'),request.form.get('name',''),request.form.get('target_id',type=int),request.form.get('description',''))
+        flash('概念已更新，歷史題目快照保留。','success')
+    except (ValueError,RuntimeError) as exc:
+        db().rollback();flash(str(exc),'error')
+    return redirect(url_for('personal_ai.concepts',subject_id=request.form.get('subject_id',type=int)))
+
+@bp.post('/ai/concepts/source/<int:source_id>')
+@login_required
+def concept_source_move(source_id):
+    from .concept_admin import move_source
+    try:
+        move_source(g.user['id'],source_id,request.form.get('name',''),request.form.get('skill',''));flash('來源歸類已調整。','success')
+    except ValueError as exc:
+        db().rollback();flash(str(exc),'error')
+    return redirect(url_for('personal_ai.concepts',subject_id=request.form.get('subject_id',type=int)))
+
+@bp.post('/ai/concepts/classify-fixed')
+@login_required
+def classify_fixed_start():
+    try:
+        sid=int(request.form.get('subject_id','0'));_subject(sid)
+        job_id=submit(current_app._get_current_object(),g.user['id'],'classify_fixed',dict(subject_id=sid))
+        return redirect(url_for('personal_ai.job_page',job_id=job_id))
+    except ValueError as exc:
+        flash(str(exc),'error');return redirect(url_for('personal_ai.concepts'))
+
+@bp.post('/ai/planner/task/<int:task_id>/read')
+@login_required
+def planner_read(task_id):
+    task=db().execute('SELECT * FROM learning_tasks WHERE id=? AND user_id=?',(task_id,g.user['id'])).fetchone()
+    if not task:abort(404)
+    if not task['question_count']:
+        db().execute("UPDATE learning_tasks SET status='read',completed_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,));db().commit()
+    return redirect(url_for('personal_ai.adaptive_planner',goal_id=task['goal_id']))

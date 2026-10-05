@@ -23,6 +23,10 @@ class StorageIntegrityError(Exception):
     """Backend-neutral unique/FK/constraint error."""
 
 
+class DatabaseUnavailable(RuntimeError):
+    pass
+
+
 class CompatRow(dict):
     """Mapping row that also supports SQLite-style numeric indexing."""
 
@@ -182,6 +186,8 @@ def _connect_mariadb(app=None):
         read_timeout=20,
         write_timeout=20,
     )
+    with raw.cursor() as cursor:
+        cursor.execute('SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED')
     return MariaConnection(raw, pymysql)
 
 
@@ -195,8 +201,47 @@ def _connect_sqlite(app=None):
 
 def db():
     if "db" not in g:
-        g.db = _connect_mariadb() if _backend() == "mariadb" else _connect_sqlite()
+        kind = _backend()
+        if kind not in ('mariadb', 'sqlite'):
+            raise RuntimeError('不支援的 DB_TYPE；目前支援 mariadb 或 sqlite。PostgreSQL 不可當成未同步的備援。')
+        try:
+            g.db = _connect_mariadb() if kind == 'mariadb' else _connect_sqlite()
+            g.db_read_only = bool(current_app.config.get('DB_READ_ONLY'))
+        except Exception:
+            standby = current_app.config.get('DB_STANDBY_PATH')
+            if kind != 'mariadb' or not current_app.config.get('DB_STANDBY_ENABLED') or not standby:
+                raise DatabaseUnavailable('資料庫暫時無法連線。尚未啟用可用的唯讀快照，請稍後再試。') from None
+            path = Path(standby).resolve()
+            if not path.is_file():
+                raise DatabaseUnavailable('主資料庫無法連線，且沒有已建立的備援快照。') from None
+            g.db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=10)
+            g.db.row_factory = sqlite3.Row
+            g.db_read_only = True
+            current_app.logger.warning('Primary database unavailable; using read-only standby snapshot')
     return g.db
+
+
+def read_only():
+    return bool(getattr(g, 'db_read_only', False) or current_app.config.get('DB_READ_ONLY'))
+
+
+def locked_sql(sql):
+    return sql + (' FOR UPDATE' if backend() == 'mariadb' and not read_only() else '')
+
+
+def register_storage(app):
+    if app.extensions.get('storage_teardown'):
+        return
+    app.extensions['storage_teardown'] = True
+
+    @app.teardown_appcontext
+    def close_db(error=None):
+        connection = g.pop('db', None)
+        if connection is not None:
+            try:
+                connection.rollback()
+            finally:
+                connection.close()
 
 
 def _split_sql_script(script: str):
@@ -255,8 +300,4 @@ def init_storage(app):
         finally:
             connection.close()
 
-    @app.teardown_appcontext
-    def close_db(error=None):
-        connection = g.pop("db", None)
-        if connection is not None:
-            connection.close()
+    register_storage(app)

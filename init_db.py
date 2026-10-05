@@ -1,5 +1,6 @@
 """Initialize/check the database configured in .env. Team default: MariaDB."""
-from app import app
+from app import create_app
+app = create_app()
 from storage import init_storage
 
 # Remote MariaDB no longer auto-runs the whole schema on every Flask startup.

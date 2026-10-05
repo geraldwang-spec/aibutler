@@ -114,9 +114,41 @@ class OllamaEmbedding(BaseEmbedding):
             return {"ok": False, "message": str(exc), "provider": self.provider, "model": self.model}
 
 
+class CPUEmbedding(BaseEmbedding):
+    enabled = True
+    provider = 'cpu'
+    model = 'intfloat/multilingual-e5-small'
+
+    @staticmethod
+    def _encode(texts):
+        from .exam_modules import cpu, ExamModuleError
+        try:
+            return cpu('embed', texts=texts)
+        except ExamModuleError as exc:
+            raise EmbeddingError(str(exc)) from exc
+
+    def embed(self, texts):
+        vectors = []
+        for start in range(0, len(texts), 8):
+            vectors.extend(self._encode(['passage: ' + str(t) for t in texts[start:start+8]]))
+        return vectors
+
+    def embed_query(self, text):
+        return self._encode(['query: ' + str(text)])[0]
+
+    def ping(self):
+        try:
+            vector = self.embed_query('CPU embedding connection test')
+            return dict(ok=bool(vector), message=f'CPU Embedding 可用，維度 {len(vector)}。', provider=self.provider, model=self.model)
+        except EmbeddingError as exc:
+            return dict(ok=False, message=str(exc), provider=self.provider, model=self.model)
+
+
 def get_embedder(config):
     provider = str(config.get("EMBEDDING_PROVIDER", "disabled")).lower()
     model = str(config.get("EMBEDDING_MODEL", "")).strip()
+    if provider == 'cpu':
+        return CPUEmbedding()
     if provider == "mock":
         return MockEmbedding()
     if not model:

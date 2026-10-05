@@ -17,3 +17,4 @@ Thumbs.db
 # Local secrets / downloaded model weights
 .env
 models/
+.venv-exam-ai/

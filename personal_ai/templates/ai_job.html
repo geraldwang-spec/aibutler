@@ -1,0 +1,8 @@
+{% extends 'live_base.html' %}{% block content %}
+<section class="panel-card" id="ai-job" data-status-url="{{ url_for('personal_ai.job_status',job_id=job.id) }}">
+<h2>AI 工作進度</h2><p id="job-status">{{job.status}}</p><p id="job-usage">請求 {{job.calls}} 次 · 輸入 {{job.input_tokens}} / 輸出 {{job.output_tokens}} tokens</p>
+<p id="job-error" role="alert">{{job.error or ''}}</p><a id="job-result" {% if not result %}hidden{% endif %} href="{{result.url if result else '#'}}">查看成果 →</a>
+{% if job.status in ['queued','running'] %}<form method="post" action="{{url_for('personal_ai.job_cancel',job_id=job.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>取消後續處理</button></form>{% endif %}
+<p>工作最多 10 分鐘、40 次請求、累計 32,000 tokens；已送出的請求需等待回應。關閉頁面不會自動取消。失敗時不會自動重複付費呼叫。</p>
+</section><script src="{{url_for('static',filename='js/ai-job.js')}}" defer></script>
+{% endblock %}

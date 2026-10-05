@@ -14,7 +14,7 @@
     <span class="pill">Concept：{{ item.get('_concept_name') }}</span>
     <span class="pill">Skill：{{ item.get('_skill') or '未指定' }}</span>
     <span class="pill">{{ item.get('_cognitive_level') or 'understand' }}</span>
-    <span class="pill">信心 {{ '%.0f'|format((item.get('_concept_confidence') or 0)*100) }}%</span>
+    <span class="pill">模型評分（未校準） {{ '%.0f'|format((item.get('_concept_confidence') or 0)*100) }}%</span>
     {% if item.get('_concept_id') %}<span class="pill success">歸入既有 Concept #{{ item.get('_concept_id') }}</span>{% else %}<span class="pill">建議建立新 Concept</span>{% endif %}
     {% if item.get('_classification_reason') %}<p class="muted">分類理由：{{ item.get('_classification_reason') }}</p>{% endif %}
   </div>
@@ -22,7 +22,7 @@
   <p class="prewrap">{{ item.content }}</p>
   {% for label in 'ABCD' %}{% if item.get('option_'+label) %}<p>{{ label }}. {{ item.get('option_'+label) }}</p>{% endif %}{% endfor %}
   <p>答案：{{ item.answer_key }}</p><p>解析：{{ item.explanation or '未提供' }}</p>
-</article>
+{% if batch.status=='待確認' %}<details><summary>修正／移除此題</summary><form method="post" action="{{url_for('revise_import',batch=batch.id,item_id=item._item_id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><label>章節<input name="chapter_name" value="{{item.chapter_name}}" required maxlength="120"></label><label>題型<select name="q_type">{% for t in ['單選','多選','是非','填空'] %}<option {% if t==item.q_type %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label><label>題目<textarea name="content" required maxlength="10000">{{item.content}}</textarea></label>{% for k in 'ABCD' %}<label>{{k}}<input name="option_{{k}}" value="{{item.get('option_'+k,'')}}" maxlength="2000"></label>{% endfor %}<label>答案<input name="answer_key" value="{{item.answer_key}}" maxlength="50" required></label><label>解析<textarea name="explanation">{{item.explanation or ''}}</textarea></label>{% if concept_mode %}<label>概念<input name="concept_name" value="{{item.get('_concept_name','')}}" maxlength="255" required></label><label>技能<input name="skill" value="{{item.get('_skill','')}}" maxlength="255"></label>{% endif %}<button name="action" value="save">儲存修正</button><button name="action" value="remove" formnovalidate>移除此題</button></form></details>{% endif %}</article>
 {% endfor %}
 {% if batch.status=='待確認' %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="action">確認並匯入 {{ items|length }} 題 →</button><a class="outline-button" href="{{ url_for('imports') }}">返回，暫不匯入</a></form>{% endif %}
-{% endblock %}
+{% if batch.status=='待確認' %}<form method="post" action="{{url_for('cancel_import',batch=batch.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>取消此批次</button></form>{% endif %}{% endblock %}

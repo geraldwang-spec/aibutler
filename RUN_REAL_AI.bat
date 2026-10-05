@@ -7,8 +7,8 @@ if not exist ".env" (
 )
 echo Starting AI Butler with GROQ API providers...
 echo Text AI: Groq API (one GROQ_API_KEY for all roles)
-echo Local only: bge-m3 embedding for RAG
-echo Model: qwen/qwen3.8-27b
+echo Local only: CPU E5 / NLI; no Ollama fallback
+echo Model: openai/gpt-oss-20b; output cap 800 tokens
 echo.
 python app.py
 pause

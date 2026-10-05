@@ -52,7 +52,7 @@
           {% set assessed = t.question_count and t.question_count > 0 %}
           <div class="calendar-task {{'assessment' if assessed else ''}} {{'passed' if t.status=='done' else ('failed' if t.status=='failed' else '')}}">
             <span class="calendar-task-kind">{{t.task_type}}</span><strong class="calendar-task-title">{{t.title}}</strong>
-            <small>{{t.target_minutes}} 分鐘{% if assessed %} · {{t.question_count}} 題 · 通過門檻 {{t.required_score|round(0)|int}}%{% endif %}</small>
+            {% if not assessed %}{% if t.status=='read' %}<small>已閱讀（不等於驗收通過）</small>{% else %}<form method="post" action="{{url_for('personal_ai.planner_read',task_id=t.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>記錄已閱讀</button></form>{% endif %}{% endif %}<small>{{t.target_minutes}} 分鐘{% if assessed %} · {{t.question_count}} 題 · 通過門檻 {{t.required_score|round(0)|int}}%{% endif %}</small>
             {% if t.attempt and t.attempt.score is not none %}<small>最近成績：{{t.attempt.score|round(1)}} 分 · {{'通過' if t.attempt.passed else '未通過'}}</small>{% endif %}
             {% if assessed and t.status!='done' %}
               <form method="post" action="{{url_for('personal_ai.adaptive_plan_checkpoint_start',task_id=t.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="checkpoint-button {{'retry' if t.status=='failed' else ''}}">{{'重新挑戰' if t.status=='failed' else '開始系統測驗'}}</button></form>

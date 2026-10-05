@@ -17,7 +17,7 @@ from werkzeug.security import generate_password_hash
 
 from auth import auth, login_required
 from records import CATALOG, PROFILE_FIELDS, options, ownership
-from storage import db, init_storage, StorageIntegrityError
+from storage import db, init_storage, register_storage, read_only, locked_sql, StorageIntegrityError, DatabaseUnavailable
 
 
 def create_app(test_config=None):
@@ -34,57 +34,62 @@ def create_app(test_config=None):
         DB_PASSWORD=os.getenv('DB_PASSWORD',''),
         DB_NAME=os.getenv('DB_NAME',''),
         DB_CHARSET=os.getenv('DB_CHARSET','utf8mb4'),
-        # Real-model defaults: local models handle high-frequency work; Groq handles
-        # heavy generation/tutoring and falls back to the local 9B model if unavailable.
+        DB_READ_ONLY=os.getenv('DB_READ_ONLY','false').lower()=='true',
+        DB_STANDBY_ENABLED=os.getenv('DB_STANDBY_ENABLED','false').lower()=='true',
+        DB_STANDBY_PATH=os.getenv('DB_STANDBY_PATH',str(root/'instance'/'backups'/'standby.sqlite')),
+        # Groq handles all LLM roles; CPU specialists handle exam retrieval.
+        # Local LLM fallback is disabled to avoid GPU inference.
         GROQ_API_KEY=os.getenv('GROQ_API_KEY',''),
-        LLM_PROVIDER=os.getenv('LLM_PROVIDER','ollama'),
-        LLM_BASE_URL=os.getenv('LLM_BASE_URL','http://127.0.0.1:11434/v1'),
+        EXAM_MODULAR_AI=os.getenv('EXAM_MODULAR_AI','false'),
+        EXAM_GENERATION_MODE=os.getenv('EXAM_GENERATION_MODE','hybrid'),
+        LLM_PROVIDER=os.getenv('LLM_PROVIDER','groq'),
+        LLM_BASE_URL=os.getenv('LLM_BASE_URL','https://api.groq.com/openai/v1'),
         LLM_API_KEY=os.getenv('LLM_API_KEY',''),
-        LLM_MODEL=os.getenv('LLM_MODEL','qwen3.5:4b'),
-        EMBEDDING_PROVIDER=os.getenv('EMBEDDING_PROVIDER','ollama'),
+        LLM_MODEL=os.getenv('LLM_MODEL','openai/gpt-oss-20b'),
+        EMBEDDING_PROVIDER=os.getenv('EMBEDDING_PROVIDER','cpu'),
         EMBEDDING_BASE_URL=os.getenv('EMBEDDING_BASE_URL','http://127.0.0.1:11434'),
         EMBEDDING_API_KEY=os.getenv('EMBEDDING_API_KEY',''),
-        EMBEDDING_MODEL=os.getenv('EMBEDDING_MODEL','bge-m3'),
-        CLASSIFIER_PROVIDER=os.getenv('CLASSIFIER_PROVIDER','ollama'),
-        CLASSIFIER_BASE_URL=os.getenv('CLASSIFIER_BASE_URL','http://127.0.0.1:11434/v1'),
+        EMBEDDING_MODEL=os.getenv('EMBEDDING_MODEL','intfloat/multilingual-e5-small'),
+        CLASSIFIER_PROVIDER=os.getenv('CLASSIFIER_PROVIDER','groq'),
+        CLASSIFIER_BASE_URL=os.getenv('CLASSIFIER_BASE_URL','https://api.groq.com/openai/v1'),
         CLASSIFIER_API_KEY=os.getenv('CLASSIFIER_API_KEY',''),
-        CLASSIFIER_MODEL=os.getenv('CLASSIFIER_MODEL','qwen3.5:4b'),
-        PARSER_PROVIDER=os.getenv('PARSER_PROVIDER','ollama'),
-        PARSER_BASE_URL=os.getenv('PARSER_BASE_URL','http://127.0.0.1:11434/v1'),
+        CLASSIFIER_MODEL=os.getenv('CLASSIFIER_MODEL','openai/gpt-oss-20b'),
+        PARSER_PROVIDER=os.getenv('PARSER_PROVIDER','groq'),
+        PARSER_BASE_URL=os.getenv('PARSER_BASE_URL','https://api.groq.com/openai/v1'),
         PARSER_API_KEY=os.getenv('PARSER_API_KEY',''),
-        PARSER_MODEL=os.getenv('PARSER_MODEL','qwen3.5:4b'),
+        PARSER_MODEL=os.getenv('PARSER_MODEL','openai/gpt-oss-20b'),
         GENERATOR_PROVIDER=os.getenv('GENERATOR_PROVIDER','groq'),
         GENERATOR_BASE_URL=os.getenv('GENERATOR_BASE_URL','https://api.groq.com/openai/v1'),
         GENERATOR_API_KEY=os.getenv('GENERATOR_API_KEY',''),
-        GENERATOR_MODEL=os.getenv('GENERATOR_MODEL','qwen/qwen3.8-27b'),
-        GENERATOR_FALLBACK_PROVIDER=os.getenv('GENERATOR_FALLBACK_PROVIDER','ollama'),
-        GENERATOR_FALLBACK_BASE_URL=os.getenv('GENERATOR_FALLBACK_BASE_URL','http://127.0.0.1:11434/v1'),
+        GENERATOR_MODEL=os.getenv('GENERATOR_MODEL','openai/gpt-oss-20b'),
+        GENERATOR_FALLBACK_PROVIDER=os.getenv('GENERATOR_FALLBACK_PROVIDER',''),
+        GENERATOR_FALLBACK_BASE_URL=os.getenv('GENERATOR_FALLBACK_BASE_URL',''),
         GENERATOR_FALLBACK_API_KEY=os.getenv('GENERATOR_FALLBACK_API_KEY',''),
-        GENERATOR_FALLBACK_MODEL=os.getenv('GENERATOR_FALLBACK_MODEL','qwen3.5:4b'),
+        GENERATOR_FALLBACK_MODEL=os.getenv('GENERATOR_FALLBACK_MODEL',''),
         REVIEWER_PROVIDER=os.getenv('REVIEWER_PROVIDER','groq'),
         REVIEWER_BASE_URL=os.getenv('REVIEWER_BASE_URL','https://api.groq.com/openai/v1'),
         REVIEWER_API_KEY=os.getenv('REVIEWER_API_KEY',''),
-        REVIEWER_MODEL=os.getenv('REVIEWER_MODEL','qwen/qwen3.8-27b'),
-        REVIEWER_FALLBACK_PROVIDER=os.getenv('REVIEWER_FALLBACK_PROVIDER','ollama'),
-        REVIEWER_FALLBACK_BASE_URL=os.getenv('REVIEWER_FALLBACK_BASE_URL','http://127.0.0.1:11434/v1'),
+        REVIEWER_MODEL=os.getenv('REVIEWER_MODEL','openai/gpt-oss-20b'),
+        REVIEWER_FALLBACK_PROVIDER=os.getenv('REVIEWER_FALLBACK_PROVIDER',''),
+        REVIEWER_FALLBACK_BASE_URL=os.getenv('REVIEWER_FALLBACK_BASE_URL',''),
         REVIEWER_FALLBACK_API_KEY=os.getenv('REVIEWER_FALLBACK_API_KEY',''),
-        REVIEWER_FALLBACK_MODEL=os.getenv('REVIEWER_FALLBACK_MODEL','qwen3.5:4b'),
+        REVIEWER_FALLBACK_MODEL=os.getenv('REVIEWER_FALLBACK_MODEL',''),
         COURSE_PROVIDER=os.getenv('COURSE_PROVIDER','groq'),
         COURSE_BASE_URL=os.getenv('COURSE_BASE_URL','https://api.groq.com/openai/v1'),
         COURSE_API_KEY=os.getenv('COURSE_API_KEY',''),
-        COURSE_MODEL=os.getenv('COURSE_MODEL','openai/gpt-oss-120b'),
-        COURSE_FALLBACK_PROVIDER=os.getenv('COURSE_FALLBACK_PROVIDER','ollama'),
-        COURSE_FALLBACK_BASE_URL=os.getenv('COURSE_FALLBACK_BASE_URL','http://127.0.0.1:11434/v1'),
+        COURSE_MODEL=os.getenv('COURSE_MODEL','openai/gpt-oss-20b'),
+        COURSE_FALLBACK_PROVIDER=os.getenv('COURSE_FALLBACK_PROVIDER',''),
+        COURSE_FALLBACK_BASE_URL=os.getenv('COURSE_FALLBACK_BASE_URL',''),
         COURSE_FALLBACK_API_KEY=os.getenv('COURSE_FALLBACK_API_KEY',''),
-        COURSE_FALLBACK_MODEL=os.getenv('COURSE_FALLBACK_MODEL','qwen3.5:4b'),
+        COURSE_FALLBACK_MODEL=os.getenv('COURSE_FALLBACK_MODEL',''),
         TUTOR_PROVIDER=os.getenv('TUTOR_PROVIDER','groq'),
         TUTOR_BASE_URL=os.getenv('TUTOR_BASE_URL','https://api.groq.com/openai/v1'),
         TUTOR_API_KEY=os.getenv('TUTOR_API_KEY',''),
-        TUTOR_MODEL=os.getenv('TUTOR_MODEL','openai/gpt-oss-120b'),
-        TUTOR_FALLBACK_PROVIDER=os.getenv('TUTOR_FALLBACK_PROVIDER','ollama'),
-        TUTOR_FALLBACK_BASE_URL=os.getenv('TUTOR_FALLBACK_BASE_URL','http://127.0.0.1:11434/v1'),
+        TUTOR_MODEL=os.getenv('TUTOR_MODEL','openai/gpt-oss-20b'),
+        TUTOR_FALLBACK_PROVIDER=os.getenv('TUTOR_FALLBACK_PROVIDER',''),
+        TUTOR_FALLBACK_BASE_URL=os.getenv('TUTOR_FALLBACK_BASE_URL',''),
         TUTOR_FALLBACK_API_KEY=os.getenv('TUTOR_FALLBACK_API_KEY',''),
-        TUTOR_FALLBACK_MODEL=os.getenv('TUTOR_FALLBACK_MODEL','qwen3.5:4b'),
+        TUTOR_FALLBACK_MODEL=os.getenv('TUTOR_FALLBACK_MODEL',''),
         VOICE_ENABLED=os.getenv('VOICE_ENABLED','false').lower()=='true',
         STT_PROVIDER=os.getenv('STT_PROVIDER','faster_whisper'),
         STT_MODEL=os.getenv('STT_MODEL','large-v3'),
@@ -106,6 +111,11 @@ def create_app(test_config=None):
         app.config.update(test_config)
         if 'DATABASE' in test_config and 'DB_TYPE' not in test_config:
             app.config['DB_TYPE'] = 'sqlite'
+        if test_config.get('TESTING'):
+            for role in ('LLM','CLASSIFIER','PARSER','GENERATOR','REVIEWER','COURSE','TUTOR'):
+                app.config[role+'_PROVIDER']=test_config.get(role+'_PROVIDER','mock')
+            app.config['EXAM_MODULAR_AI']=test_config.get('EXAM_MODULAR_AI','false')
+            app.config['EMBEDDING_PROVIDER']=test_config.get('EMBEDDING_PROVIDER','mock')
     if not app.config['SECRET_KEY']:
         secret_file = root/'instance'/'session.key'
         secret_file.parent.mkdir(exist_ok=True)
@@ -118,7 +128,8 @@ def create_app(test_config=None):
     app.config['DUMMY_PASSWORD_HASH'] = generate_password_hash(secrets.token_hex(16))
     # Team integration uses teammate MariaDB by default.
     # SQLite remains available only as a lightweight test fallback.
-    if app.config['DB_TYPE'] == 'sqlite' or os.getenv('AUTO_INIT_DB','false').lower() == 'true':
+    register_storage(app)
+    if not app.config['DB_READ_ONLY'] and (app.config['DB_TYPE'] == 'sqlite' or os.getenv('AUTO_INIT_DB','false').lower() == 'true'):
         init_storage(app)
     app.register_blueprint(auth)
 
@@ -136,6 +147,10 @@ def create_app(test_config=None):
                 g.user = user
             else:
                 session.clear()
+        if request.method == 'POST':
+            db()
+        if request.method == 'POST' and read_only() and request.endpoint not in ('auth.login','auth.logout'):
+            abort(503, '目前使用唯讀備援，新增、交卷與 AI 工作暫停。請等待主資料庫恢復。')
         if 'csrf_token' not in session:
             session['csrf_token'] = secrets.token_hex(32)
         token = request.form.get('csrf_token') or request.headers.get('X-CSRF-Token','')
@@ -156,11 +171,12 @@ def create_app(test_config=None):
 
     @app.context_processor
     def common():
-        return dict(catalog=CATALOG, csrf_token=session.get('csrf_token',''), today=date.today().isoformat())
+        return dict(catalog=CATALOG, csrf_token=session.get('csrf_token',''), today=date.today().isoformat(), database_read_only=read_only())
 
     @app.errorhandler(400)
     @app.errorhandler(404)
     @app.errorhandler(413)
+    @app.errorhandler(503)
     def error_page(error):
         message = '檔案不可超過 5 MB。' if error.code==413 else ('找不到此資料，或您沒有存取權限。' if error.code==404 else str(error.description))
         return render_template('error.html',title='無法完成操作',message=message), error.code
@@ -169,10 +185,14 @@ def create_app(test_config=None):
     def index():
         return redirect(url_for('dashboard' if g.user else 'auth.login'))
 
+    @app.errorhandler(DatabaseUnavailable)
+    def database_unavailable(error):
+        return render_template('error.html',title='資料庫暫時無法連線',message=str(error)),503
+
     @app.get('/dashboard')
     @login_required
     def dashboard():
-        refresh_stats()
+        pass # Statistics are updated after writes; viewing the dashboard never rewrites history.
         counts = [db().execute('SELECT count(*) FROM subjects WHERE created_by=?',(g.user['id'],)).fetchone()[0],
                   db().execute('SELECT count(*) FROM quiz_sessions WHERE user_id=? AND finished_at IS NOT NULL',(g.user['id'],)).fetchone()[0],
                   db().execute("SELECT count(*) FROM wrong_answers WHERE user_id=? AND status='待複習'",(g.user['id'],)).fetchone()[0]]
@@ -413,28 +433,15 @@ def parse_fields(fields):
 
 
 def validate_question(data,form):
-    opts=[(c,str(form.get('option_'+c,'') or '').strip()) for c in 'ABCD']
-    if any(len(text)>2000 for _,text in opts):
-        raise ValueError('每個選項不可超過 2000 字。')
-    opts=[(c,text) for c,text in opts if text]
-    answer=data['answer_key'].strip()
-    if data['q_type'] in ('單選','多選'):
-        answer=','.join(sorted(set(answer.upper().replace('，',',').replace(' ','').split(','))))
-        labels=answer.split(',')
-        if len(opts)<2 or not set(labels)<=set(c for c,_ in opts) or (data['q_type']=='單選' and len(labels)!=1):
-            raise ValueError('選擇題至少填兩個選項，正確答案須使用已填的選項代號（多選用 A,C）。')
-    elif data['q_type']=='是非':
-        if answer not in ('是','否'):
-            raise ValueError('是非題答案請填「是」或「否」。')
-        opts=[]
-    else:
-        opts=[]
-    data['answer_key']=answer
-    return data,opts
+    from personal_ai.question_validation import validate
+    return validate(data,{k:form.get('option_'+k,'') for k in 'ABCD'})
 
 
 def refresh_stats(commit=True):
+    if read_only():
+        return
     uid=g.user['id']
+    db().execute(locked_sql('SELECT id FROM users WHERE id=?'),(uid,)).fetchone()
     db().execute("UPDATE study_plans SET status='missed' WHERE user_id=? AND status='planned' AND plan_date<?",(uid,date.today().isoformat()))
     db().execute('UPDATE workouts SET total_volume=COALESCE((SELECT sum(weight_kg*reps) FROM workout_sets WHERE workout_id=workouts.id),0) WHERE user_id=?',(uid,))
     daily={}
@@ -454,7 +461,7 @@ def register_learning(app):
     @app.get('/materials')
     @login_required
     def materials():
-        return render_template('materials.html',title='教材與 RAG（第二階段）')
+        return redirect(url_for('personal_ai.knowledge'))
 
     @app.get('/imports/template')
     @login_required
@@ -473,130 +480,25 @@ def register_learning(app):
             try:
                 from personal_ai.question_importer import extract_questions
 
-                subject_id=int(request.form.get('subject_id','0'))
-                owned('subjects',subject_id)
+                from personal_ai.jobs import submit
+                subject_id=int(request.form.get('subject_id','0')); owned('subjects',subject_id)
                 upload=request.files.get('file')
-                if request.form.get('source_mode') == 'text':
-                    from werkzeug.datastructures import FileStorage
-                    text = request.form.get('question_text', '').strip()
-                    if not text:
-                        raise ValueError('請先貼上或編輯題庫文字。')
-                    text_format = request.form.get('text_format', 'txt')
-                    if text_format not in ('txt', 'csv'):
-                        raise ValueError('文字格式設定不正確。')
-                    upload = FileStorage(stream=io.BytesIO(text.encode('utf-8')),
-                                         filename='文字題庫.' + text_format)
-                if not upload or not upload.filename:
-                    raise ValueError('請選擇題庫檔案。')
-
-                suffix=Path(upload.filename).suffix.lower()
-                allowed={'.pdf','.docx','.xlsx','.xlsm','.csv','.txt','.md'}
-                if suffix not in allowed:
-                    raise ValueError('支援 PDF、DOCX、XLSX/XLSM、CSV、TXT、MD。')
-
-                raw=upload.read()
-                if not raw:
-                    raise ValueError('檔案內容為空。')
-                if len(raw)>20*1024*1024:
-                    raise ValueError('題庫檔案上限 20 MB。')
-
-                folder=Path(app.instance_path)/'imports'
-                folder.mkdir(parents=True,exist_ok=True)
-                path=folder/(secrets.token_hex(16)+suffix)
-                path.write_bytes(raw)
-
-                rows=None
-                parser_name=''
-                # CSV / Excel with the legacy template remain the most deterministic path.
-                if suffix=='.csv':
-                    try:
-                        candidate=list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
-                        headers=set(candidate[0].keys()) if candidate else set()
-                        if {'chapter_name','content','answer_key'}<=headers:
-                            rows=candidate
-                            parser_name='結構化 CSV'
-                    except (UnicodeError,csv.Error):
-                        rows=None
-                elif suffix in ('.xlsx','.xlsm'):
-                    from openpyxl import load_workbook
-                    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-                        if sum(z.file_size for z in archive.infolist())>50*1024*1024:
-                            raise ValueError('Excel 解壓後過大，請拆分檔案。')
-                    book=load_workbook(io.BytesIO(raw),read_only=True,data_only=True)
-                    try:
-                        iterator=book.active.iter_rows(values_only=True)
-                        keys=next(iterator,None)
-                        if keys:
-                            keys=[str(k).strip() if k is not None else '' for k in keys]
-                            if {'chapter_name','content','answer_key'}<=set(keys):
-                                rows=[]
-                                for line in iterator:
-                                    if any(v is not None for v in line):
-                                        rows.append(dict(zip(keys,line)))
-                                    if len(rows)>500:
-                                        raise ValueError('每批最多 500 題。')
-                                parser_name='結構化 Excel'
-                    finally:
-                        book.close()
-
-                default_chapter=(request.form.get('default_chapter') or '').strip()
-                if not default_chapter:
-                    default_chapter=(Path(upload.filename).stem[:90]+' 自動匯入')[:120]
-                parse_mode=(request.form.get('parse_mode') or 'auto').strip().lower()
-                if parse_mode not in {'auto','rules','llm'}:
-                    parse_mode='auto'
-
-                if rows is None:
-                    rows,parser_name=extract_questions(path,default_chapter,app.config,parse_mode)
-
-                if not 1<=len(rows)<=500:
-                    if not rows:
-                        raise ValueError('沒有判讀到可匯入的完整考題。若是 PDF，可能是掃描檔或文字層編碼異常；請改用「AI 強化解析（Vision fallback）」再試。')
-                    raise ValueError('每批需為 1–500 題。')
-
-                clean=[]
-                for i,row in enumerate(rows,1):
-                    item={str(k):str(v).strip() if v is not None else '' for k,v in row.items() if not str(k).startswith('_')}
-                    if not item.get('chapter_name'):
-                        item['chapter_name']=default_chapter
-                    if not item.get('content') or not item.get('answer_key'):
-                        raise ValueError(f'第 {i} 題缺少題目或答案。')
-                    if len(item['chapter_name'])>120 or len(item['content'])>10000 or len(item['answer_key'])>100 or len(item.get('explanation',''))>10000:
-                        raise ValueError(f'第 {i} 題文字過長。')
-                    if item.get('q_type') not in ('單選','多選','是非','填空'):
-                        raise ValueError(f'第 {i} 題題型無效：{item.get("q_type") or "未辨識"}。')
-                    try:
-                        item['difficulty']=int(item.get('difficulty') or '2')
-                    except (TypeError,ValueError):
-                        item['difficulty']=2
-                    if not 1<=item['difficulty']<=5:
-                        item['difficulty']=2
-                    item,_=validate_question(item,item)
-                    clean.append(item)
-
-                import_strategy=(request.form.get('import_strategy') or 'concept').strip().lower()
-                if import_strategy not in {'concept','question_bank'}:
-                    import_strategy='concept'
-                classifier_name='未使用'
-                if import_strategy=='concept':
-                    from personal_ai.concept_classifier import classify_question_batch, attach_classifications
-                    classifications,classifier_name=classify_question_batch(clean,subject_id,app.config)
-                    clean=attach_classifications(clean,classifications,'concept')
+                if request.form.get('source_mode')=='text':
+                    raw=request.form.get('question_text','').encode('utf-8')
+                    filename='文字題庫.'+request.form.get('text_format','txt')
                 else:
-                    for item in clean:
-                        item['_import_strategy']='question_bank'
-
-                batch=insert('exam_imports',dict(
-                    user_id=g.user['id'],subject_id=subject_id,
-                    file_name=Path(upload.filename).name[:255],file_path=str(path),
-                    file_type=suffix[1:],status='待確認',total_rows=len(clean),
-                    error_log=f'解析器：{parser_name}；概念分類：{classifier_name}'[:1000]))
-                for item in clean:
-                    encoded=json.dumps(item,ensure_ascii=False)
-                    insert('import_items',dict(import_id=batch,raw_content=encoded,parsed_json=encoded))
-                db().commit()
-                flash(f'已判讀 {len(clean)} 題（{parser_name}；{classifier_name}），請先確認再匯入。','success')
-                return redirect(url_for('import_review',batch=batch))
+                    if not upload or not upload.filename: raise ValueError('請選擇檔案。')
+                    raw=upload.read(); filename=Path(upload.filename).name
+                if not raw or len(raw)>5*1024*1024: raise ValueError('檔案需為 1 byte–5 MB。')
+                folder=Path(app.instance_path)/'job_uploads'; folder.mkdir(parents=True,exist_ok=True)
+                path=folder/(secrets.token_hex(16)+Path(filename).suffix.lower()); path.write_bytes(raw)
+                try:
+                    form=list(request.form.items(multi=True))
+                    form=[(k,v) for k,v in form if k not in ('source_mode','question_text','csrf_token')]
+                    job_id=submit(app,g.user['id'],'import',dict(path=str(path),filename=filename,form=form))
+                except Exception:
+                    path.unlink(missing_ok=True); raise
+                return redirect(url_for('personal_ai.job_page',job_id=job_id))
             except (ValueError,RuntimeError,UnicodeError,zipfile.BadZipFile,StopIteration,KeyError,TypeError,OverflowError,ParseError) as exc:
                 db().rollback()
                 error=str(exc) if isinstance(exc,(ValueError,RuntimeError)) else '無法讀取檔案，請確認檔案內容與格式。'
@@ -610,7 +512,8 @@ def register_learning(app):
         record=owned('exam_imports',batch)
         if request.method=='POST':
             db().execute('BEGIN IMMEDIATE')
-            record=owned('exam_imports',batch)
+            record=db().execute(locked_sql('SELECT * FROM exam_imports WHERE id=? AND user_id=?'),(batch,g.user['id'])).fetchone()
+            if not record: abort(404)
             if record['status']=='待確認':
                 owned('subjects',record['subject_id'])
                 rows=db().execute('SELECT * FROM import_items WHERE import_id=?',(batch,)).fetchall()
@@ -658,5 +561,152 @@ def register_learning(app):
             db().commit()
             flash('已確認：概念型匯入會保留來源樣本但不加入固定考題池；傳統模式則已加入題庫。','success')
             return redirect(url_for('imports'))
-        items=[json.loads(r['parsed_json']) for r in db().execute('SELECT * FROM import_items WHERE import_id=?',(batch,))]
+        items=[dict(json.loads(r['parsed_json']),_item_id=r['id']) for r in db().execute('SELECT * FROM import_items WHERE import_id=?',(batch,))]
         return render_template('import_review.html',title='確認匯入題目',batch=record,items=items)
+
+    @app.post('/imports/<int:batch>/items/<int:item_id>')
+    @login_required
+    def revise_import(batch,item_id):
+        from personal_ai.import_review import revise
+        try:
+            revise(batch,item_id,request.form)
+            flash('題目已修正。','success')
+        except (ValueError,TypeError) as exc:
+            db().rollback(); flash(str(exc),'error')
+        return redirect(url_for('import_review',batch=batch))
+
+    @app.post('/imports/<int:batch>/cancel')
+    @login_required
+    def cancel_import(batch):
+        record=owned('exam_imports',batch)
+        if record['status']=='待確認':
+            db().execute("UPDATE exam_imports SET status='已取消' WHERE id=?",(batch,)); db().commit()
+        return redirect(url_for('imports'))
+
+
+def process_import_file(app,form,upload):
+    from personal_ai.question_importer import extract_questions
+    subject_id=int(form.get('subject_id','0'))
+    owned('subjects',subject_id)
+    upload=upload
+    if form.get('source_mode') == 'text':
+        from werkzeug.datastructures import FileStorage
+        text = form.get('question_text', '').strip()
+        if not text:
+            raise ValueError('請先貼上或編輯題庫文字。')
+        text_format = form.get('text_format', 'txt')
+        if text_format not in ('txt', 'csv'):
+            raise ValueError('文字格式設定不正確。')
+        upload = FileStorage(stream=io.BytesIO(text.encode('utf-8')),
+                             filename='文字題庫.' + text_format)
+    if not upload or not upload.filename:
+        raise ValueError('請選擇題庫檔案。')
+
+    suffix=Path(upload.filename).suffix.lower()
+    allowed={'.pdf','.docx','.xlsx','.xlsm','.csv','.txt','.md'}
+    if suffix not in allowed:
+        raise ValueError('支援 PDF、DOCX、XLSX/XLSM、CSV、TXT、MD。')
+
+    raw=upload.read()
+    if not raw:
+        raise ValueError('檔案內容為空。')
+    if len(raw)>5*1024*1024:
+        raise ValueError('題庫檔案上限 5 MB。')
+
+    folder=Path(app.instance_path)/'imports'
+    folder.mkdir(parents=True,exist_ok=True)
+    path=folder/(secrets.token_hex(16)+suffix)
+    path.write_bytes(raw)
+
+    rows=None
+    parser_name=''
+    # CSV / Excel with the legacy template remain the most deterministic path.
+    if suffix=='.csv':
+        try:
+            candidate=list(csv.DictReader(io.StringIO(raw.decode('utf-8-sig'))))
+            headers=set(candidate[0].keys()) if candidate else set()
+            if {'chapter_name','content','answer_key'}<=headers:
+                rows=candidate
+                parser_name='結構化 CSV'
+        except (UnicodeError,csv.Error):
+            rows=None
+    elif suffix in ('.xlsx','.xlsm'):
+        from openpyxl import load_workbook
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            if sum(z.file_size for z in archive.infolist())>50*1024*1024:
+                raise ValueError('Excel 解壓後過大，請拆分檔案。')
+        book=load_workbook(io.BytesIO(raw),read_only=True,data_only=True)
+        try:
+            iterator=book.active.iter_rows(values_only=True)
+            keys=next(iterator,None)
+            if keys:
+                keys=[str(k).strip() if k is not None else '' for k in keys]
+                if {'chapter_name','content','answer_key'}<=set(keys):
+                    rows=[]
+                    for line in iterator:
+                        if any(v is not None for v in line):
+                            rows.append(dict(zip(keys,line)))
+                        if len(rows)>500:
+                            raise ValueError('每批最多 500 題。')
+                    parser_name='結構化 Excel'
+        finally:
+            book.close()
+
+    default_chapter=(form.get('default_chapter') or '').strip()
+    if not default_chapter:
+        default_chapter=(Path(upload.filename).stem[:90]+' 自動匯入')[:120]
+    parse_mode=(form.get('parse_mode') or 'auto').strip().lower()
+    if parse_mode not in {'auto','rules','llm'}:
+        parse_mode='auto'
+
+    if rows is None:
+        rows,parser_name=extract_questions(path,default_chapter,app.config,parse_mode)
+
+    if not 1<=len(rows)<=500:
+        if not rows:
+            raise ValueError('沒有判讀到可匯入的完整考題。若是 PDF，可能是掃描檔或文字層編碼異常；請先 OCR 為可讀文字，或改用 CSV／文字題庫。')
+        raise ValueError('每批需為 1–500 題。')
+
+    clean=[]
+    for i,row in enumerate(rows,1):
+        item={str(k):str(v).strip() if v is not None else '' for k,v in row.items() if not str(k).startswith('_')}
+        if not item.get('chapter_name'):
+            item['chapter_name']=default_chapter
+        if not item.get('content') or not item.get('answer_key'):
+            raise ValueError(f'第 {i} 題缺少題目或答案。')
+        if len(item['chapter_name'])>120 or len(item['content'])>10000 or len(item['answer_key'])>50 or len(item.get('explanation',''))>10000:
+            raise ValueError(f'第 {i} 題文字過長。')
+        if item.get('q_type') not in ('單選','多選','是非','填空'):
+            raise ValueError(f'第 {i} 題題型無效：{item.get("q_type") or "未辨識"}。')
+        try:
+            item['difficulty']=int(item.get('difficulty') or '2')
+        except (TypeError,ValueError):
+            item['difficulty']=2
+        if not 1<=item['difficulty']<=5:
+            item['difficulty']=2
+        item,_=validate_question(item,item)
+        clean.append(item)
+
+    import_strategy=(form.get('import_strategy') or 'concept').strip().lower()
+    if import_strategy not in {'concept','question_bank'}:
+        import_strategy='concept'
+    classifier_name='未使用'
+    if import_strategy=='concept':
+        if len(clean)>20: raise ValueError('概念型 AI 匯入每批最多 20 題；固定題庫規則解析仍可 500 題。')
+        from personal_ai.concept_classifier import classify_question_batch, attach_classifications
+        classifications,classifier_name=classify_question_batch(clean,subject_id,app.config)
+        clean=attach_classifications(clean,classifications,'concept')
+    else:
+        for item in clean:
+            item['_import_strategy']='question_bank'
+
+    batch=insert('exam_imports',dict(
+        user_id=g.user['id'],subject_id=subject_id,
+        file_name=Path(upload.filename).name[:255],file_path=str(path),
+        file_type=suffix[1:],status='待確認',total_rows=len(clean),
+        error_log=f'解析器：{parser_name}；概念分類：{classifier_name}'[:1000]))
+    for item in clean:
+        encoded=json.dumps(item,ensure_ascii=False)
+        insert('import_items',dict(import_id=batch,raw_content=encoded,parsed_json=encoded))
+    db().commit()
+    return batch

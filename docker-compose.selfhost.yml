@@ -1,46 +1,18 @@
+# Web uses the existing MariaDB from .env. Optional standby: docker-compose.standby.yml.
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_NAME:-aibutler_personal}
-      POSTGRES_USER: ${DB_USER:-aibutler}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-aibutler} -d ${DB_NAME:-aibutler_personal}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
-  ollama:
-    image: ollama/ollama:latest
-    restart: unless-stopped
-    volumes:
-      - ollama_data:/root/.ollama
-    ports:
-      - "127.0.0.1:11434:11434"
-
   web:
     build: .
     restart: unless-stopped
     env_file: .env
     environment:
-      APP_MODE: selfhost
-      DB_TYPE: postgresql
-      DB_HOST: postgres
-      DB_PORT: 5432
-      LLM_BASE_URL: http://ollama:11434/v1
-      EMBEDDING_BASE_URL: http://ollama:11434
-    depends_on:
-      postgres:
-        condition: service_healthy
+      DB_TYPE: mariadb
+      EXAM_CPU_PYTHON: /opt/exam-ai/bin/python
+      DB_STANDBY_PATH: /app/instance/backups/standby.sqlite
     volumes:
-      - app_instance:/app/instance
+      - ./instance:/app/instance
+      - ./models:/app/models:ro
     ports:
       - "127.0.0.1:5000:5000"
-
   cloudflared:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
@@ -48,8 +20,3 @@ services:
     command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
       - web
-
-volumes:
-  postgres_data:
-  ollama_data:
-  app_instance:

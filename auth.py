@@ -5,15 +5,19 @@ import smtplib
 import sqlite3
 import ssl
 import time
+import threading
+from collections import defaultdict,deque
 from email.message import EmailMessage
 from functools import wraps
 
 from email_validator import validate_email, EmailNotValidError
 from flask import Blueprint, current_app, flash, g, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
-from storage import db, StorageIntegrityError
+from storage import db, read_only, locked_sql, StorageIntegrityError
 
 auth = Blueprint('auth', __name__)
+_standby_limits=defaultdict(deque)
+_standby_lock=threading.Lock()
 
 
 def login_required(view):
@@ -42,10 +46,19 @@ def code_hash(email, code):
 
 
 def limited(bucket, maximum, seconds):
+    db()
+    if read_only():
+        with _standby_lock:
+            entries=_standby_limits[bucket]
+            now=time.time()
+            while entries and entries[0]<now-seconds: entries.popleft()
+            if len(entries)>=maximum: return True
+            entries.append(now)
+            return False
     now = int(time.time())
     connection = db()
     connection.execute('BEGIN IMMEDIATE')
-    row = connection.execute('SELECT * FROM rate_limits WHERE bucket=?', (bucket,)).fetchone()
+    row = connection.execute(locked_sql('SELECT * FROM rate_limits WHERE bucket=?'), (bucket,)).fetchone()
     if row and now-row['started_at'] < seconds and row['count'] >= maximum:
         connection.rollback()
         return True
@@ -185,8 +198,9 @@ def login():
                 session['user_id'] = user['id']
                 session['password_changed_at'] = user['password_changed_at']
                 session.permanent = True
-                db().execute('UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?',(user['id'],))
-                db().commit()
+                if not read_only():
+                    db().execute('UPDATE users SET last_login_at=CURRENT_TIMESTAMP WHERE id=?',(user['id'],))
+                    db().commit()
                 profile = db().execute('SELECT onboarded_at FROM user_profiles WHERE user_id=?',(user['id'],)).fetchone()
                 return redirect(url_for('dashboard' if profile and profile['onboarded_at'] else 'profile'))
     return render_template('auth.html',register=False,error=error), 400 if error else 200
