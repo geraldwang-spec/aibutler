@@ -156,6 +156,16 @@ def extract_by_rules(sections, default_chapter: str):
         body = '\n'.join(x for x in block['lines'] if x.strip()).strip()
         body = re.sub(r'(?im)^\s*(?:第[一二三四五六七八九十0-9]+頁|Page\s*\d+)(?:[^\n]*)$', '', body).strip()
         ans = answers.get(qn, '')
+        # Editor-friendly format: each question can carry its own answer/explanation.
+        inline_answer = re.search(r'(?im)^\s*答案\s*[:：]\s*(.+)$', body)
+        inline_explanation = re.search(r'(?im)^\s*解析\s*[:：]\s*(.*)$', body)
+        if not ans and inline_answer:
+            ans = inline_answer[1].strip().replace('，', ',')
+            if ans.lower() in ('true', 'false'):
+                ans = '是' if ans.lower() == 'true' else '否'
+        if inline_explanation:
+            explanations[qn] = inline_explanation[1].strip()
+        body = re.sub(r'(?im)^\s*(?:答案|解析)\s*[:：].*$', '', body).strip()
         options, stem = _split_options(body)
         qtype = _guess_type(body, ans, options)
 

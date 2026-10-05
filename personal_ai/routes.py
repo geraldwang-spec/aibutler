@@ -73,6 +73,7 @@ def ai_questions():
         except (ValueError,LLMError,RuntimeError) as exc: error=str(exc)
     subjects=_subjects(); chapters=db().execute('''SELECT c.* FROM chapters c JOIN subjects s ON s.id=c.subject_id WHERE s.created_by=? ORDER BY c.subject_id,c.order_no,c.id''',(g.user['id'],)).fetchall()
     drafts=db().execute('''SELECT d.*,s.subject_name,c.chapter_name FROM ai_question_drafts d JOIN subjects s ON s.id=d.subject_id LEFT JOIN chapters c ON c.id=d.chapter_id WHERE d.user_id=? ORDER BY d.id DESC LIMIT 50''',(g.user['id'],)).fetchall()
+    drafts=[dict(d,options=json.loads(d['options_json'] or '{}')) for d in drafts]
     return render_template('ai_questions.html',title='RAG + LLM 動態出題',subjects=subjects,chapters=chapters,drafts=drafts,error=error,llm_enabled=str(current_app.config.get('GENERATOR_PROVIDER') or current_app.config.get('LLM_PROVIDER','disabled'))!='disabled')
 
 @bp.post('/ai/questions/<int:draft_id>/approve')
@@ -97,11 +98,16 @@ def concepts():
     subject_id=request.args.get('subject_id',type=int)
     subjects=_subjects()
     rows=[]
+    samples=[]
     if subject_id:
         _subject(subject_id)
         from .concept_classifier import concept_summary
         rows=concept_summary(subject_id)
-    return render_template('concepts.html',title='Concept Bank',subjects=subjects,concepts=rows,subject_id=subject_id)
+        samples=db().execute('SELECT sq.*,c.name AS concept_name FROM source_question_items sq '
+            'JOIN concepts c ON c.id=sq.concept_id WHERE sq.user_id=? AND sq.subject_id=? '
+            'ORDER BY sq.id DESC LIMIT 100',(g.user['id'],subject_id)).fetchall()
+        samples=[dict(s,options=json.loads(s['options_json'] or '{}')) for s in samples]
+    return render_template('concepts.html',title='Concept Bank',subjects=subjects,concepts=rows,samples=samples,subject_id=subject_id)
 
 
 @bp.route('/ai/status', methods=['GET','POST'])

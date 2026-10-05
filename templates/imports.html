@@ -1,37 +1,23 @@
 {% extends 'live_base.html' %}{% block content %}
-<section class="panel-card">
-  <h2>通用題庫匯入</h2>
-  <p>支援 PDF、Word、Excel、CSV。所有格式都先解析成題目預覽，確認後才寫入系統。</p>
-  <p class="notice info"><strong>推薦：</strong>使用「概念型匯入」。系統會用 Embedding + Concept Classifier 判斷題目真正考的知識點；相同概念不會一直堆進固定題庫，原題只保留成來源樣本，之後由 LLM 依 Concept 重新設計新題。</p>
-  <a href="{{ url_for('import_template') }}">下載 CSV / Excel 題庫範本</a>
-  <form method="post" enctype="multipart/form-data">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>匯入科目
-      <select name="subject_id" required><option value="">請選擇</option>{% for id,name in subjects %}<option value="{{ id }}">{{ name }}</option>{% endfor %}</select>
-    </label>
-    <label>PDF / Word 的預設章節
-      <input type="text" name="default_chapter" maxlength="120" placeholder="例如：二元一次方程式 / Chapter 3">
-    </label>
-    <label>匯入策略
-      <select name="import_strategy">
-        <option value="concept" selected>概念型匯入（推薦：原題不進固定考題池）</option>
-        <option value="question_bank">傳統題庫匯入（保留原題並可直接抽題）</option>
-      </select>
-    </label>
-    <p class="muted">概念型：題目 → bge-m3 找語意近鄰 → Classifier LLM 歸入 Concept / Skill → 保留來源樣本。模擬題由 Generator LLM 重新設計。</p>
-    <label>文件解析方式
-      <select name="parse_mode">
-        <option value="auto">自動（規則優先，必要時 LLM）</option>
-        <option value="rules">快速解析（不使用模型解析文件）</option>
-        <option value="llm">AI 強化解析（文字層失敗時自動 Vision）</option>
-      </select>
-    </label>
-    <label>題庫檔案
-      <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md" required>
-    </label>
-    <button class="action">上傳、判讀、概念歸類並預覽</button>
-  </form>
-  <p class="muted">注意：「快速解析」只代表不用 LLM 拆 PDF 題目；若選概念型匯入，仍會執行 Concept Classifier。Concept 分類目前預設使用本機 qwen3.5:4b；高成本生成任務可交由 Groq。</p>
-</section>
-<section class="panel-card"><h2>上傳批次</h2>{% for row in batches %}<div class="record-item"><a href="{{ url_for('import_review',batch=row.id) }}">{{ row.file_name }}</a> · {{ row.status }} · {{ row.imported_count }}/{{ row.total_rows }} 題{% if row.error_log %} · {{ row.error_log }}{% endif %}</div>{% else %}<p>尚無上傳紀錄。</p>{% endfor %}</section>
+<div class="exam-workspace-head"><div><p class="eyebrow">QUESTION WORKSPACE</p><h2>把手上的題目，變成你的題庫。</h2><p>上傳文件，或像文字編輯器一樣直接整理題目。先預覽，再確認匯入。</p></div><a class="outline-button" href="{{ url_for('import_template') }}">↓ 下載 CSV 範本</a></div>
+<nav class="exam-workspace-nav" aria-label="題庫工作區"><a class="active" href="{{ url_for('imports') }}">匯入工作區</a><a href="{{ url_for('records',table='questions') }}">固定題庫</a><a href="{{ url_for('personal_ai.concepts') }}">概念題庫</a><a href="{{ url_for('quiz_start') }}">建立模擬考</a></nav>
+<form method="post" enctype="multipart/form-data" id="question-import-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<div class="import-workspace"><section class="panel-card import-settings"><p class="eyebrow">01 / IMPORT SETTINGS</p><h2>匯入設定</h2>
+<label>匯入科目<select name="subject_id" required><option value="">請選擇科目</option>{% for id,name in subjects %}<option value="{{ id }}" {% if request.form.get('subject_id')==id|string %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+<label>預設章節<input name="default_chapter" maxlength="120" value="{{ request.form.get('default_chapter','') }}" placeholder="例如：Python 入門"></label>
+<label>題庫類型<select name="import_strategy"><option value="question_bank" {% if request.form.get('import_strategy','question_bank')=='question_bank' %}selected{% endif %}>傳統固定型 · 保留原題</option><option value="concept" {% if request.form.get('import_strategy')=='concept' %}selected{% endif %}>概念型 · 歸類來源樣本</option></select></label>
+<p class="setting-help">固定型可立即隨機抽題；概念型保留考點與來源樣本，之後由模型重新設計題目。</p>
+<label>解析方式<select name="parse_mode">{% for value,label in [('rules','快速解析 · 不呼叫模型拆題'),('auto','自動解析 · 必要時使用模型'),('llm','AI 強化解析')] %}<option value="{{ value }}" {% if request.form.get('parse_mode','rules')==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+<p class="setting-help">概念型匯入仍會進行模型分類；固定型搭配快速解析可完全不使用 AI。</p>
+<button class="action" type="submit">解析並預覽題目 →</button></section>
+<section class="panel-card import-editor"><p class="eyebrow">02 / QUESTION SOURCE</p><h2>題目編輯工作區</h2>
+<div class="editor-tabs" role="group" aria-label="題目來源"><label><input type="radio" name="source_mode" value="file" {% if request.form.get('source_mode','file')!='text' %}checked{% endif %}>檔案上傳</label><label><input type="radio" name="source_mode" value="text" {% if request.form.get('source_mode')=='text' %}checked{% endif %}>文字編輯</label></div>
+<div id="import-file-pane"><label class="upload-zone">選擇題庫文件<input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.csv,.txt,.md"><small>PDF、Word、Excel、CSV、TXT、Markdown</small></label><div class="import-tip"><h3>保留熟悉的匯入流程</h3><p>選擇文件後按「解析並預覽」。預覽頁確認無誤，才會寫入正式題庫。</p></div></div>
+<div id="import-text-pane"><div class="editor-toolbar"><label>格式<select name="text_format" id="editor-format"><option value="txt" {% if request.form.get('text_format','txt')=='txt' %}selected{% endif %}>編號題目 TXT</option><option value="csv" {% if request.form.get('text_format')=='csv' %}selected{% endif %}>結構化 CSV</option></select></label><button type="button" class="outline-button" id="editor-example">載入範例</button><button type="button" class="outline-button" id="editor-clear">清空</button></div>
+<label class="sr-only" for="question-editor">題庫文字內容</label><div class="code-editor"><pre id="editor-lines" aria-hidden="true">1</pre><textarea id="question-editor" name="question_text" spellcheck="false" wrap="off" maxlength="1000000" placeholder="1. 單選 Python 中哪個值是整數？&#10;A. 12&#10;B. &quot;12&quot;&#10;答案：A&#10;解析：12 是整數。">{{ request.form.get('question_text','') }}</textarea></div>
+<div class="editor-status"><span id="editor-count">0 字元</span><span>UTF-8 · 先預覽，後匯入</span></div><p class="setting-help">每題以「1. 單選／多選／是非／填空」開始，選項用 A.、B.，並附上「答案：」與「解析：」。CSV 請使用下載範本的欄位。</p></div>
+</section></div></form>
+<section class="panel-card"><div class="section-heading"><div><p class="eyebrow">IMPORT HISTORY</p><h2>匯入批次</h2></div><span class="pill">{{ batches|length }} 批</span></div><div class="table-scroll"><table><thead><tr><th>文件</th><th>狀態</th><th>已匯入 / 題數</th><th>解析資訊</th><th>操作</th></tr></thead><tbody>{% for row in batches %}<tr><td>{{ row.file_name }}</td><td><span class="pill">{{ row.status }}</span></td><td>{{ row.imported_count }}/{{ row.total_rows }}</td><td>{{ row.error_log or '—' }}</td><td><a href="{{ url_for('import_review',batch=row.id) }}">查看預覽 ↗</a></td></tr>{% else %}<tr><td colspan="5" class="empty-cell">還沒有匯入紀錄。從第一份題庫開始吧。</td></tr>{% endfor %}</tbody></table></div></section>
+<script src="{{ url_for('static',filename='js/question-workspace.js') }}"></script>
 {% endblock %}

@@ -1,4 +1,5 @@
 import csv
+import calendar
 import io
 import json
 import math
@@ -177,7 +178,41 @@ def create_app(test_config=None):
                   db().execute("SELECT count(*) FROM wrong_answers WHERE user_id=? AND status='待複習'",(g.user['id'],)).fetchone()[0]]
         plans = db().execute('SELECT * FROM study_plans WHERE user_id=? ORDER BY plan_date DESC LIMIT 10',(g.user['id'],)).fetchall()
         daily = db().execute('SELECT * FROM daily_summary WHERE user_id=? ORDER BY summary_date DESC LIMIT 14',(g.user['id'],)).fetchall()
-        return render_template('dashboard_live.html',title='學習與健康總覽',counts=counts,plans=plans,daily=daily)
+        now = date.today()
+        try:
+            month = date.fromisoformat(request.args.get('month', now.strftime('%Y-%m')) + '-01')
+        except (ValueError, TypeError):
+            month = now.replace(day=1)
+        month_end = month.replace(day=calendar.monthrange(month.year, month.month)[1])
+        events = {}
+        calendar_plans = db().execute(
+            'SELECT * FROM study_plans WHERE user_id=? AND plan_date BETWEEN ? AND ? ORDER BY plan_date,id',
+            (g.user['id'], month.isoformat(), month_end.isoformat())).fetchall()
+        for plan in calendar_plans:
+            events.setdefault(str(plan['plan_date'])[:10], []).append(dict(title=plan['title'], kind=plan['plan_type'],
+                status=plan['status'], url=url_for('records', table='study_plans', edit=plan['id'])))
+        if 'personal_ai' in app.blueprints:
+            tasks = db().execute(
+                'SELECT goal_id,task_date,title,status FROM learning_tasks WHERE user_id=? '
+                'AND task_date BETWEEN ? AND ? ORDER BY task_date,id',
+                (g.user['id'], month.isoformat(), month_end.isoformat())).fetchall()
+            for task in tasks:
+                events.setdefault(str(task['task_date'])[:10], []).append(dict(title=task['title'], kind='study',
+                    status=task['status'], url=url_for('personal_ai.adaptive_planner', goal_id=task['goal_id'])))
+        today_tasks = db().execute('SELECT * FROM study_plans WHERE user_id=? AND plan_date=? ORDER BY id',
+            (g.user['id'], now.isoformat())).fetchall()
+        today_events = [dict(title=p['title'],kind=p['plan_type'],status=p['status'],
+            url=url_for('records',table='study_plans',edit=p['id'])) for p in today_tasks]
+        if 'personal_ai' in app.blueprints:
+            for t in db().execute('SELECT goal_id,title,status FROM learning_tasks WHERE user_id=? AND task_date=? ORDER BY id',
+                (g.user['id'],now.isoformat())).fetchall():
+                today_events.append(dict(title=t['title'],kind='study',status=t['status'],
+                    url=url_for('personal_ai.adaptive_planner',goal_id=t['goal_id'])))
+        return render_template('dashboard_live.html',title='學習與健康總覽',counts=counts,plans=plans,daily=daily,
+            calendar_month=month, calendar_weeks=calendar.Calendar().monthdatescalendar(month.year,month.month),
+            calendar_events=events, calendar_today=now, today_events=today_events,
+            previous_month=(month-timedelta(days=1)).strftime('%Y-%m'),
+            next_month=(month_end+timedelta(days=1)).strftime('%Y-%m'))
 
     @app.route('/profile',methods=['GET','POST'])
     @login_required
@@ -441,6 +476,16 @@ def register_learning(app):
                 subject_id=int(request.form.get('subject_id','0'))
                 owned('subjects',subject_id)
                 upload=request.files.get('file')
+                if request.form.get('source_mode') == 'text':
+                    from werkzeug.datastructures import FileStorage
+                    text = request.form.get('question_text', '').strip()
+                    if not text:
+                        raise ValueError('請先貼上或編輯題庫文字。')
+                    text_format = request.form.get('text_format', 'txt')
+                    if text_format not in ('txt', 'csv'):
+                        raise ValueError('文字格式設定不正確。')
+                    upload = FileStorage(stream=io.BytesIO(text.encode('utf-8')),
+                                         filename='文字題庫.' + text_format)
                 if not upload or not upload.filename:
                     raise ValueError('請選擇題庫檔案。')
 

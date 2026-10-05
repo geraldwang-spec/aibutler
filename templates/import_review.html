@@ -1,4 +1,4 @@
-{% extends 'live_base.html' %}{% block content %}
+{% extends 'live_base.html' %}{% block content %}<div class="exam-workspace-head"><div><p class="eyebrow">REVIEW BEFORE IMPORT</p><h2>確認這份題庫的內容</h2><p>檢查題幹、選項與答案，再完成匯入。</p></div><a class="outline-button" href="{{ url_for('imports') }}">← 返回匯入工作區</a></div>
 {% set concept_mode = items and items[0].get('_import_strategy') == 'concept' %}
 {% if concept_mode %}
 <p class="notice info"><strong>概念型匯入：</strong>確認後，這些原始題目只會作為 Concept 的來源樣本，不會加入固定考題池。相同 Concept 會合併；之後由 LLM 依概念、技能與難度重新生成新題。</p>
@@ -24,5 +24,5 @@
   <p>答案：{{ item.answer_key }}</p><p>解析：{{ item.explanation or '未提供' }}</p>
 </article>
 {% endfor %}
-{% if batch.status=='待確認' %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="action">確認全部題目</button><a class="outline-button" href="{{ url_for('imports') }}">返回，暫不匯入</a></form>{% endif %}
+{% if batch.status=='待確認' %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="action">確認並匯入 {{ items|length }} 題 →</button><a class="outline-button" href="{{ url_for('imports') }}">返回，暫不匯入</a></form>{% endif %}
 {% endblock %}

@@ -1,6 +1,6 @@
-{% extends 'live_base.html' %}{% from 'fields.html' import render_fields %}{% block content %}
+{% extends 'live_base.html' %}{% from 'fields.html' import render_fields %}{% block content %}{% if table=='questions' %}<nav class="exam-workspace-nav" aria-label="考題工作區"><a href="{{ url_for('imports') }}">匯入題庫</a><a class="active" href="{{ url_for('records',table='questions') }}">固定題庫</a><a href="{{ url_for('personal_ai.concepts') }}">概念題庫</a><a href="{{ url_for('quiz_start') }}">建立模擬考</a></nav>{% endif %}
 {% if table in ['subjects','chapters','questions'] %}<p class="note">建立順序：科目 → 章節 → 題目。所有資料僅在自己的帳號內使用。</p>{% endif %}
-{% if table=='questions' %}<p class="notice info"><strong>這裡是固定題庫。</strong>「概念型匯入」的原始題目會放在 Concept Bank 作為來源樣本，因此不會列在這裡；模擬考會直接依 Concept 動態生成新題。每次考試產生的歷史快照也不會混回固定題庫。</p>{% endif %}
+{% if table=='questions' %}<p class="notice info"><strong>這裡是固定題庫。</strong>「概念型匯入」的原始題目會放在 Concept Bank 作為來源樣本，因此不會列在這裡；模擬考可選普通隨機抽取固定原題，或依 Concept 動態生成新題。每次考試產生的歷史快照也不會混回固定題庫。</p>{% endif %}
 {% if table in ['chat_sessions','chat_messages','summaries'] %}<p class="notice info">目前提供手動紀錄與儲存，尚未呼叫模型或 RAG，不會自動產生回答或摘要。</p>{% endif %}
 <section class="panel-card"><h2>{{ '編輯資料' if edit_id else '新增資料' }}</h2><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% if edit_id %}<input type="hidden" name="id" value="{{ edit_id }}">{% endif %}{{ render_fields(fields,values,choices) }}
 {% if table=='questions' %}<h3>選擇題選項</h3><p class="note">單選／多選至少兩個選項；是非與填空可留空。</p><div class="form-grid">{% for letter in 'ABCD' %}<label>選項 {{ letter }}<input name="option_{{ letter }}" maxlength="2000" value="{{ values.get('option_'+letter,option_values.get('option_'+letter,'')) }}"></label>{% endfor %}</div>{% endif %}

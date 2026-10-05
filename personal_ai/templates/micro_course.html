@@ -1,29 +1,29 @@
-{% extends 'live_base.html' %}{% block content %}
+{% extends 'live_base.html' %}{% block content %}<div class="chat-workspace course-workspace">
 <section class="panel-card">
   <div class="record-head"><div><h2>{{course.title}}</h2><p>{{course.subject_name}} / {{course.chapter_name or '未指定章節'}} / {{course.concept_name}} · 約 {{course.estimated_minutes}} 分鐘</p></div><span class="pill">{{course.status}}</span></div>
   <p><strong>學習目標：</strong>{{course.objective}}</p>
   <div class="notice info"><strong>AI 為什麼安排這堂課？</strong><br>{{course.reason}}<br><small>生成模型：{{course.generation_model}} · 教材證據 {{course.evidence|length}} 段{% if voice_enabled %} · 語音模式已啟用{% else %} · 語音模型已預留，尚未啟用{% endif %}</small></div>
   {% if error %}<p class="form-error">{{error}}</p>{% endif %}
 </section>
-<section class="panel-card"><h2>課程內容</h2>
-{% for st in course.steps %}<article class="record-item {% if st.status=='done' %}selected{% endif %}">
+<section class="panel-card course-content"><h2>這堂課的學習旅程</h2>
+{% for st in course.steps %}<article class="course-step {% if st.status=='done' %}selected{% endif %}">
   <div class="record-head"><strong>{{loop.index}}. {{st.title}}</strong><span class="pill">{{st.step_type}}</span></div>
-  <p style="white-space:pre-wrap">{{st.content}}</p>
+  <p class="prewrap">{{st.content}}</p>
   {% if st.question %}<div class="notice"><strong>互動問題</strong><p>{{st.question}}</p>
     {% if st.status=='done' %}<p><b>你的回答：</b>{{st.user_answer}}</p><p><b>回饋：</b>{{st.feedback or st.explanation}}</p>
     {% else %}<form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="answer"><input type="hidden" name="step_id" value="{{st.id}}"><textarea name="answer" rows="3" maxlength="1000" required placeholder="用自己的話回答，不用背原題"></textarea><button class="action">送出回答</button></form>{% endif %}
   </div>{% endif %}
 </article>{% endfor %}
 </section>
-<section class="panel-card"><h2>和 AI 老師互動</h2><p>追問會沿用這堂課、Concept 與同一批 RAG 教材內容。未來開啟語音後，這一區會直接接 STT → Tutor → TTS。</p>
-  {% for m in course.messages %}<article class="record-item"><strong>{{'你' if m.role=='user' else 'AI Tutor'}}</strong><p style="white-space:pre-wrap">{{m.content}}</p>{% if m.model_name and m.role=='assistant' %}<small>模型：{{m.model_name}}</small>{% endif %}</article>{% endfor %}
-  <form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="ask"><textarea name="question" rows="3" maxlength="1500" placeholder="例如：可以再換一個例子嗎？我為什麼會把 LEFT JOIN 當成 INNER JOIN？"></textarea><button class="action">問 AI 老師</button></form>
+<section class="panel-card chat-intro"><h2>和 AI 老師聊聊</h2><p>還有不清楚的地方嗎？老師會根據這堂課與教材陪你一起釐清。</p>
+  {% for m in course.messages %}<article class="chat-message {{ 'chat-user' if m.role=='user' else 'chat-assistant' }}"><strong>{{'你' if m.role=='user' else 'AI 老師'}}</strong><p class="prewrap">{{m.content}}</p>{% if m.model_name and m.role=='assistant' %}<small>模型：{{m.model_name}}</small>{% endif %}</article>{% endfor %}
+  <form method="post" class="chat-composer"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="ask"><textarea name="question" rows="3" maxlength="1500" placeholder="例如：可以再換一個例子嗎？我為什麼會把 LEFT JOIN 當成 INNER JOIN？"></textarea><button class="action">問 AI 老師</button></form>
 </section>
-<section class="panel-card"><h2>AI 流程可視化</h2><div class="pipeline-view">
+<section class="panel-card course-tools"><h2>課程依據與學習資訊</h2><div class="pipeline-view">
   <span class="pill">弱項 {{course.weakness.mastery if course.weakness.mastery is not none else '未測驗'}}{% if course.weakness.mastery is not none %}%{% endif %}</span> → <span class="pill">Concept {{course.concept_name}}</span> → <span class="pill">RAG {{course.evidence|length}} chunks</span> → <span class="pill">{{course.generation_model}}</span> → <span class="pill">互動教學</span> → <span class="pill">Checkpoint / 再測</span>
 </div>
   <details class="record-item"><summary>查看本課教材依據</summary>{% for e in course.evidence %}<p><strong>{{e.section_title or e.material_title or '教材'}}</strong><br>{{e.content[:800]}}</p>{% else %}<p>目前沒有檢索到教材 chunk，因此真模型模式會被要求明確標示證據不足。</p>{% endfor %}</details>
   <details class="record-item"><summary>預留語音模型</summary><p>STT：{{stt_model}} → 使用者語音轉文字</p><p>TTS：{{tts_model}} → AI Tutor 文字轉語音</p><p>目前 VOICE_ENABLED={{'true' if voice_enabled else 'false'}}；公司 DEV 不載入語音模型。</p></details>
 </section>
 <section class="panel-card"><form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="complete"><button class="primary-button">完成課程，準備回到小測驗證</button></form></section>
-{% endblock %}
+</div>{% endblock %}
