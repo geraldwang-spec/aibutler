@@ -17,6 +17,8 @@ import math
 import re
 from datetime import date, datetime, time, timedelta
 
+from modules.document_parser import DocumentParseError, DocumentParser
+
 from .ai_report import AiReport
 from .analysis import TrainingAnalysis
 from .errors import ApiError
@@ -118,7 +120,7 @@ LLM_REPORT_PER_HOUR = 10
 
 class DocumentRules:
     """教練文章（RAG）的限制：控制 embedding 費用與檢索品質。"""
-    FILE_TYPES = ('txt', 'md')
+    FILE_TYPES = ('txt', 'md', 'pdf', 'docx', 'xlsx', 'csv')   # 轉換由共用的 modules.document_parser 負責
     MAX_CHARS = 20000          # 一篇最多幾個字
     MAX_DOCUMENTS = 10         # 每人最多幾篇
     MAX_CHUNKS = 80            # 一篇最多切成幾段
@@ -382,7 +384,8 @@ class BodyService:
                     best[row['id']] = (row, score)
         ranked = sorted(best.values(), key=lambda x: -x[1])[:DocumentRules.REPORT_PASSAGES]
         return [dict(n=i + 1, chunk_id=row['id'], title=row['title'], section=row.get('section') or '',
-                     text=row['content'], score=score) for i, (row, score) in enumerate(ranked)]
+                     locator=row.get('locator') or '', text=row['content'], score=score)
+                for i, (row, score) in enumerate(ranked)]
 
     def _searchable_chunks(self):
         """只用「目前的 embedding 模型」做的段落（換模型後的舊向量不能互相比較）。"""
@@ -440,25 +443,24 @@ class BodyService:
             file_types=list(DocumentRules.FILE_TYPES)))
 
     def upload_document(self, filename, raw, title=''):
-        """上傳 .txt／.md：切段 → embedding → 一次寫入資料庫（原始檔案不存）。"""
+        """上傳文章：轉成文字（modules.document_parser）→ 切段 → embedding → 一次寫入資料庫（原始檔案不存）。"""
         if self.embedder is None:
             raise ApiError('尚未設定 embedding（body/body.env 的 BODY_EMBED_MODEL），不能上傳文章。')
         name = str(filename or '').strip()
-        ext = name.rsplit('.', 1)[-1].lower() if '.' in name else ''
+        ext = DocumentParser.extension(name)
         if ext not in DocumentRules.FILE_TYPES:
-            raise ApiError('只能上傳 .txt 或 .md 檔案。')
+            raise ApiError(f"只能上傳 {'、'.join('.' + e for e in DocumentRules.FILE_TYPES)} 檔案。")
         try:
-            text = (raw or b'').decode('utf-8-sig').strip()
-        except UnicodeDecodeError:
-            raise ApiError('檔案要用 UTF-8 編碼儲存。') from None
-        if not text:
-            raise ApiError('檔案是空的。')
-        if len(text) > DocumentRules.MAX_CHARS:
-            raise ApiError(f'文章太長（{len(text):,} 字），一篇最多 {DocumentRules.MAX_CHARS:,} 字。')
+            sections = DocumentParser.parse(name, raw)
+        except DocumentParseError as exc:
+            raise ApiError(str(exc)) from None
+        total = sum(len(s['text']) for s in sections)
+        if total > DocumentRules.MAX_CHARS:
+            raise ApiError(f'文章太長（{total:,} 字），一篇最多 {DocumentRules.MAX_CHARS:,} 字，請分成幾篇上傳。')
         if self.sql.document_count() >= DocumentRules.MAX_DOCUMENTS:
             raise ApiError(f'最多上傳 {DocumentRules.MAX_DOCUMENTS} 篇，請先刪除不需要的文章。')
         title = ' '.join(str(title or '').split())[:120] or name.rsplit('.', 1)[0][:120] or '教練文章'
-        chunks = TextChunker().split(text)
+        chunks = TextChunker().split_sections(sections)
         if not chunks:
             raise ApiError('文章裡沒有可以使用的內容。')
         if len(chunks) > DocumentRules.MAX_CHUNKS:
@@ -502,7 +504,7 @@ class BodyService:
         hits = VectorIndex.search(vector, rows, k=k, min_score=min_score)
         return dict(query=query, min_score=VectorIndex.DEFAULT_MIN_SCORE if min_score is None else min_score,
                     hits=[dict(chunk_id=r['id'], title=r['title'], section=r.get('section') or '',
-                               text=r['content'], score=score) for r, score in hits])
+                               locator=r.get('locator') or '', text=r['content'], score=score) for r, score in hits])
 
     # ============================================================ 新增動作（一句話輸入遇到動作庫沒有的動作）
     def create_exercise(self, data):

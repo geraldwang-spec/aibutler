@@ -2,6 +2,7 @@
 """教練文章 RAG 的純計算部分：切段與向量搜尋。
 
     TextChunker().split(text)                      依標題與段落切段（每段約 300～500 字，前後重疊約 50 字）
+    TextChunker().split_sections(sections)         切 modules.document_parser 轉出的多個段落，保留出處位置
     VectorIndex.to_blob(vector) / from_blob(blob)  向量 ↔ 資料庫 BLOB（float32）
     VectorIndex.search(query, rows, k, min_score)  用 numpy 一次算完所有餘弦相似度，只回傳超過門檻的前 k 段
 
@@ -47,6 +48,18 @@ class TextChunker:
                 if len(overlap) + len(buffer) >= self.TARGET_CHARS:
                     flush()
         flush()
+        return chunks
+
+    def split_sections(self, sections):
+        """切 DocumentParser 轉出來的多個段落（例如 PDF 的每一頁、Excel 的每個工作表）。
+
+        回傳 [{index, section, locator, content}]；locator 是出處位置（第 3 頁、工作表「週課表」…）。
+        """
+        chunks = []
+        for part in sections:
+            for chunk in self.split(part['text']):
+                chunks.append(dict(index=len(chunks), section=chunk['section'] or part.get('title') or '',
+                                   locator=part.get('locator') or '', content=chunk['content']))
         return chunks
 
     @staticmethod

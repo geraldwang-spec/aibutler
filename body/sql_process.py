@@ -151,7 +151,8 @@ class BodySqlProcess:
             'SELECT id FROM rag_chunks WHERE doc_id=? ORDER BY chunk_index', (doc_id,))]
         self.conn.executemany(
             'INSERT INTO rag_chunk_meta (chunk_id, source_locator, section_title) VALUES (?,?,?)',
-            [(chunk_id, f"第 {c['index'] + 1} 段", c['section'] or None) for chunk_id, c in zip(ids, chunks)])
+            [(chunk_id, c.get('locator') or f"第 {c['index'] + 1} 段", c['section'] or None)
+             for chunk_id, c in zip(ids, chunks)])
         return material_id
 
     def documents(self):
@@ -186,7 +187,8 @@ class BodySqlProcess:
         """自己所有教練文章的段落與向量（檢索用）；一定經過 materials.user_id 檢查。"""
         return [dict(r) for r in self.conn.execute(
             'SELECT c.id AS id, c.content AS content, c.embedding AS embedding, c.chunk_index AS chunk_index, '
-            'm.id AS material_id, m.title AS title, m.file_path AS file_path, meta.section_title AS section '
+            'm.id AS material_id, m.title AS title, m.file_path AS file_path, meta.section_title AS section, '
+            'meta.source_locator AS locator '
             'FROM rag_chunks c JOIN rag_documents d ON d.id=c.doc_id JOIN materials m ON m.id=d.material_id '
             'LEFT JOIN rag_chunk_meta meta ON meta.chunk_id=c.id '
             'WHERE m.user_id=? AND d.source_type=?', (self.user_id, self.SOURCE))]

@@ -439,7 +439,7 @@
       saved.sources && saved.sources.length ? h('div', { class: 'bd-ai__group' },
         h('h4', { text: '參考來源（你上傳的教練文章）' }),
         saved.sources.map((src) => h('details', { class: 'bd-source' },
-          h('summary', { text: `[${src.n}] ${src.title}${src.section ? `・${src.section}` : ''}` }),
+          h('summary', { text: `[${src.n}] ${[src.title, src.locator && src.locator !== '全文' ? src.locator : '', src.section].filter(Boolean).join('・')}` }),
           h('p', { text: src.text })))) : null,
       h('p', { class: 'bd-muted' },
         `AI 產生於 ${time}${saved.model ? `・${saved.model}` : ''}${latency}`,
@@ -496,16 +496,16 @@
     }
     const full = d.documents.length >= d.limits.max_documents;
     return h('section', { class: 'bd-report__block bd-docs' }, head,
-      h('p', { class: 'bd-muted', text: `上傳教練給的文章或訓練原則（.txt／.md，最多 ${d.limits.max_chars.toLocaleString()} 字、${d.limits.max_documents} 篇）。產生 AI 說明時會找出相關段落，並在建議後面標出處。` }),
+      h('p', { class: 'bd-muted', text: `上傳教練給的文章、訓練原則或課表（${d.limits.file_types.map((t) => '.' + t).join('、')}；最多 ${d.limits.max_chars.toLocaleString()} 字、${d.limits.max_documents} 篇）。產生 AI 說明時會找出相關段落，並在建議後面標出處。掃描檔或圖片無法讀取。` }),
       h('form', { class: 'bd-docs__form', dataset: { form: 'doc-upload' } },
         h('label', { class: 'bd-sr', for: 'bd-doc-file', text: '選擇檔案' }),
-        h('input', { id: 'bd-doc-file', name: 'file', type: 'file', accept: '.txt,.md,text/plain,text/markdown', disabled: full || docs.busy }),
+        h('input', { id: 'bd-doc-file', name: 'file', type: 'file', accept: d.limits.file_types.map((t) => '.' + t).join(','), disabled: full || docs.busy }),
         h('label', { class: 'bd-sr', for: 'bd-doc-title', text: '標題（選填）' }),
         h('input', { id: 'bd-doc-title', name: 'title', type: 'text', maxlength: 120, placeholder: '標題（選填，預設用檔名）', class: 'bd-quick__input', disabled: full || docs.busy }),
         h('button', { class: 'bd-btn bd-btn--primary', disabled: full || docs.busy, dataset: { key: 'doc-upload' } }, docs.busy ? '處理中…' : '上傳')),
       d.documents.length ? h('ul', { class: 'bd-docs__list' }, d.documents.map((doc) => h('li', { class: 'bd-docs__item' },
         h('span', { class: 'bd-docs__name' }, icon('file-text-o'), ` ${doc.title}`),
-        h('small', { text: doc.usable ? `${doc.chunks} 段` : `${doc.chunks} 段・用不同的 embedding 模型建立，請重新上傳` }),
+        h('small', { text: `${(doc.file_type || '').toUpperCase()}・` + (doc.usable ? `${doc.chunks} 段` : `${doc.chunks} 段・用不同的 embedding 模型建立，請重新上傳`) }),
         h('button', { type: 'button', class: 'bd-btn', dataset: { action: 'doc-delete', id: doc.id, key: `doc-del-${doc.id}` }, 'aria-label': `刪除 ${doc.title}` }, icon('trash-o'))))) :
         h('p', { class: 'bd-muted', text: '還沒有上傳文章。' }));
   }

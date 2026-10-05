@@ -145,5 +145,6 @@ class AiReport:
         cited = {n for text in [result['summary']] + result['strengths'] + result['weaknesses'] + result['suggestions']
                  for n in self._citations(text)[0]}
         result['sources'] = [dict(n=p['n'], chunk_id=p['chunk_id'], title=p['title'], section=p.get('section') or '',
-                                  text=p['text'][:400], score=p.get('score')) for p in self.passages if p['n'] in cited]
+                                  locator=p.get('locator') or '', text=p['text'][:400], score=p.get('score'))
+                             for p in self.passages if p['n'] in cited]
         return result

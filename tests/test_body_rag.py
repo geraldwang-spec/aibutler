@@ -152,13 +152,26 @@ class RagApiTests(unittest.TestCase):
                               for t in ('rag_chunks', 'rag_chunk_meta', 'rag_documents', 'materials')], [0, 0, 0, 0])
 
     def test_upload_validation(self):
-        self.assertEqual(self.upload(self.client, 'x', name='coach.pdf')[0], 400)
+        self.assertIn('只能上傳', self.upload(self.client, 'x', name='coach.exe')[1]['error'])
+        self.assertIn('無法開啟', self.upload(self.client, 'not a pdf', name='coach.pdf')[1]['error'])
         self.assertEqual(self.upload(self.client, '   ')[0], 400)
         self.assertIn('最多', self.upload(self.client, '字' * 20001)[1]['error'])
         import io
-        response = self.client.post('/body/api/docs', data={'file': (io.BytesIO('中文'.encode('big5')), 'a.txt')},
+        response = self.client.post('/body/api/docs', data={'file': (io.BytesIO('背部要練划船'.encode('big5')), 'a.txt')},
                                     headers={'X-CSRF-Token': self.token(self.client)}, content_type='multipart/form-data')
-        self.assertIn('UTF-8', response.get_json()['error'])
+        self.assertTrue(response.get_json()['ok'])                              # Big5 的舊文字檔也能讀
+
+    def test_upload_word_and_excel_keep_locators(self):
+        from tests.test_document_parser import sample_docx, sample_xlsx
+        import io
+        for name, data in (('coach.docx', sample_docx()), ('plan.xlsx', sample_xlsx())):
+            response = self.client.post('/body/api/docs', data={'file': (io.BytesIO(data), name)},
+                                        headers={'X-CSRF-Token': self.token(self.client)}, content_type='multipart/form-data')
+            self.assertTrue(response.get_json()['ok'], response.get_json())
+        hits = self.client.get('/body/api/docs/search?q=划船&min_score=0.1').get_json()['hits']
+        locators = {h['locator'] for h in hits}
+        self.assertIn('工作表「週課表」', locators)                              # Excel：出處是工作表
+        self.assertTrue(any(h['section'] == '背部' for h in hits))               # Word：標題變成段落的小標
         import io as _io
         response = self.client.post('/body/api/docs', data={'file': (_io.BytesIO(b'abc'), 'a.txt')},
                                     content_type='multipart/form-data')
