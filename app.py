@@ -70,6 +70,8 @@ def create_app(test_config=None):
     flask_app.register_blueprint(body)
     register_tye_exam(flask_app)
     register_personal_ai(flask_app)
+    from workspace_ui import register_workspace_ui
+    register_workspace_ui(flask_app)
     if not flask_app.config.get('TESTING') and not flask_app.config.get('DB_READ_ONLY') and str(flask_app.config.get('APP_MODE','dev')).lower() == 'dev' and flask_app.config.get('DB_TYPE') == 'sqlite':
         from dev_seed import ensure_dev_seed
         with flask_app.app_context():
@@ -115,4 +117,4 @@ def check_environment(app):
 if __name__ == "__main__":
     app = create_app()
     check_environment(app)
-    app.run(host="127.0.0.1", port=5000, debug=False)
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)

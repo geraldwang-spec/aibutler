@@ -1,1 +1,1 @@
-{% extends 'live_base_legacy.html' if request.path.startswith('/body') else 'product_base.html' %}
+{% extends 'workspace_pane.html' if workspace_embedded else 'product_base.html' %}

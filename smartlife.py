@@ -372,7 +372,7 @@ def create_app(test_config=None):
     @app.get('/workspace/<page>')
     @login_required
     def workspace(page):
-        mapping={'overview':'dashboard','mock':'quiz_start','results':'results','analysis':'analysis','sources':'imports','wellness':'dashboard'}
+        mapping={'overview':'dashboard','mock':'quiz_start','results':'results','analysis':'analysis','sources':'imports','wellness':'body.index'}
         if page=='review':
             return redirect(url_for('records',table='summaries'))
         if page not in mapping:

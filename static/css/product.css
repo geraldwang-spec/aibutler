@@ -230,3 +230,13 @@
 .product-ui .exam-step-bar b{background:#8a7cce;color:#fff}
 .product-ui .scope-bar{background:#f2effc;border-left-color:#afa2e3}
 .product-ui .scope-bar>i{color:#9586d1}
+/* Persistent outer shell: only the content document navigates and scrolls. */
+.workspace-host{height:100dvh;overflow:hidden}
+.workspace-host .product-shell{height:100dvh;min-height:0}
+.workspace-host .workspace-main{height:100dvh;display:flex;flex-direction:column;position:relative}
+.workspace-host .workspace-topbar{flex-shrink:0}
+.workspace-frame{display:block;border:0;background:#f8f9fc;width:100%;flex:1;min-height:0}
+.workspace-loading{position:absolute;top:62px;right:20px;z-index:10;background:#fff;border:1px solid #e5e2ef;border-radius:8px;padding:8px 14px;box-shadow:0 4px 16px #49406012;font-size:12px}
+.workspace-loading[hidden]{display:none}
+@media(max-width:800px){.workspace-host .product-shell{display:flex;flex-direction:column}.workspace-host .workspace-sidebar{flex-shrink:0}.workspace-host .workspace-main{height:auto;flex:1;min-height:0}.workspace-host .workspace-nav.is-open{max-height:30dvh}}
+@media(max-width:800px){.product-ui .workspace-nav.is-open{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 8px;max-height:260px;padding:0 14px 14px;overflow-y:auto}.product-ui .workspace-nav-label,.product-ui .workspace-tools{grid-column:1/-1}.product-ui .workspace-nav-label{padding-top:10px}.product-ui .workspace-nav .workspace-nav-item{font-size:12px!important;padding:8px 10px!important}}

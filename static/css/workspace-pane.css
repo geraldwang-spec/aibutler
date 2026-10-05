@@ -1,0 +1,6 @@
+/* Pane layout only. BODY's own controls, typography and styles remain untouched. */
+html,body{min-height:100%;margin:0}
+.workspace-body-pane>.templatemo-content{width:100%;margin:0;min-height:100vh}
+.workspace-pane>.workspace-content{width:100%}
+.workspace-pane .chat-layout{height:calc(100dvh - 95px)}
+@media(max-width:800px){.workspace-pane .chat-layout{height:calc(100dvh - 65px)}}
