@@ -6,6 +6,10 @@ from pathlib import Path
 from body.service import DEFAULT_EXERCISES
 from body.text_parser import ExerciseGuesser, WorkoutTextParser
 
+# 新版介面：/body/ 直接打開會先回傳外框（我的工作室），頁面本身在 iframe 裡載入；
+# 測試要模擬 iframe 的請求，才會真的執行 body 的頁面（例如寫入預設動作）。
+PANE = {'Sec-Fetch-Dest': 'iframe'}
+
 LIBRARY = [dict(id=i + 1, name=name) for i, (name, *_) in enumerate(DEFAULT_EXERCISES)]
 PARSER = WorkoutTextParser(LIBRARY)
 NAME = {e['id']: e['name'] for e in LIBRARY}
@@ -118,7 +122,7 @@ class ParseApiTests(unittest.TestCase):
         self.client = self.app.test_client()
         self.client.get('/login')
         self.client.post('/login', data={'csrf_token': self.token(), 'username': 'tester01', 'password': 'Testing!123'})
-        self.client.get('/body/')      # 寫入預設動作
+        self.client.get('/body/', headers=PANE)      # 寫入預設動作
         self.calls = []
 
     def tearDown(self):
