@@ -3,6 +3,7 @@ from flask import current_app
 from storage import db
 from .llm_provider import get_tutor_llm
 from .prompt_budget import bounded_json
+from .response_style import STYLE, scope_reply
 
 
 def validate_question(user_id,question,subject_id=None):
@@ -47,7 +48,7 @@ def generate_reply(user_id,chat_id,question,subject_id=None):
         chunks=retrieve(user_id,subject_id,question,limit=3,require_relevance=True)
         evidence='\n\n'.join(f"[教材片段 {row['id']}] {row['material_title']} · {row['section_title'] or ''}\n{row['content']}" for row in chunks)
     if subject_id and not chunks:
-        response={'answer':'在所選科目的教材中找不到與這個問題相關的內容，因此無法依教材回答。請改問此科目的內容，或先上傳相關講義。',
+        response={'answer':scope_reply(question),
                   'title':initial_title(question)}
     else:
         model=get_tutor_llm(current_app.config)
@@ -61,13 +62,13 @@ def generate_reply(user_id,chat_id,question,subject_id=None):
             result_format.update(supported=True,evidence_chunk_ids=[int(chunks[0]['id'])])
             scope+='若不能由教材回答，supported 必須為 false、evidence_chunk_ids 留空。能回答時必須列出實際支持答案的片段編號。'
         import json
-        response=model.complete_json(scope+'直接簡潔回答，通常以 250 字內說明。只回有效 JSON：'+json.dumps(result_format,ensure_ascii=False),
+        response=model.complete_json(scope+STYLE+'直接簡潔回答，通常以 250 字內說明。只回有效 JSON：'+json.dumps(result_format,ensure_ascii=False),
             bounded_json(dict(question=question,evidence=evidence,history=history)))
         if subject_id and isinstance(response,dict):
             citations=response.get('evidence_chunk_ids')
             allowed={int(chunk['id']) for chunk in chunks}
             if response.get('supported') is not True or not isinstance(citations,list) or not citations or any(type(cid) is not int or cid not in allowed for cid in citations):
-                response['answer']='目前教材沒有足夠的可驗證依據回答這個問題，請補充相關教材或調整問題。'
+                response['answer']=scope_reply(question)
             else:
                 used=set(citations)
                 sources='；'.join(f"{chunk['material_title']}（{chunk['source_locator']}，片段 {chunk['id']}）" for chunk in chunks if int(chunk['id']) in used)

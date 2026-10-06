@@ -27,7 +27,7 @@ def unsafe_instruction(text):
 
 def validate_user_text(text):
     if unsafe_instruction(text):
-        raise ValueError('這項要求涉及敏感資料或覆寫系統規則，無法處理。可以詢問資安概念，但不能取得實際憑證或個資。')
+        raise ValueError('金鑰、密碼和個資需要好好保護，這些實際資料我不能提供，也不能照要求跳過系統規則。不過你想了解資安原理或安全設定，我可以陪你一起釐清。')
 
 def redact_text(text):
     value = str(text or '')

@@ -10,6 +10,7 @@ from .llm_provider import LLMError, get_course_llm, get_tutor_llm, model_usage_l
 from .rag import retrieve
 from .prompt_budget import bounded_json
 from .data_safety import safe_source, validate_user_text, redact_text
+from .response_style import STYLE, scope_reply
 
 
 def _concept_row(user_id: int, concept_id: int):
@@ -368,7 +369,7 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
     )
 
     if not supported:
-        answer='目前課程與教材沒有這個問題的相關依據，請詢問本課內容。'
+        answer=scope_reply(question,context='這堂課和教材',in_chat=False)
         model_name='教材範圍檢查（未呼叫模型）'
     elif not model.enabled or getattr(model, "provider", "") == "mock":
         answer = (
@@ -380,7 +381,7 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
     else:
         system = (
             "你是互動式 AI Tutor。只能依目前微課程、Concept、教材 RAG 證據回答。若證據不足要明說。"
-            "用繁體中文、短句、蘇格拉底式引導；不要直接暴露未作答 Checkpoint 的答案。只回 JSON。"
+            "用繁體中文、短句、蘇格拉底式引導；不要直接暴露未作答 Checkpoint 的答案。只回 JSON。" + STYLE
         )
         payload = bounded_json(
             {

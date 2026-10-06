@@ -11,6 +11,7 @@ from .llm_provider import model_usage_label, get_llm, LLMError
 from .rag import retrieve
 from .prompt_budget import bounded_json
 from .schedule_rhythm import RecoveryRhythm
+from .response_style import STYLE, scope_reply
 
 RECENT_CONCEPT_LIMIT = 20
 MIN_CONCEPT_SAMPLE = 3
@@ -235,7 +236,7 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
     context_text=' '.join([safe_source(q['content']),safe_source(q.get('explanation'))]+concept_names+[c['content'] for c in chunks])
     clarification=followup.strip('？?。!！ ') in {'為什麼','為甚麼','為什麼錯','再解釋一次','可以舉例嗎','看不懂','請解釋','請舉例'}
     if followup and not clarification and not related(followup,context_text):
-        answer='這筆錯題與所選教材沒有此追問的相關依據，請針對題目內容提問。'
+        answer=scope_reply(followup,context='這筆錯題和教材',in_chat=False)
         mode='教材範圍檢查（未呼叫模型）'
     elif not llm.enabled or getattr(llm, "provider", "") == "mock":
         pieces = []
@@ -256,7 +257,7 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
         system = (
             "你是錯題教學助理。只能依題目、正確答案、題庫解析與提供的教材 RAG 證據回答。"
             "若證據不足，明確說教材中沒有足夠依據，不可自行補充未提供的事實。"
-            "用繁體中文，先指出錯誤關鍵，再分步說明；追問也必須維持相同證據限制。只回 JSON。"
+            "用繁體中文，先指出錯誤關鍵，再分步說明；追問也必須維持相同證據限制。只回 JSON。" + STYLE
         )
         user = bounded_json({
             "question": q["content"],
