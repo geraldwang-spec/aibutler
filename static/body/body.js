@@ -234,9 +234,9 @@
         'aria-current': x.selected ? 'date' : null,
         'aria-label': `${x.d}（${x.weekday}）${x.trained ? '，有訓練' : ''}`
       },
-      h('span', { class: 'bd-day__w', text: x.weekday }),
-      h('span', { class: 'bd-day__n', text: x.day }),
-      h('span', { class: 'bd-day__tag', text: x.groups.slice(0, 2).join('・') || (x.trained ? '訓練' : '') })))));
+        h('span', { class: 'bd-day__w', text: x.weekday }),
+        h('span', { class: 'bd-day__n', text: x.day }),
+        h('span', { class: 'bd-day__tag', text: x.groups.slice(0, 2).join('・') || (x.trained ? '訓練' : '') })))));
   }
 
   function renderTabs() {
@@ -257,9 +257,11 @@
       fill(panel, state.is_future
         ? h('p', { class: 'bd-empty', text: '這天還沒到，先回到今天記錄吧。' })
         : h('div', { class: 'bd-empty' },
-          h('p', { text: getPlan().length
-            ? `已排好 ${getPlan().length} 個動作，可以開始訓練了。`
-            : '先在下方「今天要做的動作」加入動作，再開始訓練。' }),
+          h('p', {
+            text: getPlan().length
+              ? `已排好 ${getPlan().length} 個動作，可以開始訓練了。`
+              : '先在下方「今天要做的動作」加入動作，再開始訓練。'
+          }),
           startButton('start')));
       return;
     }
@@ -354,6 +356,7 @@
     const items = exerciseList();
 
     const list = h('div', { class: 'bd-exlist' },
+      !w && state.library.length && !state.is_future ? suggestPanel() : null,
       state.library.length && !state.is_future ? quickPanel() : null,
       items.map((e) => exerciseItem(e, cur, w)),
       state.library.length ? addExerciseForm() : h('p', { class: 'bd-empty bd-empty--small' },
@@ -471,8 +474,10 @@
     body.append('title', form.elements.title.value.trim());
     docs.busy = true; renderReport();
     try {
-      const response = await fetch(`${API}/docs`, { method: 'POST', body, credentials: 'same-origin',
-        headers: { 'X-CSRF-Token': CSRF, Accept: 'application/json' } });
+      const response = await fetch(`${API}/docs`, {
+        method: 'POST', body, credentials: 'same-origin',
+        headers: { 'X-CSRF-Token': CSRF, Accept: 'application/json' }
+      });
       const data = response.status === 413
         ? { ok: false, error: `檔案太大，上限是 ${mb(maxBytes)}。` }
         : await response.json().catch(() => ({ ok: false, error: `伺服器回應錯誤（${response.status}）。` }));
@@ -572,8 +577,10 @@
               h('span', { class: 'bd-bar__label', text: m }),
               h('progress', { class: 'bd-bar__meter', max: maxSets, value: v.sets, 'aria-label': `${m} ${v.sets} 組` }),
               h('span', { class: 'bd-bar__value', text: `${v.sets} 組` }),
-              h('span', { class: 'bd-bar__since' + (since !== null && since >= 7 ? ' is-warn' : ''),
-                text: since === null ? '沒練過' : since === 0 ? (r.in_progress ? '今天' : '期末當天') : `${since} 天前` }));
+              h('span', {
+                class: 'bd-bar__since' + (since !== null && since >= 7 ? ' is-warn' : ''),
+                text: since === null ? '沒練過' : since === 0 ? (r.in_progress ? '今天' : '期末當天') : `${since} 天前`
+              }));
           })),
           h('p', { class: 'bd-muted', text: `推 ${r.balance.push} 組・拉 ${r.balance.pull} 組${r.balance.push_pull ? `（推／拉 ${r.balance.push_pull}）` : ''}；上半身 ${r.balance.upper} 組・下半身 ${r.balance.lower} 組` })),
 
@@ -602,8 +609,10 @@
   function openNewForm(i) {
     const item = quick.result.items[i];
     const guess = item.suggest || {};
-    quick.forms[i] = quick.forms[i] || { name: item.input_text, muscle_group: guess.muscle_group || '',
-      equipment: guess.equipment || '', is_cardio: guess.is_cardio ? '1' : '0' };
+    quick.forms[i] = quick.forms[i] || {
+      name: item.input_text, muscle_group: guess.muscle_group || '',
+      equipment: guess.equipment || '', is_cardio: guess.is_cardio ? '1' : '0'
+    };
     quick.forms[i].open = true;
   }
   const setsSummary = (sets) => {
@@ -661,9 +670,11 @@
       r.unparsed.length ? h('p', { class: 'bd-quick__warn', text: `以下內容沒有被記錄：${r.unparsed.join('、')}` }) : null,
       r.note ? h('p', { class: 'bd-quick__warn', text: r.note }) : null,
       h('div', { class: 'bd-quick__actions' },
-        h('span', { class: 'bd-muted', text: r.source === 'llm'
-          ? `AI 解析${r.usage ? `（${(r.usage.latency_ms / 1000).toFixed(1)} 秒）` : ''}・請確認後加入`
-          : '規則解析・請確認後加入' }),
+        h('span', {
+          class: 'bd-muted', text: r.source === 'llm'
+            ? `AI 解析${r.usage ? `（${(r.usage.latency_ms / 1000).toFixed(1)} 秒）` : ''}・請確認後加入`
+            : '規則解析・請確認後加入'
+        }),
         h('button', { type: 'button', class: 'bd-btn', dataset: { action: 'quick-cancel', key: 'quick-cancel' }, text: '取消' }),
         r.items.length ? h('button', { type: 'button', class: 'bd-btn bd-btn--primary', dataset: { action: 'quick-apply', key: 'quick-apply' }, text: '加入預計組數' }) : null));
   }
@@ -686,15 +697,19 @@
       h('label', { class: 'bd-newex__row' }, h('span', { text: '部位' }),
         select('muscle_group', [['', '請選擇…']].concat(MUSCLE_CHOICES.map((m) => [m, m])), '部位')),
       h('label', { class: 'bd-newex__row' }, h('span', { text: '器材' }),
-        h('input', field('equipment', { class: 'bd-quick__select', type: 'text', maxlength: 50, value: f.equipment,
-          list: 'bd-equipment-list', placeholder: '例如 啞鈴、機械、徒手' })),
+        h('input', field('equipment', {
+          class: 'bd-quick__select', type: 'text', maxlength: 50, value: f.equipment,
+          list: 'bd-equipment-list', placeholder: '例如 啞鈴、機械、徒手'
+        })),
         h('datalist', { id: 'bd-equipment-list' }, EQUIPMENT_CHOICES.map((e) => h('option', { value: e })))),
       h('label', { class: 'bd-newex__row' }, h('span', { text: '有氧' }),
         select('is_cardio', [['0', '否（重量訓練）'], ['1', '是（有氧）']], '是否為有氧')),
       h('div', { class: 'bd-newex__actions' },
         h('button', { type: 'button', class: 'bd-btn', dataset: { action: 'quick-new-cancel', idx: i, key: `qnc-${i}` }, text: '先不要' }),
-        h('button', { type: 'button', class: 'bd-btn bd-btn--primary', disabled: saving,
-          dataset: { action: 'quick-new-save', idx: i, key: `qns-${i}` }, text: saving ? '新增中…' : '新增動作並加入訓練' })));
+        h('button', {
+          type: 'button', class: 'bd-btn bd-btn--primary', disabled: saving,
+          dataset: { action: 'quick-new-save', idx: i, key: `qns-${i}` }, text: saving ? '新增中…' : '新增動作並加入訓練'
+        })));
   }
 
   async function saveNewExercise(i) {
@@ -777,6 +792,118 @@
     showMessage(`已加入 ${chosen.length} 個動作的預計組數，請確認後再開始或逐組完成。`);
     const first = chosen[0][0];
     if (state.workout) load(state.d, first, 'replace'); else { planSel = first; render(); }
+  }
+
+  // ------------------------------------------------------------ 建議課表（程式排部位、組數、重量；AI 從候選挑動作）
+  // 只是草稿：「套用到今天」填進預計組數（applySets），使用者逐組按 ✓ 才寫入資料庫
+  const sug = { d: null, data: null, busy: false, open: false };
+
+  async function loadSuggest() {
+    if (sug.d === state.d) return;
+    sug.d = state.d; sug.data = null;
+    try {
+      const data = await call('GET', `/plan?d=${state.d}`);
+      if (data && sug.d === state.d) { sug.data = data.plan; if (data.plan.saved) sug.open = true; render(); }
+    } catch (e) {
+      // 讀不到已存的課表時，仍然可以按「產生課表」；把原因顯示出來，不要默默鎖住按鈕
+      if (sug.d === state.d) { sug.data = { enabled: false, saved: null, error: err.message }; render(); }
+    }
+  }
+
+  async function generateSuggest() {
+    if (sug.busy) return;
+    sug.busy = true; sug.open = true; render();
+    const d = state.d;
+    try {
+      const data = await call('POST', '/plan', { d });
+      if (data && state.d === d) sug.data = data.plan;
+      showMessage('');
+    } catch (err) {
+      showMessage(err.message, 'error');
+    } finally {
+      sug.busy = false; render();
+    }
+  }
+
+  function applySuggest() {
+    const items = (sug.data && sug.data.saved ? sug.data.saved.items : []).filter((x) => libById(x.exercise_id));
+    if (!items.length) return;
+    items.forEach((x) => applySets(x.exercise_id, x.sets));
+    planSel = items[0].exercise_id;
+    sug.open = false;    // 收合，讓下方的預計組數直接可見
+    showMessage(`已把 ${items.length} 個動作填進預計組數，請確認重量後開始訓練。`);
+    render();
+  }
+
+  const sugSets = (sets) => {
+    const x = sets[0] || {};
+    const weight = x.weight_kg === null || x.weight_kg === undefined ? '重量自填' : x.weight_kg ? `${num(x.weight_kg)} kg` : '徒手';
+    return `${sets.length} 組・${weight} × ${x.reps ?? '?'}`;
+  };
+
+  function suggestPanel() {
+    loadSuggest();
+    const info = sug.data;
+    const saved = info && info.saved;
+    const button = h('button', {
+      type: 'button', class: 'bd-btn ' + (saved ? '' : 'bd-btn--primary'), disabled: sug.busy,
+      dataset: { action: 'suggest', key: 'suggest' }
+    }, sug.busy ? '產生中…' : saved ? '重新產生' : '產生課表');
+    const toggle = saved ? h('button', {
+      type: 'button', class: 'bd-btn bd-btn--soft', 'aria-expanded': sug.open ? 'true' : 'false',
+      dataset: { action: 'suggest-toggle', key: 'suggest-toggle' }
+    }, sug.open ? '收合' : '展開') : null;
+    const head = h('div', { class: 'bd-ai__head' },
+      h('h3', null, icon('magic'), ' 建議課表'), h('span', { class: 'bd-sug__btns' }, toggle, button));
+    if (!saved || !sug.open) {
+      return h('section', { class: 'bd-ai bd-sug' }, head,
+        info && info.error ? h('p', { class: 'bd-quick__warn', text: `讀取建議課表失敗：${info.error}` }) : null,
+        !saved ? h('p', {
+          class: 'bd-muted', text: info && info.enabled
+            ? '依你的訓練紀錄排出今天的部位、組數與重量，AI 從動作庫挑動作並說明理由。'
+            : '依你的訓練紀錄排出今天的部位、組數與重量（設定 AI 後會再加上挑選理由）。'
+        }) : null);
+    }
+    const sk = saved.skeleton;
+    const skipped = sk.skipped && sk.skipped.length
+      ? h('p', { class: 'bd-muted', text: `沒有排進來：${sk.skipped.join('；')}` }) : null;
+    if (sk.rest) {
+      return h('section', { class: 'bd-ai bd-sug' }, head,
+        h('p', { class: 'bd-sug__rest' }, icon('bed'), h('span', { text: ` ${sk.rest_reason}` })),
+        skipped,
+        saved.stale ? h('p', { class: 'bd-quick__warn', text: '訓練紀錄有更新，可以按「重新產生」。' }) : null);
+    }
+    const time = (saved.generated_at || '').replace('T', ' ').slice(5, 16);
+    const latency = saved.usage && saved.usage.latency_ms ? `・${(saved.usage.latency_ms / 1000).toFixed(1)} 秒` : '';
+    return h('section', { class: 'bd-ai bd-sug' }, head,
+      h('p', { class: 'bd-sug__meta' }, chip(`${sk.split_name}・${sk.day_name}`, 'teal'),
+        h('span', { class: 'bd-muted', text: `${saved.items.length} 個動作・約 ${sk.minutes} 分鐘${sk.goal ? `・目標：${sk.goal}` : ''}` })),
+      saved.stale ? h('p', { class: 'bd-quick__warn', text: '訓練紀錄有更新，可以按「重新產生」。' }) : null,
+      saved.note ? h('p', { class: 'bd-quick__warn', text: saved.note }) : null,
+      saved.summary ? h('p', { class: 'bd-ai__summary', text: saved.summary }) : null,
+      skipped,
+      h('ol', { class: 'bd-sug__list' }, saved.items.map((x) => h('li', { class: 'bd-sug__item' },
+        h('div', { class: 'bd-sug__line' },
+          h('strong', { text: x.name }), chip(x.muscle),
+          h('span', { class: 'bd-sug__sets bd-mono', text: sugSets(x.sets) })),
+        h('small', { class: 'bd-muted', text: `${x.why}；${x.basis}` }),
+        x.rotated_from ? h('small', { class: 'bd-sug__rotate' }, icon('refresh'),
+          h('span', { text: ` 取代「${x.rotated_from.name}」（已連續做 ${x.rotated_from.days} 天），可以換換刺激` })) : null,
+        x.streak_days ? h('small', { class: 'bd-sug__rotate' }, icon('refresh'),
+          h('span', { text: ` 這個動作已連續做 ${x.streak_days} 天，可以考慮換成類似動作` })) : null,
+        x.reason ? h('small', { class: 'bd-sug__reason' }, icon('lightbulb-o'), h('span', { text: ` ${x.reason}` }))
+          : h('small', { class: 'bd-muted', text: saved.source === 'llm' ? '程式選擇（AI 的選擇沒有通過檢查）' : '程式選擇（最近常做的動作）' })))),
+      saved.sources && saved.sources.length ? h('div', { class: 'bd-ai__group' },
+        h('h4', { text: '參考來源（你上傳的教練文章）' }),
+        saved.sources.map((src) => h('details', { class: 'bd-source' },
+          h('summary', { text: `[${src.n}] ${[src.title, src.section].filter(Boolean).join('・')}` }),
+          h('p', { text: src.text })))) : null,
+      h('div', { class: 'bd-quick__actions' },
+        h('span', {
+          class: 'bd-muted', text: saved.source === 'llm'
+            ? `AI 產生於 ${time}${saved.model ? `・${saved.model}` : ''}${latency}` : `程式產生於 ${time}`
+        }),
+        h('button', { type: 'button', class: 'bd-btn bd-btn--primary', dataset: { action: 'suggest-apply', key: 'suggest-apply' }, text: '套用到今天' })));
   }
 
   function addExerciseForm() {
@@ -880,12 +1007,12 @@
           class: 'bd-grid bd-row ' + (j === 0 ? 'is-next' : 'is-todo'),
           dataset: { form: 'add-set', workout: w.id, exercise: cur.exercise_id }
         },
-        h('span', { class: 'bd-row__no', text: row.no }),
-        h('span', { class: 'bd-row__last', text: lastOf(lib, row.no) || '—' }),
-        kgInput(row.kg, `第 ${row.no} 組重量 kg`, { required: true, dataset: { ...planData, planField: 'kg', key: `kg-${row.no}` } }),
-        repsInput(row.reps, `第 ${row.no} 組次數`, { required: true, dataset: { ...planData, planField: 'reps', key: `rp-${row.no}` } }),
-        h('input', { class: 'bd-input bd-input--sm', type: 'number', name: 'rpe', step: 1, min: 1, max: 10, inputmode: 'numeric', placeholder: '—', 'aria-label': `第 ${row.no} 組 RPE（選填）` }),
-        h('button', { class: 'bd-check', dataset: { key: j === 0 ? 'next-check' : `check-${row.no}` }, 'aria-label': `完成第 ${row.no} 組` }, icon('check')));
+          h('span', { class: 'bd-row__no', text: row.no }),
+          h('span', { class: 'bd-row__last', text: lastOf(lib, row.no) || '—' }),
+          kgInput(row.kg, `第 ${row.no} 組重量 kg`, { required: true, dataset: { ...planData, planField: 'kg', key: `kg-${row.no}` } }),
+          repsInput(row.reps, `第 ${row.no} 組次數`, { required: true, dataset: { ...planData, planField: 'reps', key: `rp-${row.no}` } }),
+          h('input', { class: 'bd-input bd-input--sm', type: 'number', name: 'rpe', step: 1, min: 1, max: 10, inputmode: 'numeric', placeholder: '—', 'aria-label': `第 ${row.no} 組 RPE（選填）` }),
+          h('button', { class: 'bd-check', dataset: { key: j === 0 ? 'next-check' : `check-${row.no}` }, 'aria-label': `完成第 ${row.no} 組` }, icon('check')));
       }),
       h('button', { type: 'button', class: 'bd-btn bd-btn--soft', dataset: { action: 'plan-add-set', ex: cur.exercise_id, key: 'plan-add-set' } }, icon('plus'), ' 新增一組'));
   }
@@ -905,6 +1032,9 @@
     else if (action === 'quick-new-save') saveNewExercise(Number(target.dataset.idx));
     else if (action === 'quick-new-cancel') { quick.forms[target.dataset.idx].open = false; render(); }
     else if (action === 'quick-apply') quickApply();
+    else if (action === 'suggest') generateSuggest();
+    else if (action === 'suggest-toggle') { sug.open = !sug.open; render(); }
+    else if (action === 'suggest-apply') applySuggest();
     else if (action === 'rest-default') {
       // 只改之後每次休息的起始秒數；正在倒數的這一次不受影響
       // 對齊到 10 秒的倍數（舊版以 15 秒為單位存過的值，例如 105，會變成 110 / 100）

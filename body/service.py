@@ -27,6 +27,7 @@ from .prompts import Prompts
 from .rag import TextChunker, VectorIndex
 from .sql_process import BodySqlProcess
 from .text_parser import ExerciseGuesser, WorkoutTextParser
+from .workout_plan import WorkoutPlan
 
 # 動作庫是空的時候預先放進去的常用動作：(名稱, 部位, 器材, 是否有氧)
 # 參考 BurnFit 的分類方式（依部位，再依器材：槓鈴／啞鈴／機械／纜繩／徒手…）整理。
@@ -116,6 +117,8 @@ DEFAULT_EXERCISES = [
 LLM_PARSE_PER_HOUR = 30
 # 每個使用者每小時最多產生幾次 AI 分析說明（同一期資料沒變時直接用存好的，不算次數）
 LLM_REPORT_PER_HOUR = 10
+# 每個使用者每小時最多產生幾次 AI 建議課表（沒設定 AI 時用程式選擇，不算次數）
+LLM_PLAN_PER_HOUR = 10
 
 
 class DocumentRules:
@@ -371,8 +374,12 @@ class BodyService:
         queries = [f['text'] for f in report['findings'] if f['level'] in ('warn', 'info')][:DocumentRules.QUERIES]
         if profile.get('goal_type'):
             queries.append(f"{profile['goal_type']} 的訓練建議")
+        return self._passages(queries)
+
+    def _passages(self, queries):
+        """用幾個查詢從自己的教練文章找段落，合併後取分數最高的幾段；沒有文章或出錯就回空清單。"""
         rows = self._searchable_chunks()
-        if not queries or not rows:
+        if self.embedder is None or not queries or not rows:
             return []
         try:
             vectors = self.embedder(queries)
@@ -431,6 +438,74 @@ class BodyService:
         self.sql.commit()
         saved['stale'] = False
         return dict(enabled=True, saved=saved, has_data=True)
+
+    # ============================================================ 建議課表（程式排骨架與重量，LLM 挑動作與說明）
+    def _plan(self, day, with_passages=False):
+        d = day.isoformat()
+        week_ago = (day - timedelta(days=7)).isoformat()
+        yesterday = (day - timedelta(days=1)).isoformat()
+        weekly = TrainingAnalysis.volume_by_muscle(self.sql.sets_between(week_ago, yesterday))
+        library = [dict(id=r['id'], name=r['exercise_name'], muscle_group=r['muscle_group'],
+                        equipment=r['equipment'], is_cardio=r['is_cardio']) for r in self.sql.exercises()]
+        plan = WorkoutPlan(
+            day, self.sql.profile(),
+            days_since=TrainingAnalysis.days_since_trained(self.sql.last_trained_by_muscle(yesterday), day),
+            weekly_sets={m: v['sets'] for m, v in weekly.items()},
+            library=library,
+            usage=self.sql.exercise_usage((day - timedelta(days=90)).isoformat()),
+            last_sessions=self.sql.latest_sessions_before(d, (day - timedelta(days=180)).isoformat()),
+            exercise_dates=self.sql.exercise_dates((day - timedelta(days=365)).isoformat(), d))
+        if with_passages:
+            queries = [x['why'] for x in plan.skeleton['slots']][:DocumentRules.QUERIES]
+            if plan.skeleton['goal']:
+                queries.append(f"{plan.skeleton['goal']} 的訓練建議")
+            plan.passages = self._passages(queries)
+        return plan
+
+    def suggested_plan(self, day):
+        """讀取這一天已產生的建議課表；資料有變動時標示 stale（不會自動重新產生）。"""
+        plan = self._plan(day)
+        row = self.sql.ai_suggestion('body_plan', day.isoformat())
+        saved = None
+        if row:
+            try:
+                saved = json.loads(row['content'])
+            except (TypeError, ValueError):
+                saved = None
+        if saved:
+            saved['stale'] = saved.get('input_hash') != plan.hash
+        return dict(enabled=self.llm_report is not None, saved=saved)
+
+    def generate_plan(self, day):
+        """產生（或重新產生）這一天的建議課表，存進 ai_suggestions（type=body_plan）。
+
+        有設定 AI：LLM 從候選挑動作，檢查後不合格的位置改用程式選擇。
+        沒有設定 AI：全部用程式選擇（常做的動作優先），功能仍可使用。
+        課表只是草稿：「套用到今天」只填進前端的預計組數，使用者逐組按 ✓ 才寫入 workout_sets。
+        """
+        if day < self.today:
+            raise ApiError('只能替今天或之後的日期建議課表。')
+        use_ai = self.llm_report is not None
+        plan = self._plan(day, with_passages=use_ai)
+        if not plan.library:
+            raise ApiError('動作庫裡沒有可以安排的重訓動作，請先新增動作。')
+        raw, usage, note = None, None, None
+        if use_ai and not plan.skeleton['rest']:          # 建議休息時不用呼叫 LLM
+            if self.sql.rate_limited(f'body-llm-plan:{self.sql.user_id}', LLM_PLAN_PER_HOUR, 3600):
+                raise ApiError(f'AI 建議課表每小時最多 {LLM_PLAN_PER_HOUR} 次，請稍後再試。')
+            try:
+                raw = self.llm_report(Prompts.plan_messages(plan.prompt_data))
+                raw, usage = raw if isinstance(raw, tuple) else (raw, None)
+            except LlmError as exc:                        # AI 失敗時仍給程式選擇的課表
+                raw, note = None, f'AI 暫時無法使用（{exc}），以下是程式依紀錄選擇的動作。'
+        result = plan.check(raw)
+        saved = dict(result, input_hash=plan.hash, source='llm' if raw is not None else 'rule', note=note,
+                     generated_at=datetime.now().isoformat(timespec='seconds'),
+                     model=(usage or {}).get('model'), usage=usage)
+        self.sql.save_ai_suggestion('body_plan', day.isoformat(), json.dumps(saved, ensure_ascii=False))
+        self.sql.commit()
+        saved['stale'] = False
+        return dict(enabled=use_ai, saved=saved)
 
     # ============================================================ 教練文章（RAG）
     def documents(self):

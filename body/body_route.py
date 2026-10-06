@@ -186,6 +186,21 @@ def report_ai_generate():
     return dict(ai=BodyApi.service().generate_ai_explanation(period, Validator.day(data.get('d'))))
 
 
+@body.get('/api/plan')
+@api
+def plan():
+    """讀取這一天已產生的建議課表（不會呼叫 LLM）。"""
+    return dict(plan=BodyApi.service().suggested_plan(Validator.day(request.args.get('d'))))
+
+
+@body.post('/api/plan')
+@api
+def plan_generate():
+    """產生（或重新產生）建議課表：使用者按下按鈕才呼叫 LLM。不寫入訓練紀錄。"""
+    data = BodyApi.payload()
+    return dict(plan=BodyApi.service().generate_plan(Validator.day(data.get('d'))))
+
+
 @body.get('/api/docs')
 @api
 def documents():

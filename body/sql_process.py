@@ -253,6 +253,17 @@ class BodySqlProcess:
             'SELECT s.exercise_id AS exercise_id, COUNT(*) AS n FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
             'WHERE w.user_id=? AND w.workout_date>=? GROUP BY s.exercise_id', (self.user_id, since))}
 
+    def exercise_dates(self, since, before):
+        """since 到 before（不含）之間每個動作做過的日期，{exercise_id: ['YYYY-MM-DD', ...]}；建議課表判斷恢復與輪換用。"""
+        dates = {}
+        for r in self.conn.execute(
+                'SELECT DISTINCT s.exercise_id AS exercise_id, w.workout_date AS workout_date '
+                'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
+                'WHERE w.user_id=? AND w.workout_date>=? AND w.workout_date<? ORDER BY w.workout_date',
+                (self.user_id, since, before)):
+            dates.setdefault(r['exercise_id'], []).append(str(r['workout_date'])[:10])
+        return dates
+
     def exercise(self, exercise_id):
         return self.conn.execute(
             'SELECT * FROM exercises WHERE id=? AND created_by=?', (exercise_id, self.user_id)).fetchone()

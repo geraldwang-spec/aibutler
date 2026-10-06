@@ -437,3 +437,16 @@
 .bd-rest .bd-btn--warm:hover { background: #f09a6b; color: #20232d; }
 /* 選到的日子剛好是今天時，數字也要是白色（上面「今天」的紫色字會被蓋掉看不到） */
 .bd-day.is-selected .bd-day__w, .bd-day.is-selected .bd-day__n, .bd-day.is-selected .bd-day__tag { color: #fff; }
+
+/* 建議課表 */
+.bd-sug__btns { display: flex; gap: 6px; }
+.bd-sug__meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+.bd-sug__list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.bd-sug__item { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 8px; background: #f7f7fb; }
+.bd-sug__item small { font-size: 12px; }
+.bd-sug__line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bd-sug__sets { margin-left: auto; font-size: 13px; }
+.bd-sug__reason { color: var(--bd-ink, #2b2a3a); }
+.bd-sug__reason .fa { color: var(--bd-primary); }
+.bd-sug__rest { display: flex; align-items: center; gap: 4px; margin: 0 0 6px; padding: 10px 12px; border-radius: 8px; background: #eaf7ee; color: #207245; font-size: 15px; }
+.bd-sug__rotate { color: #8e4218; }
