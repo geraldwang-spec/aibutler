@@ -1,6 +1,7 @@
 {% extends 'live_base.html' %}
 {% from 'fields.html' import render_fields %}
 {% block content %}
+<div data-record-workspace>
 <link rel="stylesheet" href="{{url_for('static',filename='css/subject-workspace.css',v='palette-4')}}">
 <section class="subject-intro"><span class="subject-icon"><i class="fa fa-folder-open-o" aria-hidden="true"></i></span><div><h2>把學習資料，整理成自己的書架</h2><p>科目是資料夾，章節可以再分成子章節。選好科目，就能整理章節與找到題目。</p></div><span class="pill">{{subjects|length}} 個科目</span></section>
 <div class="subject-workspace">
@@ -39,5 +40,7 @@
     {% else %}<section class="panel-card chapter-empty"><i class="fa fa-book" aria-hidden="true"></i><h2>你的學習書架，從一個科目開始</h2><p>在左方建立科目，再加入章節與子章節。</p></section>{% endif %}
   </section>
 </div>
-<script src="{{url_for('static',filename='js/subject-workspace.js',v='1')}}" defer></script>
+</div>
+<script src="{{url_for('static',filename='js/subject-workspace.js',v='async-2')}}" defer></script>
+<script src="{{url_for('static',filename='js/records-async.js',v='1')}}" defer></script>
 {% endblock %}

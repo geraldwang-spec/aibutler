@@ -1,4 +1,5 @@
 (() => {
+ function initialize() {
   const folders = [...document.querySelectorAll('[data-subject-name]')];
   document.getElementById('subject-search')?.addEventListener('input', event => {
     const query = event.target.value.trim().toLocaleLowerCase();
@@ -26,12 +27,12 @@
       document.querySelector('.subject-workspace').classList.remove('is-organizing');
       clearDrop();
       dragged = null;
-      status.textContent = '';
+      if (!window.recordsWorkspace?.busy) status.textContent = '';
     });
   }
   for (const zone of [...chapters, ...document.querySelectorAll('[data-drop-position]'), ...folders]) {
     zone.addEventListener('dragover', event => {
-      if (!dragged || zone === dragged || !root) return;
+      if (!dragged || zone === dragged || !root || window.recordsWorkspace?.busy) return;
       event.preventDefault();
       event.stopPropagation();
       event.dataTransfer.dropEffect = 'move';
@@ -55,6 +56,12 @@
         target_id: target?.dataset.chapterId || '',
         destination_subject_id: folder?.dataset.subjectId || root.dataset.currentSubject
       };
+      if (window.recordsWorkspace) {
+        clearDrop();
+        document.querySelector('.subject-workspace').classList.remove('is-organizing');
+        window.recordsWorkspace.update(root.dataset.organizeUrl, {method: 'POST', body: new URLSearchParams(fields), preserve: true});
+        return;
+      }
       const form = document.createElement('form');
       form.method = 'post';
       form.action = root.dataset.organizeUrl;
@@ -91,4 +98,7 @@
       for (const option of parent.options) if (option.value) option.disabled = subject.value !== original;
     });
   }
+ }
+ initialize();
+ document.addEventListener('records-workspace-updated', initialize);
 })();

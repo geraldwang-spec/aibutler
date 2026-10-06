@@ -21,13 +21,14 @@ def register_workspace_ui(app):
 
     @app.context_processor
     def workspace_context():
-        return {'workspace_embedded': request.headers.get('Sec-Fetch-Dest') == 'iframe',
+        return {'workspace_embedded': request.headers.get('Sec-Fetch-Dest') == 'iframe' or request.headers.get('X-Workspace-Fragment') == 'records',
                 'workspace_shell': False}
 
     @app.before_request
     def workspace_shell():
         if (request.method == 'GET' and request.endpoint in PAGE_ENDPOINTS
                 and request.headers.get('Sec-Fetch-Dest') != 'iframe'
+                and request.headers.get('X-Workspace-Fragment') != 'records'
                 and getattr(g, 'user', None)):
             # Do not execute a page's view twice. Its original view executes when
             # the pane loads, including ownership checks and any existing work.
