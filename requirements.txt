@@ -8,3 +8,4 @@ gunicorn>=22,<24
 sqlalchemy
 PyMySQL>=1.1,<2.0
 numpy>=1.26,<3.0
+dotenv
