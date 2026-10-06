@@ -303,7 +303,7 @@
       const last = pts[pts.length - 1];
       fill(chart,
         h('svg', { viewBox: '0 0 300 72', role: 'img', 'aria-label': `近期體重趨勢，${num(low)} 到 ${num(high)} kg` },
-          h('line', { x1: 0, y1: 66, x2: 300, y2: 66, stroke: '#e1e9e9', 'stroke-width': 1 }),
+          h('line', { x1: 0, y1: 66, x2: 300, y2: 66, stroke: '#e7e8ee', 'stroke-width': 1 }),
           h('polyline', { points: pts.map((p) => p.map((v) => v.toFixed(1)).join(',')).join(' '), fill: 'none', stroke: '#e8834f', 'stroke-width': 2.5, 'stroke-linejoin': 'round' }),
           h('circle', { cx: last[0].toFixed(1), cy: last[1].toFixed(1), r: 4, fill: '#e8834f' })),
         h('p', { class: 'bd-weight__axis' },
