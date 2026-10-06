@@ -6,5 +6,5 @@
     <article class="learning-chart-card"><h3>{{'章節正確率' if chart_kind=='chapters' else '最近測驗正確率'}}</h3><p class="chart-bar-note">{{'依正確率由低到高顯示最多 12 個章節；資料不足以淡色標示。' if chart_kind=='chapters' else '顯示最近 10 場已完成測驗，依時間由舊到新排列。'}}</p><div class="learning-bars"></div></article>
   </div>
 </section>
-<link rel="stylesheet" href="{{url_for('static',filename='css/learning-charts.css')}}">
+<link rel="stylesheet" href="{{url_for('static',filename='css/learning-charts.css',v='palette-4')}}">
 <script src="{{url_for('static',filename='js/learning-charts.js')}}" defer></script>

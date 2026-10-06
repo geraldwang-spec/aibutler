@@ -391,25 +391,21 @@ def grade_quiz(session_id: int):
         raise ValueError("此考卷沒有題目，無法交卷。")
 
     prepared = []
-    missing = 0
     for row in answers:
         snapshot = json.loads(row["question_snapshot"])
         answer = _normalize_answer(snapshot["q_type"], f'answer_{row["id"]}')
         if len(answer) > 50:
             raise ValueError("答案不可超過 50 字。")
-        if not answer:
-            missing += 1
         prepared.append((row, snapshot, answer))
-    if missing:
-        raise ValueError(f"尚有 {missing} 題未作答，請完成後再交卷。")
 
     correct = 0
     for row, snapshot, answer in prepared:
-        if snapshot['q_type'] in ('單選','多選'):
+        if answer and snapshot['q_type'] in ('單選','多選'):
             labels={str(o['option_label']) for o in snapshot['options']}
             if not set(answer.split(',')).issubset(labels):
                 raise ValueError('作答包含不存在的選項。')
-        is_correct = answer_correct(snapshot['q_type'],answer,snapshot.get('answer_key',''))
+        # Blank answers are valid submissions and receive zero credit.
+        is_correct = bool(answer) and answer_correct(snapshot['q_type'],answer,snapshot.get('answer_key',''))
         correct += int(is_correct)
         db().execute(
             """
@@ -565,6 +561,20 @@ def register_tye_exam(app):
             "random_order": request.form.get("random_order", "1"),
             "question_source": request.form.get("question_source", "auto"),
         }
+        if request.method=='GET' and request.args.get('subject_id',type=int):
+            subject_id=request.args.get('subject_id',type=int)
+            _owned_subject(subject_id)
+            try:
+                scope=_parse_id_list(request.args.getlist('chapter_ids'))
+            except ValueError:
+                abort(400)
+            allowed={r['id'] for r in db().execute('SELECT id FROM chapters WHERE subject_id=?',(subject_id,))}
+            if not set(scope)<=allowed:
+                abort(404)
+            selected['subject_id']=str(subject_id)
+            selected['chapter_ids']=[str(cid) for cid in scope]
+            if request.args.get('question_source')=='bank_random':
+                selected['question_source']='bank_random'
         if request.method == "POST":
             try:
                 subject_id = int(request.form.get("subject_id", "0"))
@@ -630,12 +640,20 @@ def register_tye_exam(app):
         planner_attempt = db().execute("""SELECT lca.*,lt.goal_id,lt.title task_title
             FROM learning_checkpoint_attempts lca JOIN learning_tasks lt ON lt.id=lca.task_id
             WHERE lca.session_id=? AND lt.user_id=?""",(sid,g.user['id'])).fetchone()
+        from storage import MariaConnection
+        # Use the database's own clock, avoiding browser/server timezone ambiguity.
+        elapsed_expression = ("GREATEST(0,TIMESTAMPDIFF(SECOND,started_at,COALESCE(finished_at,CURRENT_TIMESTAMP)))"
+                              if isinstance(db(), MariaConnection) else
+                              "MAX(0,CAST((julianday(COALESCE(finished_at,CURRENT_TIMESTAMP))-julianday(started_at))*86400 AS INTEGER))")
+        elapsed = db().execute(f'SELECT {elapsed_expression} AS seconds FROM quiz_sessions WHERE id=? AND user_id=?',
+                               (sid,g.user['id'])).fetchone()
         return render_template(
             "quiz_take.html",
             title="考試結果" if exam["finished_at"] else "作答中",
             exam=exam,
             items=items,
             planner_attempt=planner_attempt,
+            elapsed_seconds=int(elapsed['seconds'] or 0),
         )
 
     @app.get("/results", endpoint="results")

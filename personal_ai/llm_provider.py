@@ -14,7 +14,11 @@ _OLLAMA_GATE = threading.Lock()
 
 
 class LLMError(RuntimeError):
-    pass
+    def __init__(self,message,status_code=None,error_code=None,retry_after=None):
+        super().__init__(message)
+        self.status_code=status_code
+        self.error_code=error_code
+        self.retry_after=retry_after
 
 
 class BaseLLM:
@@ -99,7 +103,13 @@ class OpenAICompatibleLLM(BaseLLM):
             except Exception:
                 pass
             suffix = f"：{detail}" if detail else ""
-            raise LLMError(f"LLM API HTTP {exc.code}{suffix}") from exc
+            try:
+                api_error=json.loads(detail).get('error') or {}
+                error_code=api_error.get('code') or api_error.get('type')
+            except (ValueError,AttributeError):
+                error_code=None
+            raise LLMError(f"LLM API HTTP {exc.code}{suffix}",status_code=exc.code,
+                           error_code=error_code,retry_after=exc.headers.get('Retry-After')) from exc
         except Exception as exc:
             raise LLMError(f"LLM API 呼叫失敗：{exc}") from exc
 
@@ -125,6 +135,10 @@ class OpenAICompatibleLLM(BaseLLM):
         raise LLMError("LLM 未回傳有效 JSON。請重試或改用較強模型。")
 
     def complete_json(self, system, user):
+        # Groq JSON mode requires the literal word JSON in the messages.
+        # An example object by itself does not satisfy that API validation.
+        if 'json' not in (str(system)+' '+str(user)).lower():
+            system=str(system)+'\nReturn only valid JSON.'
         data = self._request(
             [
                 {"role": "system", "content": system},
@@ -137,7 +151,7 @@ class OpenAICompatibleLLM(BaseLLM):
         except Exception as exc:
             raise LLMError("LLM 回傳格式不符合 OpenAI-compatible API。") from exc
         if data["choices"][0].get("finish_reason") == "length":
-            raise LLMError("模型輸出達到 token 上限，JSON 未完成。請縮短題目或解析內容。")
+            raise LLMError("模型輸出達到 token 上限，JSON 未完成。請縮短回答、題目或解析內容。",error_code='output_truncated')
         return self._parse_json_text(text)
 
     def ping(self):
@@ -282,9 +296,13 @@ class GroqLLM(OpenAICompatibleLLM):
                 pass
             return data
         except LLMError as exc:
-            cause = exc.__cause__
-            if isinstance(cause, urllib.error.HTTPError) and cause.code == 429:
-                raise LLMError('Groq 額度不足或單次內容超過限制，請減少內容或稍後重試。已停止後續呼叫。') from exc
+            if exc.status_code==429:
+                retry=f' 建議等待 {exc.retry_after} 秒後再試。' if exc.retry_after and str(exc.retry_after).replace('.','',1).isdigit() else ''
+                raise LLMError('Groq 速率或 token 額度限制（HTTP 429）。'+retry+' 已停止後續呼叫；'+str(exc),
+                               status_code=429,error_code=exc.error_code,retry_after=exc.retry_after) from exc
+            if exc.status_code in (401,403):
+                raise LLMError('Groq 金鑰或存取權限有誤，請檢查 API Key。'+str(exc),
+                               status_code=exc.status_code,error_code=exc.error_code) from exc
             raise
 
     def complete_json(self, system, user):

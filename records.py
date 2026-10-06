@@ -30,7 +30,7 @@ def ref(name, label, table, required=True):
 # Table names and SQL fragments only originate here, never in request data.
 CATALOG = {
  'subjects': ('科目管理', 'book', [f('subject_name','科目名稱',limit=80)]),
- 'chapters': ('章節管理', 'list', [ref('subject_id','科目','subjects'), f('chapter_name','章節名稱',limit=120), f('order_no','排序','number',maximum=999)]),
+ 'chapters': ('章節管理', 'list', [ref('subject_id','科目','subjects'), ref('parent_chapter_id','上層章節（留空為主章節）','chapters',False), f('chapter_name','章節名稱',limit=120), f('order_no','排序','number',maximum=999)]),
  'questions': ('我的題庫', 'question-circle', [ref('chapter_id','章節','chapters'), choice('q_type','題型','單選','多選','是非','填空'), f('content','題目','textarea',limit=10000), f('answer_key','正確答案（選項代號 / 是、否 / 填空文字）',limit=50), f('explanation','解析','textarea',required=False,limit=10000), f('difficulty','難度 1–5','number',minimum=1,maximum=5)]),
  'summaries': ('重點摘要與筆記', 'file-text-o', [ref('chapter_id','章節','chapters'), choice('summary_type','類型','overview','card'), f('title','標題',limit=120), f('content','手動筆記內容','textarea',limit=20000), choice('mastery','熟練度','未讀','複習中','已熟')]),
  'exam_plans': ('考試準備設定', 'calendar', [ref('subject_id','科目','subjects'), f('exam_date','考試日期','date'), f('weekday_minutes','平日每日讀書分鐘','number',maximum=1440), f('weekend_minutes','週末每日讀書分鐘','number',maximum=1440), f('review_days','考前複習天數','number',maximum=90), choice('status','狀態','進行中','已完成','已放棄')]),

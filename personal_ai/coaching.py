@@ -10,6 +10,7 @@ from storage import db
 from .llm_provider import model_usage_label, get_llm, LLMError
 from .rag import retrieve
 from .prompt_budget import bounded_json
+from .schedule_rhythm import RecoveryRhythm
 
 RECENT_CONCEPT_LIMIT = 20
 MIN_CONCEPT_SAMPLE = 3
@@ -454,15 +455,18 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
     never by manually clicking a task complete button.
     """
     preserve_dates=set()
+    preserved_by_date=defaultdict(list)
     if keep_done:
         preserved=db().execute("""
-            SELECT DISTINCT lt.task_date
+            SELECT DISTINCT lt.id,lt.task_date,lt.target_minutes,lt.task_type,lt.question_count
             FROM learning_tasks lt
             LEFT JOIN learning_checkpoint_attempts lca ON lca.task_id=lt.id
             WHERE lt.goal_id=? AND lt.user_id=?
               AND (lt.status IN ('done','read') OR lca.id IS NOT NULL)
         """,(goal_id,user_id)).fetchall()
         preserve_dates={str(r['task_date'])[:10] for r in preserved}
+        for row in preserved:
+            preserved_by_date[str(row['task_date'])[:10]].append(row)
         db().execute("""
             DELETE FROM learning_tasks
             WHERE goal_id=? AND user_id=? AND status NOT IN ('done','read')
@@ -474,16 +478,21 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
     if not concepts:
         return
     concept_idx=0
+    rhythm=RecoveryRhythm()
     for phase_id,seq,phase_name,st,en,target_mastery,objective in phase_ids:
         d=st
         day_index=0
         while d<=en:
             ds=d.isoformat()
             if ds in preserve_dates:
+                for previous in preserved_by_date[ds]:
+                    rhythm.record(int(previous['target_minutes'] or 0), previous['task_type'], int(previous['question_count'] or 0))
                 d += timedelta(days=1); day_index += 1; continue
             minutes=weekend_minutes if d.weekday()>=5 else weekday_minutes
             is_final=(seq==phase_ids[-1][1])
             is_phase_end=(d==en)
+            assessment_day = is_phase_end or (is_final and day_index % 3 == 2) or (not is_final and day_index > 0 and day_index % 7 == 5)
+            recovery = rhythm.choose(minutes, assessment=assessment_day, before_assessment=d+timedelta(days=1)==en)
 
             if is_phase_end:
                 # Every phase ends with a real scored gate. The learner cannot click past it.
@@ -492,6 +501,12 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
                 qcount=20 if is_final else 10
                 concept=None
                 reason=f"系統驗收：需達 {int(target_mastery)}% 才算通過此階段"
+            elif recovery:
+                task_type=recovery['task_type']; title=recovery['title']; minutes=recovery['minutes']; qcount=0
+                concept=concepts[max(0,concept_idx-1) % len(concepts)] if task_type=='輕量學習' else None
+                if concept:
+                    title=f"輕量回顧：{concept['concept_name']}"
+                reason=recovery['reason']
             elif is_final:
                 # Protected final period: weak-area review + scored mock exams; no new core material.
                 if day_index % 3 == 2:
@@ -523,6 +538,7 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
                  None if concept is None else concept.get('concept_id'),
                  None if concept is None else concept.get('chapter_id'),
                  minutes,qcount,reason))
+            rhythm.record(minutes,task_type,qcount)
             d += timedelta(days=1); day_index += 1
 
 

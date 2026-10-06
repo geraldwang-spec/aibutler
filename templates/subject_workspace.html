@@ -1,0 +1,43 @@
+{% extends 'live_base.html' %}
+{% from 'fields.html' import render_fields %}
+{% block content %}
+<link rel="stylesheet" href="{{url_for('static',filename='css/subject-workspace.css',v='palette-4')}}">
+<section class="subject-intro"><span class="subject-icon"><i class="fa fa-folder-open-o" aria-hidden="true"></i></span><div><h2>把學習資料，整理成自己的書架</h2><p>科目是資料夾，章節可以再分成子章節。選好科目，就能整理章節與找到題目。</p></div><span class="pill">{{subjects|length}} 個科目</span></section>
+<div class="subject-workspace">
+  <aside class="panel-card subject-folders" aria-label="科目資料夾">
+    <h2>我的科目</h2>
+    <label class="subject-search">搜尋科目<input type="search" id="subject-search" placeholder="輸入科目名稱" autocomplete="off"></label>
+    <div class="subject-folder-list">
+      {% for subject in subjects %}<a class="subject-folder {{'selected' if selected_subject and selected_subject.id==subject.id else ''}}" data-subject-id="{{subject.id}}" data-subject-name="{{subject.subject_name}}" href="{{url_for('records',table='subjects',subject_id=subject.id)}}" {% if selected_subject and selected_subject.id==subject.id %}aria-current="page"{% endif %}><i class="fa fa-folder-o" aria-hidden="true"></i><span>{{subject.subject_name}}<small>{{subject.chapter_count}} 個章節</small></span><span aria-hidden="true">›</span></a>{% else %}<p class="note">先新增一個科目，開始整理你的學習資料。</p>{% endfor %}
+      <p id="subject-search-empty" class="note" hidden>找不到符合的科目。</p>
+    </div>
+    <details class="subject-create" {% if subject_form_open or not subjects %}open{% endif %}><summary>{{'編輯科目名稱' if subject_edit_id else '＋ 新增科目'}}</summary>
+      <form method="post" action="{{url_for('records',table='subjects',subject_id=selected_subject.id if selected_subject else none)}}">
+        <input type="hidden" name="csrf_token" value="{{csrf_token}}">{% if subject_edit_id %}<input type="hidden" name="id" value="{{subject_edit_id}}">{% endif %}
+        {{render_fields(subject_fields,subject_values,{})}}<button class="action">{{'儲存名稱' if subject_edit_id else '建立科目'}}</button>
+        {% if subject_edit_id %}<a href="{{url_for('records',table='subjects',subject_id=selected_subject.id)}}">取消</a>{% endif %}
+      </form>
+    </details>
+  </aside>
+  <section class="subject-content">
+    {% if selected_subject %}
+    <header class="panel-card subject-selected"><div><p class="eyebrow">SUBJECT FOLDER</p><h2>{{selected_subject.subject_name}}</h2><p>{{chapters|length}} 個章節 · {{question_total}} 道固定題 · {{source_total}} 筆概念來源</p></div><div class="row-actions"><a class="outline-button" href="{{url_for('quiz_start',subject_id=selected_subject.id,question_source='bank_random')}}">用此科目出卷</a><a class="outline-button" href="{{url_for('records',table='subjects',subject_id=selected_subject.id,edit=selected_subject.id)}}">改名</a><form method="post" action="{{url_for('delete_record',table='subjects',record_id=selected_subject.id)}}" data-confirm="確定刪除此科目？有章節或其他關聯資料的科目會保留。"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="danger-link">刪除科目</button></form></div></header>
+    <section class="panel-card chapter-editor">
+      <details {% if chapter_form_open or not chapters %}open{% endif %}><summary>{{'編輯／重新分類章節' if chapter_edit_id else '＋ 新增章節'}}</summary><p class="note">選擇上層章節即可分類收納，留空則建立主章節。空章節可移到其他科目；已有關聯資料的章節保留原科目。</p>
+        <form method="post" action="{{url_for('records',table='chapters',subject_id=selected_subject.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}">{% if chapter_edit_id %}<input type="hidden" name="id" value="{{chapter_edit_id}}">{% endif %}{{render_fields(chapter_fields,chapter_values,choices)}}<button class="action">儲存章節</button>{% if chapter_edit_id %}<a class="outline-button" href="{{url_for('records',table='subjects',subject_id=selected_subject.id)}}">取消編輯</a>{% endif %}</form>
+      </details>
+      <details><summary>批次貼上章節清單</summary><p class="note">每行一個名稱，一次最多 100 個。同一層重複名稱會自動略過。</p><form method="post" action="{{url_for('organize_chapters',subject_id=selected_subject.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="bulk"><label>收納到<select name="parent_chapter_id"><option value="">主章節</option>{% for chapter in chapters %}<option value="{{chapter.id}}">{{'　'*[chapter.depth,5]|min}}{{chapter.chapter_name}}</option>{% endfor %}</select></label><label>章節名稱<textarea name="chapter_names" rows="5" maxlength="12000" required placeholder="基礎概念&#10;實際應用&#10;練習與複習"></textarea></label><button class="action">批次建立</button></form></details>
+    </section>
+    <section class="panel-card chapter-library"><div class="chapter-library-heading"><h2>章節目錄</h2><label>搜尋章節<input type="search" id="chapter-search" placeholder="輸入章節名稱" autocomplete="off"></label></div>
+      <p class="note" id="chapter-drag-help">拖住章節卡片：放在卡片中間收為子章節，放在前後調整順序。也可使用 ↑ ↓ 或「編輯分類」。</p><div class="chapter-root-drop" data-drop-position="root" data-organize-url="{{url_for('organize_chapters',subject_id=selected_subject.id)}}" data-current-subject="{{selected_subject.id}}">拖到這裡，放回最上層章節</div><p id="chapter-drag-status" class="note" role="status" aria-live="polite"></p>
+      <div class="chapter-list">{% for chapter in chapters %}<article class="chapter-card" draggable="true" aria-describedby="chapter-drag-help" data-chapter-id="{{chapter.id}}" data-chapter-name="{{chapter.chapter_name}}" data-ancestors="{{chapter.ancestors}}" style="--chapter-depth:{{[chapter.depth,4]|min}}"><div class="chapter-drop-edge" data-drop-position="before">放在這個章節前面</div><div class="chapter-card-main"><span class="chapter-drag-handle" aria-hidden="true" title="拖曳整理">⠿</span><span class="chapter-icon"><i class="fa fa-{{'folder-open-o' if chapter.child_count else 'file-text-o'}}" aria-hidden="true"></i></span><div><h3>{{chapter.chapter_name}}</h3><p>{{'主章節' if chapter.depth==0 else '子章節'}} · {{chapter.question_count}} 道固定題 · {{chapter.source_count}} 筆概念來源{% if chapter.child_count %} · {{chapter.child_count}} 個子章節{% endif %}</p></div></div><div class="chapter-actions">
+        <a href="{{url_for('records',table='questions',chapter_id=chapter.id)}}">固定題庫</a><a href="{{url_for('quiz_start',subject_id=selected_subject.id,chapter_ids=chapter.scope_ids,question_source='bank_random')}}">以此範圍出卷</a><a href="{{url_for('records',table='subjects',subject_id=selected_subject.id,parent_id=chapter.id)}}">＋ 子章節</a><a href="{{url_for('records',table='chapters',subject_id=selected_subject.id,edit=chapter.id)}}">編輯分類</a>
+        <form method="post" action="{{url_for('organize_chapters',subject_id=selected_subject.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="chapter_id" value="{{chapter.id}}"><button name="action" value="up" aria-label="上移 {{chapter.chapter_name}}" title="同層上移">↑</button><button name="action" value="down" aria-label="下移 {{chapter.chapter_name}}" title="同層下移">↓</button></form>
+        <form method="post" action="{{url_for('delete_record',table='chapters',record_id=chapter.id)}}" data-confirm="確定刪除「{{chapter.chapter_name}}」？有子章節、題目或學習紀錄的章節會保留。"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="danger-link">刪除</button></form>
+      </div><div class="chapter-drop-edge" data-drop-position="after">放在這個章節後面</div></article>{% else %}<div class="chapter-empty"><i class="fa fa-folder-o" aria-hidden="true"></i><h3>為這個科目建立第一個章節</h3><p>可以逐一新增，也可以直接貼上課綱清單。</p></div>{% endfor %}<p id="chapter-search-empty" class="note" hidden>找不到符合的章節。</p></div>
+    </section>
+    {% else %}<section class="panel-card chapter-empty"><i class="fa fa-book" aria-hidden="true"></i><h2>你的學習書架，從一個科目開始</h2><p>在左方建立科目，再加入章節與子章節。</p></section>{% endif %}
+  </section>
+</div>
+<script src="{{url_for('static',filename='js/subject-workspace.js',v='1')}}" defer></script>
+{% endblock %}

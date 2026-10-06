@@ -18,6 +18,7 @@ from werkzeug.security import generate_password_hash
 
 from auth import auth, login_required
 from records import CATALOG, PROFILE_FIELDS, options, ownership
+from subject_management import render_subject_workspace, validate_chapter, register_subject_management
 from storage import db, init_storage, register_storage, read_only, locked_sql, StorageIntegrityError, DatabaseUnavailable
 
 
@@ -213,38 +214,78 @@ def create_app(test_config=None):
         except (ValueError, TypeError):
             month = now.replace(day=1)
         month_end = month.replace(day=calendar.monthrange(month.year, month.month)[1])
+        selected_goal = request.args.get('goal_id', type=int)
+        schedule_goals = {}
         events = {}
         all_plans = db().execute(
-            'SELECT * FROM study_plans WHERE user_id=? AND (plan_date BETWEEN ? AND ? OR plan_date=?) ORDER BY plan_date,id',
+            'SELECT p.*, '
+            '(SELECT wt.minutes_per_session FROM workout_templates wt WHERE wt.user_id=p.user_id AND wt.is_active=1 '
+            'ORDER BY wt.created_at DESC,wt.id DESC LIMIT 1) AS template_minutes, '
+            '(SELECT up.minutes_per_session FROM user_profiles up WHERE up.user_id=p.user_id LIMIT 1) AS profile_minutes '
+            'FROM study_plans p WHERE p.user_id=? AND (p.plan_date BETWEEN ? AND ? OR p.plan_date=?) ORDER BY p.plan_date,p.id',
             (g.user['id'], month.isoformat(), month_end.isoformat(), now.isoformat())).fetchall()
+        def plan_event(plan):
+            unit = str(plan['target_unit'] or '')
+            value = plan['target_value'] or 0
+            minutes = float(value) if unit.strip().lower() in ('分鐘', '分', 'minute', 'minutes', 'min') else 0
+            if unit.strip().lower() in ('小時', '時', 'hour', 'hours', 'hr', 'h'):
+                minutes = float(value) * 60
+            elif unit.strip().lower() in ('秒', '秒鐘', 'second', 'seconds', 'sec', 's'):
+                minutes = float(value) / 60
+            time_source = '本項安排'
+            if minutes <= 0 and plan['plan_type'] == 'workout':
+                if plan['template_minutes']:
+                    minutes = float(plan['template_minutes'])
+                    time_source = '採用中的運動課表：每次預計'
+                elif plan['profile_minutes']:
+                    minutes = float(plan['profile_minutes'])
+                    time_source = '個人設定：每次運動預計'
+            return dict(title=plan['title'], kind=plan['plan_type'], status=plan['status'],
+                        source='plan', minutes=minutes, time_source=time_source,
+                        duration_label=f'{minutes:g} 分鐘' if minutes > 0 else '未設定時長',
+                        target_label=f'{value} {unit}'.strip(),
+                        url=url_for('records', table='study_plans', edit=plan['id']))
+
+        def task_event(task):
+            minutes = int(task['target_minutes'] or 0)
+            kind = 'rest' if task['task_type'] in ('休息', '輕量學習') else ('workout' if task['task_type']=='運動建議' else 'study')
+            return dict(title=task['title'], kind=kind, status=task['status'],
+                        source='task', goal_id=task['goal_id'], goal_name=task['goal_name'], task_id=task['id'], task_type=task['task_type'],
+                        question_count=int(task['question_count'] or 0), minutes=minutes,
+                        duration_label=f'{minutes} 分鐘' if minutes > 0 else ('休息日，不安排必修' if kind=='rest' else '未設定時長'),
+                        url=url_for('personal_ai.adaptive_planner', goal_id=task['goal_id'], month=str(task['task_date'])[:7]))
         for plan in all_plans:
+            if selected_goal and plan['plan_type'] != 'workout':
+                continue
             if not month.isoformat() <= str(plan['plan_date'])[:10] <= month_end.isoformat():
                 continue
-            events.setdefault(str(plan['plan_date'])[:10], []).append(dict(title=plan['title'], kind=plan['plan_type'],
-                status=plan['status'], url=url_for('records', table='study_plans', edit=plan['id'])))
+            events.setdefault(str(plan['plan_date'])[:10], []).append(plan_event(plan))
         tasks = []
         if 'personal_ai' in app.blueprints:
             tasks = db().execute(
-                'SELECT goal_id,task_date,title,status FROM learning_tasks WHERE user_id=? '
-                'AND (task_date BETWEEN ? AND ? OR task_date=?) ORDER BY task_date,id',
+                'SELECT lt.id,lt.goal_id,lt.task_date,lt.title,lt.status,lt.task_type,lt.target_minutes,lt.question_count,lg.goal_name '
+                'FROM learning_tasks lt JOIN learning_goals lg ON lg.id=lt.goal_id AND lg.user_id=lt.user_id '
+                'WHERE lt.user_id=? AND (lt.task_date BETWEEN ? AND ? OR lt.task_date=?) ORDER BY lt.task_date,lt.id',
                 (g.user['id'], month.isoformat(), month_end.isoformat(), now.isoformat())).fetchall()
+            schedule_goals = {int(t['goal_id']): t['goal_name'] for t in tasks}
+            if selected_goal:
+                tasks = [t for t in tasks if int(t['goal_id']) == selected_goal]
             for task in tasks:
                 if not month.isoformat() <= str(task['task_date'])[:10] <= month_end.isoformat():
                     continue
-                events.setdefault(str(task['task_date'])[:10], []).append(dict(title=task['title'], kind='study',
-                    status=task['status'], url=url_for('personal_ai.adaptive_planner', goal_id=task['goal_id'])))
-        today_tasks = [p for p in all_plans if str(p['plan_date'])[:10] == now.isoformat()]
-        today_events = [dict(title=p['title'],kind=p['plan_type'],status=p['status'],
-            url=url_for('records',table='study_plans',edit=p['id'])) for p in today_tasks]
+                events.setdefault(str(task['task_date'])[:10], []).append(task_event(task))
+        today_tasks = [p for p in all_plans if str(p['plan_date'])[:10] == now.isoformat()
+                       and (not selected_goal or p['plan_type'] == 'workout')]
+        today_events = [plan_event(p) for p in today_tasks]
         if 'personal_ai' in app.blueprints:
             for t in tasks:
                 if str(t['task_date'])[:10] != now.isoformat():
                     continue
-                today_events.append(dict(title=t['title'],kind='study',status=t['status'],
-                    url=url_for('personal_ai.adaptive_planner',goal_id=t['goal_id'])))
+                today_events.append(task_event(t))
         return render_template('dashboard_live.html',title='學習與健康總覽',counts=counts,daily=daily,
             calendar_month=month, calendar_weeks=calendar.Calendar().monthdatescalendar(month.year,month.month),
             calendar_events=events, calendar_today=now, today_events=today_events,
+            schedule_goals=schedule_goals, selected_goal=selected_goal,
             previous_month=(month-timedelta(days=1)).strftime('%Y-%m'),
             next_month=(month_end+timedelta(days=1)).strftime('%Y-%m'))
 
@@ -308,6 +349,13 @@ def create_app(test_config=None):
                 if record_id:
                     owned(table,record_id)
                 data = parse_fields(fields)
+                if table=='subjects':
+                    duplicate=db().execute('SELECT id FROM subjects WHERE created_by=? AND LOWER(TRIM(subject_name))=LOWER(?) AND id<>?',
+                                           (g.user['id'],data['subject_name'],record_id or 0)).fetchone()
+                    if duplicate:
+                        raise ValueError('已有同名科目，請直接選擇該科目管理章節。')
+                if table == 'chapters':
+                    validate_chapter(data, record_id)
                 if table == 'questions':
                     # Freeze questions used in exams; changing answers would corrupt history.
                     if record_id and db().execute('SELECT 1 FROM quiz_answers WHERE question_id=?',(record_id,)).fetchone():
@@ -344,18 +392,31 @@ def create_app(test_config=None):
                 refresh_stats(commit=False)
                 db().commit()
                 flash('資料已儲存。','success')
+                if table in ('subjects','chapters'):
+                    return redirect(url_for('records',table='subjects',subject_id=record_id if table=='subjects' else data['subject_id']))
+                if table=='questions' and request.args.get('chapter_id',type=int):
+                    return redirect(url_for('records',table=table,chapter_id=data['chapter_id']))
                 return redirect(url_for('records',table=table))
             except (ValueError,sqlite3.IntegrityError,StorageIntegrityError) as exc:
                 db().rollback()
                 error = str(exc) if isinstance(exc,ValueError) else '資料重複或關聯不正確；同一天的體重請編輯原紀錄。'
+        if table in ('subjects','chapters'):
+            return render_subject_workspace(table, values, error, edit_id)
         if table == 'questions':
             # Keep the manual/fixed question-bank screen clean.  Concept source
             # examples live in Concept Bank, while concept_dynamic rows are per-quiz
             # history snapshots and must not look like reusable fixed questions.
+            chapter_filter=request.args.get('chapter_id',type=int)
+            if chapter_filter:
+                filtered_chapter=owned('chapters',chapter_filter)
+                title='固定題庫 · '+filtered_chapter['chapter_name']
+                if not values:
+                    values={'chapter_id':chapter_filter}
             rows = db().execute(
                 "SELECT * FROM questions WHERE " + ownership(table) +
-                " AND COALESCE(source,'manual') <> 'concept_dynamic' ORDER BY id DESC",
-                (g.user['id'],),
+                " AND COALESCE(source,'manual') <> 'concept_dynamic'" +
+                (' AND chapter_id=?' if chapter_filter else '') + ' ORDER BY id DESC',
+                (g.user['id'],chapter_filter) if chapter_filter else (g.user['id'],),
             ).fetchall()
         else:
             rows = db().execute(f'SELECT * FROM {table} WHERE {ownership(table)} ORDER BY id DESC',(g.user['id'],)).fetchall()
@@ -370,17 +431,26 @@ def create_app(test_config=None):
     def delete_record(table,record_id):
         if table not in CATALOG:
             abort(404)
-        owned(table,record_id)
+        deleted_record=owned(table,record_id)
         try:
+            if table=='chapters':
+                for plan_table in ('exam_plans','learning_goals'):
+                    for plan in db().execute(f'SELECT chapter_ids FROM {plan_table} WHERE subject_id=?',(deleted_record['subject_id'],)):
+                        if str(record_id) in {str(value) for value in json.loads(plan['chapter_ids'] or '[]')}:
+                            raise ValueError('此章節已被學習或考試計畫選用，請先調整該計畫。')
             if table=='questions':
                 db().execute('DELETE FROM question_options WHERE question_id=?',(record_id,))
             db().execute(f'DELETE FROM {table} WHERE id=?',(record_id,))
             refresh_stats(commit=False)
             db().commit()
             flash('資料已刪除。','success')
-        except (sqlite3.IntegrityError,StorageIntegrityError):
+        except (ValueError,sqlite3.IntegrityError,StorageIntegrityError) as exc:
             db().rollback()
-            flash('此資料仍被其他紀錄使用，請先處理相關資料；已有作答的題目會保留。','error')
+            flash(str(exc) if isinstance(exc,ValueError) else '此資料仍被其他紀錄使用，請先處理相關資料；已有作答的題目會保留。','error')
+        if table in ('subjects','chapters'):
+            return redirect(url_for('records',table='subjects',**({'subject_id':deleted_record['subject_id']} if table=='chapters' else {})))
+        if table=='questions' and request.args.get('chapter_id',type=int):
+            return redirect(url_for('records',table=table,chapter_id=deleted_record['chapter_id']))
         return redirect(url_for('records',table=table))
 
     @app.get('/workspace/<page>')
@@ -396,6 +466,7 @@ def create_app(test_config=None):
     for old, endpoint in [('data-visualization','analysis'),('maps','quiz_start'),('manage-users','profile'),('preferences','profile')]:
         app.add_url_rule('/'+old,old,login_required(lambda target=endpoint: redirect(url_for(target))))
 
+    register_subject_management(app)
     register_learning(app)
     return app
 

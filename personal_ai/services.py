@@ -91,6 +91,10 @@ def _review_question(reviewer, item, evidence_text, concept_text):
     try:
         data=reviewer.complete_json(system,user)
         return data if isinstance(data,dict) else {'approved':False,'reason':'Reviewer 回傳格式錯誤'}
+    except LLMError:
+        # Transport/quota/format failures are not a rejected question. Stop the
+        # job so later questions do not keep spending requests on the same error.
+        raise
     except Exception as exc:
         return {'approved':False,'reason':f'Reviewer 失敗：{exc}'}
 
@@ -129,6 +133,10 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
 
     generator=get_generator_llm(config)
     reviewer=get_reviewer_llm(config)
+    if getattr(getattr(generator,'primary',generator),'provider','')=='groq':
+        evidence=evidence[:1500]
+        concept_text=concept_text[:1500]
+        recent_text=recent_text[:500]
     if not generator.enabled:
         raise LLMError('Generator LLM 尚未設定。請設定 GENERATOR_PROVIDER / GENERATOR_MODEL。')
     system=(

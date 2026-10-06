@@ -3,7 +3,7 @@
 {% set chart_kind='sessions' %}{% set chart_rows=sessions %}{% set chart_note='依已完成測驗的答對題數與總題數計算；可按科目篩選，不含尚未交卷的測驗。' %}
 {% include '_learning_charts.html' %}
 <section class="panel-card">
-  <h2>已完成測驗</h2>
+  <h2>已完成測驗 <span class="ui-section-count">{{sessions|length}} 場</span></h2>
   {% for row in sessions %}
   <div class="record-item">
     <a href="{{ url_for('quiz_take',sid=row.id) }}">{{ row.subject_name }} · 測驗 #{{ row.id }} · {{ row.correct_count }}/{{ row.total_count }} 題正確 · {{ (row.correct_count / row.total_count * 100)|round(1) }} 分 · {{ row.finished_at }}</a>
@@ -12,17 +12,19 @@
 </section>
 
 <section class="panel-card">
-  <h2>錯題簿</h2>
+  <h2>錯題簿 <span class="ui-section-count">{{wrong|length}} 題</span></h2>
   <p>同一題重複答錯只累加錯誤次數；錯題複習模式答對後保留歷史並標記為「已克服」。</p>
   {% for row in wrong %}
-  <article class="record-item">
-    <strong>{{ row.subject_name }} / {{ row.chapter_name }} · {{ row.q_type }}</strong>
+  <details class="ui-preview-card">
+    <summary><strong>{{ row.subject_name }} / {{ row.chapter_name }} · {{ row.q_type }}</strong><span class="ui-preview-meta">{{row.status}} · 累計答錯 {{row.wrong_count}} 次 · 點開看答案與解析</span><span class="ui-preview-text">{{row.content|truncate(110,true)}}</span></summary>
+    <div class="ui-preview-body">
     <p class="prewrap">{{ row.content }}</p>
     <p>正確答案：{{ row.snapshot_answer_key }} · 最近錯誤答案：{{ row.last_wrong_answer }}</p>
     <p>累計答錯 {{ row.wrong_count }} 次 · 最近答錯：{{ row.last_wrong_at }} · 狀態：{{ row.status }}</p>
     <details><summary>查看題庫解析</summary><p class="prewrap">{{ row.explanation or '尚無可用解析。' }}</p></details>
     <p><a class="action-link" href="{{ url_for('personal_ai.wrong_tutor', question_id=row.question_id) }}">用教材 RAG 解釋這題 →</a></p>
-  </article>
+    </div>
+  </details>
   {% else %}<p>目前沒有錯題。</p>{% endfor %}
 </section>
 {% endblock %}

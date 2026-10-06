@@ -3,7 +3,7 @@
 <section class="panel-card">
   <h2>準備好，開始一場練習。</h2>
   <p>模擬考 / 練習可選擇 Concept 動態出題，或直接從固定題庫隨機抽題。錯題複習則保留原題。</p>
-  <p class="notice info"><strong>動態出題：</strong>使用概念來源設計新題，需要等待模型生成。若想立即開始，請選普通隨機出題。</p>
+  <details class="ui-disclosure"><summary>選擇出題方式的小提示</summary><div class="ui-disclosure-body"><p>Concept 動態出題會使用概念來源設計新題，需要等待模型生成。普通隨機出題直接抽取固定題庫，可立即開始；錯題複習保留原題。</p></div></details>
   {% if error %}<p class="notice error">{{ error }}</p>{% endif %}
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -42,7 +42,7 @@
 
     <p><small>普通隨機出題保留題庫原題、選項、答案與解析，同一份考卷不重複抽題；題數不足時會提示調整。概念型匯入的來源樣本不屬於固定題庫，請使用傳統題庫匯入。錯題複習只抽待複習錯題。</small></p>
 
-    <h3>章節範圍</h3>
+    <details class="ui-disclosure" {% if selected.chapter_ids %}open{% endif %}><summary>章節範圍 · <span data-choice-summary="chapter_ids" data-empty-label="目前使用整科" data-count-unit="個章節">{{'已選 ' ~ (selected.chapter_ids|length) ~ ' 個章節' if selected.chapter_ids else '目前使用整科'}}</span> · 點開調整</summary><div class="ui-disclosure-body">
     <p><small>不勾選代表該科目全部章節；後端仍會驗證章節是否屬於所選科目。</small></p>
     <div class="choice-grid">
       {% for chapter in chapters %}
@@ -53,7 +53,8 @@
       {% else %}<p>尚無章節。</p>{% endfor %}
     </div>
 
-    <h3>題型</h3>
+    </div></details>
+    <details class="ui-disclosure" {% if selected.q_types %}open{% endif %}><summary>題型篩選 · <span data-choice-summary="q_types" data-empty-label="目前不限題型" data-count-unit="種">{{'已選 ' ~ (selected.q_types|length) ~ ' 種' if selected.q_types else '目前不限題型'}}</span> · 點開調整</summary><div class="ui-disclosure-body">
     <p><small>不勾選代表不限題型。</small></p>
     <div class="choice-grid">
       {% for q_type in question_types %}
@@ -62,16 +63,17 @@
       </label>
       {% endfor %}
     </div>
+    </div></details>
     <button class="action">建立考卷並開始作答</button>
   </form>
 </section>
 
-<section class="panel-card">
+<details class="resource-upload"><summary>查看測驗紀錄 <span class="ui-section-count">{{sessions|length}} 場</span></summary><section class="panel-card">
   <h2>測驗紀錄</h2>
   {% for row in sessions %}
   <div class="record-item">
     <a href="{{ url_for('quiz_take',sid=row.id) }}">#{{ row.id }} · {{ row.subject_name }} · {{ row.mode }} · {{ row.total_count }} 題 · {{ '查看成績' if row.finished_at else '繼續作答' }}</a>
   </div>
   {% else %}<p>尚無測驗。</p>{% endfor %}
-</section>
+</section></details>
 {% endblock %}

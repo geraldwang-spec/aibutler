@@ -5,10 +5,13 @@
   <title>{{title}}｜考試智伴</title>
   {% set endpoint=request.endpoint or '' %}
   {% set body_page=endpoint=='body.index' %}
+  {% if not body_page %}<script src="{{url_for('static',filename='js/workspace-theme.js',v='1')}}"></script>{% endif %}
   {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign'] %}<link rel="stylesheet" href="{{url_for('static',filename='css/'+name+'.css')}}">{% endfor %}
-  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/question-workspace.css')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/product.css',v='workspace-2')}}">{% endif %}
+  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/question-workspace.css')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/product.css',v='palette-4')}}">{% endif %}
   <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-pane.css')}}">
-  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='decor-1')}}">{% endif %}
+  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='palette-4')}}">{% endif %}
+  {% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-order.css',v='status-5')}}">{% endif %}
+{% if not body_page %}<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-legacy-palette.css',v='2')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/workspace-theme.css',v='2')}}">{% endif %}
 </head>
 <body class="{{'workspace-body-pane' if body_page else 'product-ui workspace-pane'}}" data-page="{{request.endpoint}}">
   <main id="workspace-content" tabindex="-1" class="{{'templatemo-content col-1 light-gray-bg' if body_page else ''}}">
@@ -22,6 +25,7 @@
     </div>
   </main>
   <script src="{{url_for('static',filename='js/live.js')}}"></script>
+  {% if not body_page %}<script src="{{url_for('static',filename='js/workspace-order.js',v='action-4')}}"></script>{% endif %}
   <script src="{{url_for('static',filename='js/workspace-pane.js')}}"></script>
 </body>
 </html>
