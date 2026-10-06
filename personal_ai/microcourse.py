@@ -9,6 +9,7 @@ from .coaching import calculate_concept_weakness
 from .llm_provider import LLMError, get_course_llm, get_tutor_llm, model_usage_label
 from .rag import retrieve
 from .prompt_budget import bounded_json
+from .data_safety import safe_source, validate_user_text, redact_text
 
 
 def _concept_row(user_id: int, concept_id: int):
@@ -84,6 +85,12 @@ def create_micro_course(user_id: int, concept_id: int, minutes: int = 5):
     minutes = max(3, min(15, int(minutes or 5)))
     weakness = _weakness_for(user_id, int(concept["subject_id"]), concept_id)
     evidence = _course_evidence(user_id, concept, weakness)
+    samples=db().execute('SELECT id,raw_question,explanation FROM source_question_items WHERE user_id=? AND concept_id=? AND subject_id=? ORDER BY id DESC LIMIT 4',
+                         (user_id,concept_id,concept['subject_id'])).fetchall()
+    sample_text='\n'.join(f"[source:{r['id']}] "+safe_source(r['raw_question'])+' '+safe_source(r['explanation']) for r in samples if safe_source(r['raw_question']))
+    if not evidence and not sample_text:
+        raise ValueError('沒有相關教材或來源樣本支持此課程，請先加入教材。')
+    weakness['evidence_source_ids']=[r['id'] for r in samples if safe_source(r['raw_question'])] if not evidence else []
     evidence_text = "\n\n".join(
         f"[chunk:{e['id']}] {e.get('section_title') or e.get('material_title') or '教材'}\n{e.get('content','')}"
         for e in evidence
@@ -159,8 +166,7 @@ def create_micro_course(user_id: int, concept_id: int, minutes: int = 5):
             },
         }
         if not evidence:
-            samples=db().execute('SELECT raw_question,explanation FROM source_question_items WHERE user_id=? AND concept_id=? LIMIT 4',(user_id,concept_id)).fetchall()
-            payload['evidence']='\n'.join(str(r['raw_question'])+' '+str(r['explanation'] or '') for r in samples)
+            payload['evidence']=sample_text
             if not payload['evidence']: raise ValueError('沒有教材或來源樣本支持此課程，請先加入教材。')
         lesson={'title':f"{concept['name']} 補強課",'objective':f"理解並應用 {concept['name']}",'steps':[]}
         try:
@@ -270,13 +276,17 @@ def get_course(user_id: int, course_id: int):
                 SELECT rc.id,rc.content,rm.section_title,m.title material_title
                 FROM rag_chunks rc
                 JOIN rag_documents rd ON rd.id=rc.doc_id
-                LEFT JOIN materials m ON m.id=rd.material_id
+                JOIN materials m ON m.id=rd.material_id
                 LEFT JOIN rag_chunk_meta rm ON rm.chunk_id=rc.id
-                WHERE rc.id IN ({marks})
+                WHERE rc.id IN ({marks}) AND m.user_id=? AND m.subject_id=?
                 """,
-                tuple(chunk_ids),
+                (*chunk_ids,user_id,data['subject_id']),
             ).fetchall()
         ]
+    for source in data['evidence']:
+        source['content']=safe_source(source['content'])
+        source['material_title']=redact_text(source['material_title'])
+    data['evidence']=[source for source in data['evidence'] if source['content'].strip()]
     return data
 
 
@@ -337,6 +347,12 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
         raise ValueError("請輸入問題。")
     if len(question) > 1500:
         raise ValueError("問題不可超過 1500 字。")
+    validate_user_text(question)
+    question=redact_text(question)
+    from .rag import related
+    supported=related(question,' '.join([course['concept_name'],course['objective'] or '']+
+        [safe_source(e['content']) for e in course['evidence']]+
+        [safe_source(step['content']) for step in course['steps']]))
 
     evidence = "\n\n".join(
         f"[chunk:{e['id']}] {e.get('section_title') or e.get('material_title')}\n{e['content']}"
@@ -351,7 +367,10 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
         (course_id, "user", question, course.get("evidence_chunk_ids") or "[]", "user"),
     )
 
-    if not model.enabled or getattr(model, "provider", "") == "mock":
+    if not supported:
+        answer='目前課程與教材沒有這個問題的相關依據，請詢問本課內容。'
+        model_name='教材範圍檢查（未呼叫模型）'
+    elif not model.enabled or getattr(model, "provider", "") == "mock":
         answer = (
             "DEV 模式：這裡已接好微課程互動 Tutor。啟用真 Qwen 後，會只依本課 Concept、課程內容與 RAG 教材回答你的追問。"
         )

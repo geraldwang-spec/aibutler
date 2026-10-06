@@ -39,6 +39,13 @@ def knowledge():
             root=Path(current_app.instance_path)/'personal_ai_uploads'/str(g.user['id']); root.mkdir(parents=True,exist_ok=True)
             safe=secrets.token_hex(8)+ext; path=root/safe; f.save(path)
             sections=parse_file(path); chunks=chunk_sections(sections)
+            from .data_safety import safe_source, redact_text
+            for chunk in chunks:
+                chunk['text']=safe_source(chunk['text'])
+                chunk['title']=redact_text(chunk['title'])
+            chunks=[chunk for chunk in chunks if chunk['text'].strip()]
+            if not chunks:
+                raise ValueError('教材沒有可用的安全文字內容，請確認檔案不是空白或僅含敏感資料／系統指令。')
             vectors=None; embedding_model=None
             embedder=get_embedder(current_app.config)
             if backend()=='postgresql' and embedder.enabled and embedder.provider != 'cpu' and chunks:
@@ -417,6 +424,8 @@ def micro_course(course_id):
 def job_page(job_id):
     job=read_job(current_app,job_id,g.user['id'])
     if not job: abort(404)
+    from .data_safety import redact_text
+    job['error']=redact_text(job.get('error'))
     return render_template('ai_job.html',title='AI 工作',job=job,result=json.loads(job['result']) if job['result'] else None)
 
 @bp.get('/ai/jobs/<job_id>/status')
@@ -426,7 +435,8 @@ def job_status(job_id):
     if not job: return jsonify(error='找不到這個工作，或您沒有存取權限。'),404
     payload={k:job[k] for k in ('status','calls','input_tokens','output_tokens','error')}
     payload['result']=json.loads(job['result']) if job['result'] else None
-    return jsonify(payload)
+    from .data_safety import sanitize
+    return jsonify(sanitize(payload))
 
 @bp.post('/ai/jobs/<job_id>/cancel')
 @login_required

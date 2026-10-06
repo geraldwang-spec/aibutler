@@ -102,7 +102,8 @@ class OpenAICompatibleLLM(BaseLLM):
                 detail = exc.read().decode("utf-8", errors="replace")[:1200]
             except Exception:
                 pass
-            suffix = f"：{detail}" if detail else ""
+            from .data_safety import redact_text
+            suffix = f"：{redact_text(detail)}" if detail else ""
             try:
                 api_error=json.loads(detail).get('error') or {}
                 error_code=api_error.get('code') or api_error.get('type')
@@ -111,7 +112,8 @@ class OpenAICompatibleLLM(BaseLLM):
             raise LLMError(f"LLM API HTTP {exc.code}{suffix}",status_code=exc.code,
                            error_code=error_code,retry_after=exc.headers.get('Retry-After')) from exc
         except Exception as exc:
-            raise LLMError(f"LLM API 呼叫失敗：{exc}") from exc
+            from .data_safety import redact_text
+            raise LLMError(f"LLM API 呼叫失敗：{redact_text(str(exc))}") from exc
 
     def _request_options(self):
         return {}
@@ -135,6 +137,9 @@ class OpenAICompatibleLLM(BaseLLM):
         raise LLMError("LLM 未回傳有效 JSON。請重試或改用較強模型。")
 
     def complete_json(self, system, user):
+        from .data_safety import POLICY, safe_prompt, sanitize
+        system = safe_prompt(system) + '\n' + POLICY
+        user = safe_prompt(user)
         # Groq JSON mode requires the literal word JSON in the messages.
         # An example object by itself does not satisfy that API validation.
         if 'json' not in (str(system)+' '+str(user)).lower():
@@ -152,7 +157,7 @@ class OpenAICompatibleLLM(BaseLLM):
             raise LLMError("LLM 回傳格式不符合 OpenAI-compatible API。") from exc
         if data["choices"][0].get("finish_reason") == "length":
             raise LLMError("模型輸出達到 token 上限，JSON 未完成。請縮短回答、題目或解析內容。",error_code='output_truncated')
-        return self._parse_json_text(text)
+        return sanitize(self._parse_json_text(text))
 
     def ping(self):
         try:
@@ -233,7 +238,8 @@ class OllamaLLM(OpenAICompatibleLLM):
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
-                detail = exc.read().decode("utf-8", errors="replace")[:1200]
+                from .data_safety import redact_text
+                detail = redact_text(exc.read().decode("utf-8", errors="replace"))[:1200]
             except Exception:
                 pass
             suffix = f"：{detail}" if detail else ""
@@ -248,6 +254,9 @@ class OllamaLLM(OpenAICompatibleLLM):
         return self._native_chat(messages, temperature=temperature, num_predict=4096)
 
     def complete_json_with_images(self, system, user, images):
+        from .data_safety import POLICY, safe_prompt, sanitize
+        system=safe_prompt(system)+'\n'+POLICY
+        user=safe_prompt(user)
         data = self._native_chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=0.15, images=images, num_predict=4096,
@@ -256,7 +265,7 @@ class OllamaLLM(OpenAICompatibleLLM):
             text = data["choices"][0]["message"]["content"]
         except Exception as exc:
             raise LLMError("Ollama Vision 回傳格式錯誤。") from exc
-        return self._parse_json_text(text)
+        return sanitize(self._parse_json_text(text))
 
 
 class GroqLLM(OpenAICompatibleLLM):

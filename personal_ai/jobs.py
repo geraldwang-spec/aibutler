@@ -48,6 +48,17 @@ def update(app,job_id,**values):
 
 def submit(app,user_id,kind,payload):
     from storage import read_only
+    from .data_safety import validate_user_text, redact_text
+    def protect_fields(data):
+        if not isinstance(data,dict): return data
+        result=dict(data)
+        for key,value in result.items():
+            if key in ('question','followup','focus') and isinstance(value,str):
+                validate_user_text(value)
+                result[key]=redact_text(value)
+            elif isinstance(value,dict): result[key]=protect_fields(value)
+        return result
+    payload=protect_fields(payload)
     if read_only(): raise ValueError('唯讀備援無法新增 AI 工作。')
     with _lock,ledger(app) as con:
         daily=con.execute('SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,COALESCE(SUM(calls),0) calls FROM jobs WHERE user_id=? AND created>?',(user_id,time.time()-86400)).fetchone()
@@ -126,8 +137,10 @@ def run(app,job_id,user_id):
             pending=getattr(g,'import_pending_path',None)
             if pending: pending.unlink(missing_ok=True)
             latest=read(app,job_id,user_id)
-            update(app,job_id,status='cancelled' if latest['cancel'] else 'failed',error=str(exc)[:1000])
-            app.logger.exception('AI job %s failed',job_id)
+            from .data_safety import redact_text
+            import traceback
+            update(app,job_id,status='cancelled' if latest['cancel'] else 'failed',error=redact_text(str(exc))[:1000])
+            app.logger.error('AI job %s failed\n%s',job_id,redact_text(traceback.format_exc()))
         finally:
             active_job.reset(token)
 

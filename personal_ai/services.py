@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json
+import re
 from difflib import SequenceMatcher
 from storage import db
 from .rag import retrieve
+from .data_safety import safe_source, validate_user_text
 from .llm_provider import get_generator_llm, get_reviewer_llm, model_usage_label, LLMError
 
 ALLOWED={'單選','多選','是非','填空'}
@@ -10,6 +12,8 @@ ALLOWED={'單選','多選','是非','填空'}
 
 def _concept_context(user_id, subject_id, chapter_ids, limit=20):
     params=[user_id,subject_id]
+    if not db().execute('SELECT 1 FROM subjects WHERE id=? AND created_by=?',(subject_id,user_id)).fetchone():
+        raise ValueError('科目不屬於此帳號。')
     chapter_sql=''
     if chapter_ids:
         marks=','.join('?' for _ in chapter_ids)
@@ -27,21 +31,39 @@ def _concept_context(user_id, subject_id, chapter_ids, limit=20):
     # Normalize DB rows at the service boundary so the rest of the AI pipeline
     # behaves identically on SQLite (DEV) and PostgreSQL/self-host mode.
     concepts=[dict(row) for row in concepts]
+    concepts=[c for c in concepts if safe_source(c['name'])]
+    for concept in concepts:
+        concept['name']=safe_source(concept['name'])
+        concept['description']=safe_source(concept['description'])
     if not concepts:
         return [],[]
     ids=[int(c['id']) for c in concepts]
     marks=','.join('?' for _ in ids)
-    samples=db().execute(f'''SELECT concept_id,raw_question,q_type,answer_key,skill,cognitive_level,difficulty
+    sample_scope=''
+    sample_params=[user_id,*ids]
+    if chapter_ids:
+        sample_scope=' AND chapter_id IN ('+','.join('?' for _ in chapter_ids)+')'
+        sample_params.extend(chapter_ids)
+    samples=db().execute(f'''SELECT id,concept_id,raw_question,q_type,answer_key,explanation,skill,cognitive_level,difficulty
         FROM source_question_items
-        WHERE user_id=? AND concept_id IN ({marks})
-        ORDER BY id DESC LIMIT 80''',(user_id,*ids)).fetchall()
+        WHERE user_id=? AND concept_id IN ({marks}){sample_scope}
+        ORDER BY id DESC LIMIT 80''',tuple(sample_params)).fetchall()
     samples=[dict(row) for row in samples]
+    for sample in samples:
+        sample['raw_question']=safe_source(sample['raw_question'])
+        sample['explanation']=safe_source(sample['explanation'])
+    samples=[sample for sample in samples if sample['raw_question'].strip()]
+    supported={sample['concept_id'] for sample in samples}
+    concepts=[concept for concept in concepts if concept['id'] in supported]
     return concepts,samples
 
 
 def _validate_generated(item):
     from .question_validation import validate
+    from .data_safety import REDACTED, safe_source
     if not isinstance(item,dict) or not isinstance(item.get('options') or {},dict): return None
+    text=json.dumps(item,ensure_ascii=False)
+    if REDACTED in text or not safe_source(text): return None
     try:
         data,pairs=validate(item,item.get('options') or {})
         item.update(data,options=dict(pairs))
@@ -63,7 +85,7 @@ def _final_batch_review(reviewer, items, evidence, concept_text):
             '你是考題最終裁決者。CPU 提供的語意分數不是正確率，不能代替事實驗證。'
             '核對題目、答案、解析與教材是否一致；模板已由程式計算答案，但仍須確認適合考點。'
             '任何硬性格式問題都不得批准。只回短 JSON，不重寫全部題目。',
-            json.dumps(payload,ensure_ascii=False)+'\n教材：'+evidence[:1500]+'\n概念：'+concept_text[:700]+
+            json.dumps(payload,ensure_ascii=False)+'\n教材：'+evidence+'\n概念：'+concept_text+
             '\n格式：{"decisions":[{"index":0,"approved":true,"reason":"簡短理由"}]}')
         rows = data.get('decisions',[]) if isinstance(data,dict) else []
         for row in rows:
@@ -102,10 +124,17 @@ def _review_question(reviewer, item, evidence_text, concept_text):
 def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types,difficulty,focus=''):
     from .exam_modules import enabled, rank
     modular = enabled(config)
+    validate_user_text(focus)
     # 兩種來源都可驅動出題：Concept Bank（由匯入題目歸類而來）+ 教材 RAG。
     concepts,samples=_concept_context(user_id,subject_id,chapter_ids,limit=max(12,count*2))
-    query=focus or ' '.join(q_types)+' 核心概念 重要觀念 應用'
-    chunks=retrieve(user_id,subject_id,query,chapter_ids,limit=max(6,count))
+    if focus.strip():
+        from .rag import related
+        concepts=[c for c in concepts if related(focus,' '.join([c['name'],c['description'] or ''] +
+            [sample['raw_question']+' '+sample['explanation'] for sample in samples if sample['concept_id']==c['id']]))]
+        concept_ids={c['id'] for c in concepts}
+        samples=[sample for sample in samples if sample['concept_id'] in concept_ids]
+    # No focus means sample owned material in the selected scope, not a relevance claim.
+    chunks=retrieve(user_id,subject_id,focus.strip(),chapter_ids,limit=max(6,count),require_relevance=bool(focus.strip()))
     if modular and chunks:
         chunks=chunks[:4]
     if not concepts and not chunks:
@@ -124,7 +153,7 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         cid=int(c['id'])
         concept_lines.append(f"[concept:{cid}] {c['name']} | chapter={c['chapter_name'] or ''} | {c['description'] or ''} | source_examples={c['source_count']}")
         for ex in sample_groups.get(cid,[])[:3]:
-            concept_lines.append(f"  - SOURCE EXAMPLE（只供理解考點，禁止改數字照抄）: {ex['raw_question'][:420]} | skill={ex['skill'] or ''} | level={ex['cognitive_level'] or ''}")
+            concept_lines.append(f"  - [source:{ex['id']}] SOURCE EXAMPLE（只供理解考點，禁止改數字照抄）: {ex['raw_question'][:300]} | answer={ex['answer_key']} | explanation={ex['explanation'][:180]} | skill={ex['skill'] or ''}")
     concept_text='\n'.join(concept_lines)
     if modular:
         evidence=evidence[:1500]
@@ -137,6 +166,16 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         evidence=evidence[:1500]
         concept_text=concept_text[:1500]
         recent_text=recent_text[:500]
+    # Only sources actually included in the bounded prompt may be cited or selected.
+    sent_chunks={int(cid) for cid in re.findall(r'\[chunk:(\d+)\]',evidence)}
+    sent_concepts={int(cid) for cid in re.findall(r'\[concept:(\d+)\]',concept_text)}
+    sent_sources={int(sid) for sid in re.findall(r'\[source:(\d+)\]',concept_text)}
+    chunks=[chunk for chunk in chunks if int(chunk['id']) in sent_chunks]
+    sample_groups={cid:[sample for sample in group if sample['id'] in sent_sources] for cid,group in sample_groups.items()}
+    concepts=[c for c in concepts if c['id'] in sent_concepts and sample_groups.get(c['id'])]
+    concept_map={int(c['id']):c for c in concepts}
+    if not chunks and not concepts:
+        raise ValueError('可用來源未能放入模型輸入上限，請縮小出題範圍。')
     if not generator.enabled:
         raise LLMError('Generator LLM 尚未設定。請設定 GENERATOR_PROVIDER / GENERATOR_MODEL。')
     system=(
@@ -180,6 +219,10 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         batch=data.get('questions',[]) if isinstance(data,dict) else []
         if not isinstance(batch,list) or not batch:
             raise LLMError('Generator 沒有產生可用題目。')
+        for item in batch:
+            if isinstance(item,dict):
+                item.pop('_origin',None)
+                item.pop('_expert',None)
         qs.extend(batch[:current_count])
     if not qs:
         raise LLMError('Generator 沒有產生可用題目。')
@@ -207,17 +250,14 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         ):
             continue
         review=reviews.get(item_index,{'approved':False}) if modular else _review_question(reviewer,item,evidence,concept_text)
-        if not review.get('approved'):
-            corrected=review.get('corrected_question')
-            if isinstance(corrected,dict):
-                v=_validate_generated(corrected)
-                if not v:
-                    continue
-                item=corrected
-                qt,content,ans,opts=v
-            else:
-                continue
-        ev=[int(x) for x in (item.get('evidence_chunk_ids') or []) if str(x).isdigit() and int(x) in {int(c['id']) for c in chunks}]
+        if review.get('approved') is not True:
+            # A suggested rewrite is not an approval; never admit an unreviewed correction.
+            continue
+        raw_ev=item.get('evidence_chunk_ids') or []
+        allowed_evidence={int(c['id']) for c in chunks}
+        if not isinstance(raw_ev,list) or any(not str(x).isdigit() or int(x) not in allowed_evidence for x in raw_ev):
+            continue
+        ev=list(dict.fromkeys(int(x) for x in raw_ev))
         concept_id=item.get('concept_id')
         try:
             concept_id=int(concept_id) if concept_id else None
@@ -225,13 +265,21 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
             concept_id=None
         if concept_id not in concept_map:
             concept_id=None
-        concept_name=str(item.get('concept_name') or (concept_map.get(concept_id,{}).get('name') if concept_id else '') or '').strip()
+        if not ev and not concept_id:
+            continue
+        concept_name=str(concept_map[concept_id]['name'] if concept_id else '').strip()
         concept_names=[concept_name] if concept_name else []
         chapter_id=(concept_map.get(concept_id,{}).get('chapter_id') if concept_id else None) or (chapter_ids[0] if len(chapter_ids)==1 else None)
+        if chapter_ids and chapter_id not in chapter_ids:
+            chapter_id=chapter_ids[0] if len(chapter_ids)==1 else None
+        explanation=str(item.get('explanation','')).strip()
+        if not ev and concept_id:
+            source_ids=[sample['id'] for sample in sample_groups.get(concept_id,[])[:3]]
+            explanation+='\n來源樣本：'+', '.join('#'+str(sid) for sid in source_ids)
         cur=db().execute('''INSERT INTO ai_question_drafts(user_id,subject_id,chapter_id,q_type,content,options_json,answer_key,explanation,evidence_chunk_ids,concepts_json,skill,difficulty,status,model_name)
                             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
             user_id,subject_id,chapter_id,qt,content,json.dumps(opts,ensure_ascii=False),ans,
-            str(item.get('explanation','')).strip(),json.dumps(ev),json.dumps(concept_names,ensure_ascii=False),
+            explanation,json.dumps(ev),json.dumps(concept_names,ensure_ascii=False),
             str(item.get('skill','')).strip(),difficulty,'draft',
             ('程式驗證模板 + LLM 最終裁決' if item.get('_origin')=='verified_template' else model_usage_label(generator)) + (' | CPU E5/NLI' if modular else '')))
         created.append(cur.lastrowid)

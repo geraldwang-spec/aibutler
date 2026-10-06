@@ -212,11 +212,15 @@ def tutor_history(user_id: int, question_id: int):
 
 
 def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
+    from .data_safety import validate_user_text, redact_text, safe_source
+    from .rag import related
+    validate_user_text(followup)
+    followup=redact_text(followup)
     q = wrong_question_context(user_id, question_id)
     if not q:
         raise ValueError("找不到這筆錯題。")
     concept_names = [c["name"] for c in q["concepts"]]
-    query = " ".join(concept_names + [q.get("skill") or "", q["content"], followup]).strip()
+    query = followup or " ".join(concept_names + [q.get("skill") or "", q["content"]]).strip()
     chunks = retrieve(user_id, q["subject_id"], query, [q["chapter_id"]], limit=6)
     chunk_ids = [int(c["id"]) for c in chunks]
     evidence = "\n\n".join(
@@ -228,7 +232,12 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
 
     llm = get_llm(current_app.config)
     # DEV mode stays useful without pretending a model performed reasoning.
-    if not llm.enabled or getattr(llm, "provider", "") == "mock":
+    context_text=' '.join([safe_source(q['content']),safe_source(q.get('explanation'))]+concept_names+[c['content'] for c in chunks])
+    clarification=followup.strip('？?。!！ ') in {'為什麼','為甚麼','為什麼錯','再解釋一次','可以舉例嗎','看不懂','請解釋','請舉例'}
+    if followup and not clarification and not related(followup,context_text):
+        answer='這筆錯題與所選教材沒有此追問的相關依據，請針對題目內容提問。'
+        mode='教材範圍檢查（未呼叫模型）'
+    elif not llm.enabled or getattr(llm, "provider", "") == "mock":
         pieces = []
         if q.get("explanation"):
             pieces.append("題庫解析：" + q["explanation"])

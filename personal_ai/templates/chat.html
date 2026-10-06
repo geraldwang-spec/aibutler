@@ -16,7 +16,7 @@
     <div class="chat-input-area">
       <div id="chat-error" class="chat-inline-error" role="alert" {% if not chat_error %}hidden{% endif %}><p id="chat-error-text">{{chat_error or ''}}</p><button type="button" id="chat-retry">重試這個問題</button></div>
       <form method="post" action="{{url_for('personal_ai.chat_page',chat_id=chat.id) if chat else url_for('personal_ai.chat_new')}}" class="chat-composer" id="chat-composer"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><textarea id="chat-question" name="question" required maxlength="1500" placeholder="問一個問題，或說說你正在學什麼…" aria-label="你的問題" rows="3"></textarea><div class="chat-composer-bottom"><select name="subject_id" aria-label="教材範圍"><option value="">一般對話</option>{% for s in subjects %}<option value="{{s.id}}" {% if selected_subject_id==s.id %}selected{% endif %}>{{s.subject_name}}</option>{% endfor %}</select><button type="submit" id="chat-send">送出 ↑</button></div></form>
-      <p class="chat-footnote">一般對話直接回答；選擇科目後才參考教材。Enter 送出 · Shift＋Enter 換行。</p>
+      <p class="chat-footnote">一般對話可回答生活問題；選擇科目後僅依該科目教材回答，找不到相關內容就會告知。Enter 送出 · Shift＋Enter 換行。</p>
       <noscript><p class="chat-footnote">回答送出後請重新整理查看結果。啟用 JavaScript 可在這裡自動接收回答。</p></noscript>
     </div>
   </section>
