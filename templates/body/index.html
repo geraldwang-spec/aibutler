@@ -1,6 +1,6 @@
 {% extends 'live_base.html' %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='body/body.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='body/body.css', v='theme-1') }}">
 {#
   頁面外殼：畫面內容全部由 static/body/body.js 依 JSON 狀態繪製。
   第一份狀態直接內嵌在 #bd-initial（不會被執行，只當資料讀取），之後透過 /body/api/* 以 JSON 收送。

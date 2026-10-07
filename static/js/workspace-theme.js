@@ -1,4 +1,4 @@
-/* Runs in the head to restore the palette before the first paint. BODY never loads it. */
+/* Runs in the head to restore the palette before the first paint. BODY uses only the --theme-* tokens (static/body/body.css). */
 (() => {
   const key = 'aibutler.workspace.theme';
   const modes = ['violet', 'apricot', 'midnight'];
