@@ -147,8 +147,16 @@ def classify_question_batch(items, subject_id, config):
                 raw['reason'] = proposal['reason'] + (' 低信心，已交 LLM 裁決。' if proposal['needs_review'] else ' 已交 LLM 最終確認。')
                 output.append(_normalize_classification(raw,item,existing_ids))
         return output, 'CPU E5 + MiniLM NLI → ' + model_usage_label(final)
-    candidates = _embedding_candidates(items, concepts, config)
     classifier = get_classifier_llm(config)
+    primary=getattr(classifier,'primary',classifier)
+    if getattr(primary,'provider','')=='groq' and len(items)>2:
+        output=[]
+        label=model_usage_label(classifier)
+        for start in range(0,len(items),2):
+            batch,label=classify_question_batch(items[start:start+2],subject_id,config)
+            output.extend(batch)
+        return output,label
+    candidates = _embedding_candidates(items, concepts, config)
 
     # Mock/disabled mode still gives a useful deterministic front-end test.
     if not classifier.enabled or getattr(classifier, 'provider', '') == 'mock':
@@ -179,7 +187,7 @@ def classify_question_batch(items, subject_id, config):
             'answer': item.get('answer_key'),
             'chapter': item.get('chapter_name'),
             'candidate_existing_concepts': [
-                {'id': c['id'], 'name': c['name'], 'description': c.get('description') or '', 'similarity': c.get('similarity')}
+                {'id': c['id'], 'name': c['name'], 'description': (c.get('description') or '')[:180], 'similarity': c.get('similarity')}
                 for c in candidates.get(i, [])
             ],
         })

@@ -1,5 +1,6 @@
 {% extends 'live_base.html' %}
 {% block content %}
+<link rel="stylesheet" href="{{url_for('static',filename='css/quiz-computer.css',v='review-2')}}">
 {% if exam.finished_at %}
 <section class="panel-card">
   <h2>答對 {{ exam.correct_count }} / {{ exam.total_count }} 題</h2>
@@ -16,22 +17,27 @@
   {% endif %}
 </section>
 {% else %}
-<p class="notice info">共 {{ exam.total_count }} 題。交卷前不顯示答案；所有題目完成後才能交卷。填空會忽略前後空白，其餘文字需與標準答案完全一致。</p>
+<p class="notice info">共 {{ exam.total_count }} 題。可跳題、回頭修改，也可留空交卷；未作答以答錯計分。交卷前不顯示答案。</p>
 {% endif %}
 
-<form method="post" autocomplete="off" id="quiz-form" data-quiz-id="{{exam.id}}" data-finished="{{1 if exam.finished_at else 0}}">
+<form method="post" autocomplete="off" id="quiz-form" data-quiz-id="{{exam.id}}" data-finished="{{1 if exam.finished_at else 0}}" data-elapsed-seconds="{{elapsed_seconds}}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="cbt-layout"><div class="cbt-stage"><div class="cbt-position"><span class="eyebrow">{{ '考卷檢討' if exam.finished_at else 'COMPUTER BASED EXAM' }}</span><strong id="cbt-current-label" role="status">第 1 題 / 共 {{items|length}} 題</strong></div>
   {% for row,q in items %}
   {% set question_no = loop.index %}
-  <section class="panel-card">
-    <h2>第 {{ question_no }} 題 · {{ q.q_type }}</h2>
+  <section class="panel-card cbt-question" data-question-index="{{loop.index0}}" data-answer-name="answer_{{row.id}}" {% if exam.finished_at %}data-correct="{{1 if row.is_correct else 0}}"{% endif %} aria-labelledby="question-heading-{{row.id}}">
+    <h2 id="question-heading-{{row.id}}">第 {{ question_no }} 題 · {{ q.q_type }}</h2>
     <p class="prewrap">{{ q.content }}</p>
 
     {% if exam.finished_at %}
       {% for option in q.options %}
       <p>{{ option.option_label }}. {{ option.option_text }}</p>
       {% endfor %}
-      <p class="{{ 'success' if row.is_correct else 'error' }}">你的答案：{{ row.user_answer or '未作答' }} · 正確答案：{{ q.answer_key }}</p>
+      <div class="cbt-result-answer {{ 'is-correct' if row.is_correct else 'is-wrong' }}">
+        <strong>{{ '答對' if row.is_correct else ('未作答' if not row.user_answer else '答錯') }}</strong>
+        <p>你的答案：{{ row.user_answer or '未作答' }}</p>
+        <p>正確答案：{{ q.answer_key }}</p>
+      </div>
       <h3>題庫解析</h3>
       <p class="prewrap">{{ q.explanation or '此題尚無可用解析。' }}</p>
       <small>來源：{{ q.source or ('題庫 #' ~ q.id) }} · 使用本次開考時的題目快照</small>
@@ -69,8 +75,26 @@
   </section>
   {% endfor %}
 
-  {% if not exam.finished_at %}
-  <button class="action">交卷並查看成績</button>
+  {% if exam.finished_at %}
+  <nav class="cbt-navigation" aria-label="切換檢討題目">
+    <button type="button" class="secondary-button" id="cbt-previous" disabled>← 上一題</button>
+    <button type="button" class="secondary-button" id="cbt-next-wrong">下一道錯題</button>
+    <button type="button" class="primary-button" id="cbt-next">下一題 →</button>
+  </nav></div>
+  <aside class="panel-card cbt-sidebar" aria-label="考試結果與題目目錄">
+    <div class="cbt-timer"><span>作答用時</span><output id="cbt-timer">00:00:00</output><small>已交卷，計時已停止</small></div>
+    <h2>題目目錄 <span class="ui-section-count">{{items|length}} 題</span></h2>
+    <p id="cbt-answer-count" class="note" role="status">答對 {{exam.correct_count}} / {{items|length}}</p>
+    <div class="cbt-legend"><span><i class="cbt-dot wrong" aria-hidden="true"></i>答錯／未作答</span><span><i class="cbt-dot answered" aria-hidden="true"></i>答對</span></div>
+    <nav class="cbt-question-map" aria-label="點選題號查看答案與解析">
+      {% for row,q in items %}<button type="button" class="cbt-number {{ 'is-answered' if row.is_correct else 'is-wrong' }}" data-question-target="{{loop.index0}}" aria-label="第 {{loop.index}} 題，{{'答對' if row.is_correct else '答錯或未作答'}}">{{loop.index}}</button>{% endfor %}
+    </nav>
+    <p class="cbt-help">點紅色題號可查看錯題。未作答也以紅色標記，可使用「下一道錯題」依序檢討。</p>
+  </aside></div>
+  <noscript><p class="note">啟用 JavaScript 可使用單題切換與題號目錄；目前顯示全部題目的答案與解析。</p></noscript>
+  {% else %}
+  <nav class="cbt-navigation" aria-label="切換考題"><button type="button" class="secondary-button" id="cbt-previous" disabled>← 上一題</button><button type="button" class="secondary-button" id="cbt-clear">清除此題答案</button><button type="button" class="primary-button" id="cbt-next">下一題 →</button></nav></div>
+  <aside class="panel-card cbt-sidebar" aria-label="考試時間與題目目錄"><div class="cbt-timer"><span>已用時間</span><output id="cbt-timer" role="timer" aria-live="off">00:00:00</output><small>從本次開考起計時</small></div><h2>題目目錄 <span class="ui-section-count">{{items|length}} 題</span></h2><p id="cbt-answer-count" class="note" role="status">已作答 0 / {{items|length}}</p><div class="cbt-legend"><span><i class="cbt-dot unanswered" aria-hidden="true"></i>未作答</span><span><i class="cbt-dot answered" aria-hidden="true"></i>已作答</span></div><nav class="cbt-question-map" aria-label="點選題號跳題">{% for row,q in items %}<button type="button" class="cbt-number" data-question-target="{{loop.index0}}" aria-label="第 {{loop.index}} 題，未作答">{{loop.index}}</button>{% endfor %}</nav><p class="cbt-help">點題號可直接跳題。綠色表示已填答，是否答對會在交卷後顯示。</p><button type="submit" class="action cbt-submit">交卷並查看成績</button></aside></div><noscript><p class="note">啟用 JavaScript 可使用單題切換、計時與題號狀態；目前仍可填答並直接交卷。</p></noscript>
   {% endif %}
 </form>
-<script src="{{url_for('static',filename='js/quiz-draft.js')}}" defer></script>{% endblock %}
+<script src="{{url_for('static',filename='js/quiz-draft.js')}}" defer></script><script src="{{url_for('static',filename='js/quiz-computer.js',v='review-2')}}" defer></script>{% endblock %}

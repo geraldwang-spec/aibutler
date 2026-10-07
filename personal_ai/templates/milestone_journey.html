@@ -1,0 +1,35 @@
+{% set artwork=url_for('static',filename='images/learning/milestone-icons.svg') %}
+{% set icons=['book','compass','rocket','flag','trophy'] %}
+{% set journey=namespace(next_id=none,next_title='所有里程碑都已通過',next_date=none) %}
+{% for phase in phases %}{% if journey.next_id is none and phase.status!='passed' %}{% set journey.next_id=phase.id %}{% set journey.next_title=phase.name %}{% set journey.next_date=phase.end_date %}{% endif %}{% endfor %}
+<link rel="stylesheet" href="{{url_for('static',filename='css/milestone-journey.css',v='palette-4')}}">
+<section class="panel-card milestone-journey" aria-labelledby="milestone-journey-heading">
+  <header class="journey-header">
+    <div class="journey-intro"><span class="journey-kicker">MY LEARNING ADVENTURE</span><h2 id="milestone-journey-heading">每一小步，都在靠近目標</h2><p>把學習路線分成幾個小站，一次專注一站就好。</p><div class="journey-next"><svg aria-hidden="true" viewBox="0 0 80 80"><use href="{{artwork}}#flag"></use></svg><div><small>{{'接下來的一站' if journey.next_id else '完成這段旅程'}}</small><strong>{{journey.next_title}}</strong>{% if journey.next_date %}<span>階段目標日 {{journey.next_date}}</span>{% endif %}</div></div></div>
+    <div class="journey-progress-area"><div class="journey-progress-ring" style="--journey-progress:{{progress.percent}}" role="progressbar" aria-label="里程碑驗收進度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{progress.percent}}"><div><svg aria-hidden="true" viewBox="0 0 80 80"><use href="{{artwork}}#{{'trophy' if progress.percent==100 else 'rocket'}}"></use></svg><strong>{{progress.percent}}<small>%</small></strong><span>驗收進度</span></div></div><p>已通過 <strong>{{progress.passed}}</strong> / {{progress.total}} 個里程碑</p></div>
+  </header>
+  {% if phases %}
+  <p class="journey-hint">點選小站查看階段內容。百分比依 Checkpoint 通過數計算，目標掌握度是測驗門檻。</p>
+  <nav class="journey-map" aria-label="學習里程碑路線"><ol>
+    {% for p in phases %}
+    {% set phase_milestones=milestones|selectattr('phase_id','equalto',p.id)|list %}
+    {% set phase_passed=phase_milestones|selectattr('status','equalto','achieved')|list|length %}
+    {% set percent=(phase_passed*100/(phase_milestones|length))|round|int if phase_milestones else 0 %}
+    <li class="journey-stop {{'is-passed' if p.status=='passed' else ('is-review' if p.status=='needs_review' else ('is-current' if p.id==journey.next_id else 'is-upcoming'))}}"><a href="#milestone-phase-{{p.id}}" data-milestone-target="milestone-phase-{{p.id}}" {% if p.id==journey.next_id %}aria-current="step"{% endif %}><span class="journey-station"><svg aria-hidden="true" viewBox="0 0 80 80"><use href="{{artwork}}#{{'trophy' if p.status=='passed' else icons[loop.index0 % icons|length]}}"></use></svg><span class="journey-station-number">{{'✓' if p.status=='passed' else p.phase_no}}</span></span><strong>{{p.name}}</strong><span class="journey-stop-status">{{'已通過' if p.status=='passed' else ('回顧再挑戰' if p.status=='needs_review' else ('目前這一站' if p.id==journey.next_id else '接下來的路線'))}}</span><span class="journey-stop-percent">{{percent}}% <small>驗收</small></span></a></li>
+    {% endfor %}
+  </ol></nav>
+  <div class="journey-phase-grid">
+    {% for p in phases %}
+    {% set phase_milestones=milestones|selectattr('phase_id','equalto',p.id)|list %}
+    {% set phase_passed=phase_milestones|selectattr('status','equalto','achieved')|list|length %}
+    {% set percent=(phase_passed*100/(phase_milestones|length))|round|int if phase_milestones else 0 %}
+    <details id="milestone-phase-{{p.id}}" class="journey-phase {{'is-passed' if p.status=='passed' else ('is-review' if p.status=='needs_review' else '')}}" {% if p.id==journey.next_id %}open{% endif %}>
+      <summary><span class="journey-phase-icon"><svg aria-hidden="true" viewBox="0 0 80 80"><use href="{{artwork}}#{{icons[loop.index0 % icons|length]}}"></use></svg></span><span class="journey-phase-name"><small>第 {{p.phase_no}} 階段 · {{p.start_date}} ～ {{p.end_date}}</small><strong>{{p.name}}</strong><span>{{phase_passed}} / {{phase_milestones|length}} 個里程碑通過</span></span><span class="journey-phase-percent">{{percent}}<small>%</small></span><span class="journey-expand" aria-hidden="true">⌄</span></summary>
+      <div class="journey-phase-meter" role="progressbar" aria-label="{{p.name}} 里程碑驗收進度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{percent}}"><span style="width:{{percent}}%"></span></div>
+      <div class="journey-phase-body"><p class="journey-objective">{{p.objective}}</p><div class="journey-checkpoints">{% for m in phase_milestones %}<article class="journey-checkpoint {{'is-passed' if m.status=='achieved' else ('is-review' if m.status=='needs_review' else '')}}"><span class="journey-checkpoint-icon" aria-hidden="true">{{'✓' if m.status=='achieved' else ('↻' if m.status=='needs_review' else '⚑')}}</span><div><h3>{{m.title}}</h3><p>目標日 {{m.target_date}} · {{m.checkpoint_question_count}} 題 · 通過門檻 {{m.target_mastery|int}}%</p><span class="journey-checkpoint-status">{{'已通過，收下一枚里程碑！' if m.status=='achieved' else ('回顧一下，再挑戰一次' if m.status=='needs_review' else '等待系統測驗驗收')}}</span>{% if m.status=='achieved' and m.achieved_at %}<small class="journey-achieved-date">通過時間 {{m.achieved_at}}</small>{% endif %}</div></article>{% else %}<p class="journey-hint">這個階段尚未設定里程碑。</p>{% endfor %}</div></div>
+    </details>
+    {% endfor %}
+  </div>
+  {% else %}<p class="journey-hint">目前尚無階段與里程碑，建立學習路線後就會在這裡顯示。</p>{% endif %}
+</section>
+<script src="{{url_for('static',filename='js/milestone-journey.js',v='1')}}" defer></script>

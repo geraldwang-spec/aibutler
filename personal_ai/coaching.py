@@ -10,6 +10,8 @@ from storage import db
 from .llm_provider import model_usage_label, get_llm, LLMError
 from .rag import retrieve
 from .prompt_budget import bounded_json
+from .schedule_rhythm import RecoveryRhythm
+from .response_style import STYLE
 
 RECENT_CONCEPT_LIMIT = 20
 MIN_CONCEPT_SAMPLE = 3
@@ -211,11 +213,15 @@ def tutor_history(user_id: int, question_id: int):
 
 
 def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
+    from .data_safety import validate_user_text, redact_text, safe_source
+    from .rag import related
+    validate_user_text(followup)
+    followup=redact_text(followup)
     q = wrong_question_context(user_id, question_id)
     if not q:
         raise ValueError("找不到這筆錯題。")
     concept_names = [c["name"] for c in q["concepts"]]
-    query = " ".join(concept_names + [q.get("skill") or "", q["content"], followup]).strip()
+    query = followup or " ".join(concept_names + [q.get("skill") or "", q["content"]]).strip()
     chunks = retrieve(user_id, q["subject_id"], query, [q["chapter_id"]], limit=6)
     chunk_ids = [int(c["id"]) for c in chunks]
     evidence = "\n\n".join(
@@ -227,7 +233,13 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
 
     llm = get_llm(current_app.config)
     # DEV mode stays useful without pretending a model performed reasoning.
-    if not llm.enabled or getattr(llm, "provider", "") == "mock":
+    context_text=' '.join([safe_source(q['content']),safe_source(q.get('explanation'))]+concept_names+[c['content'] for c in chunks])
+    clarification=followup.strip('？?。!！ ') in {'為什麼','為甚麼','為什麼錯','再解釋一次','可以舉例嗎','看不懂','請解釋','請舉例'}
+    if followup and not clarification and not related(followup,context_text):
+        from .conversation_fallback import respond
+        answer=respond(followup,tutor_history(user_id,question_id),context='這筆錯題和教材',in_chat=False)
+        mode='教材範圍外互動回覆'
+    elif not llm.enabled or getattr(llm, "provider", "") == "mock":
         pieces = []
         if q.get("explanation"):
             pieces.append("題庫解析：" + q["explanation"])
@@ -246,7 +258,7 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
         system = (
             "你是錯題教學助理。只能依題目、正確答案、題庫解析與提供的教材 RAG 證據回答。"
             "若證據不足，明確說教材中沒有足夠依據，不可自行補充未提供的事實。"
-            "用繁體中文，先指出錯誤關鍵，再分步說明；追問也必須維持相同證據限制。只回 JSON。"
+            "用繁體中文，先指出錯誤關鍵，再分步說明；追問也必須維持相同證據限制。只回 JSON。" + STYLE
         )
         user = bounded_json({
             "question": q["content"],
@@ -454,15 +466,18 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
     never by manually clicking a task complete button.
     """
     preserve_dates=set()
+    preserved_by_date=defaultdict(list)
     if keep_done:
         preserved=db().execute("""
-            SELECT DISTINCT lt.task_date
+            SELECT DISTINCT lt.id,lt.task_date,lt.target_minutes,lt.task_type,lt.question_count
             FROM learning_tasks lt
             LEFT JOIN learning_checkpoint_attempts lca ON lca.task_id=lt.id
             WHERE lt.goal_id=? AND lt.user_id=?
               AND (lt.status IN ('done','read') OR lca.id IS NOT NULL)
         """,(goal_id,user_id)).fetchall()
         preserve_dates={str(r['task_date'])[:10] for r in preserved}
+        for row in preserved:
+            preserved_by_date[str(row['task_date'])[:10]].append(row)
         db().execute("""
             DELETE FROM learning_tasks
             WHERE goal_id=? AND user_id=? AND status NOT IN ('done','read')
@@ -474,16 +489,21 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
     if not concepts:
         return
     concept_idx=0
+    rhythm=RecoveryRhythm()
     for phase_id,seq,phase_name,st,en,target_mastery,objective in phase_ids:
         d=st
         day_index=0
         while d<=en:
             ds=d.isoformat()
             if ds in preserve_dates:
+                for previous in preserved_by_date[ds]:
+                    rhythm.record(int(previous['target_minutes'] or 0), previous['task_type'], int(previous['question_count'] or 0))
                 d += timedelta(days=1); day_index += 1; continue
             minutes=weekend_minutes if d.weekday()>=5 else weekday_minutes
             is_final=(seq==phase_ids[-1][1])
             is_phase_end=(d==en)
+            assessment_day = is_phase_end or (is_final and day_index % 3 == 2) or (not is_final and day_index > 0 and day_index % 7 == 5)
+            recovery = rhythm.choose(minutes, assessment=assessment_day, before_assessment=d+timedelta(days=1)==en)
 
             if is_phase_end:
                 # Every phase ends with a real scored gate. The learner cannot click past it.
@@ -492,6 +512,12 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
                 qcount=20 if is_final else 10
                 concept=None
                 reason=f"系統驗收：需達 {int(target_mastery)}% 才算通過此階段"
+            elif recovery:
+                task_type=recovery['task_type']; title=recovery['title']; minutes=recovery['minutes']; qcount=0
+                concept=concepts[max(0,concept_idx-1) % len(concepts)] if task_type=='輕量學習' else None
+                if concept:
+                    title=f"輕量回顧：{concept['concept_name']}"
+                reason=recovery['reason']
             elif is_final:
                 # Protected final period: weak-area review + scored mock exams; no new core material.
                 if day_index % 3 == 2:
@@ -523,6 +549,7 @@ def _rebuild_goal_tasks(goal_id: int, user_id: int, concepts, phase_ids, weekday
                  None if concept is None else concept.get('concept_id'),
                  None if concept is None else concept.get('chapter_id'),
                  minutes,qcount,reason))
+            rhythm.record(minutes,task_type,qcount)
             d += timedelta(days=1); day_index += 1
 
 

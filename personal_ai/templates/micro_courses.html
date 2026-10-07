@@ -4,7 +4,7 @@
   {% if error %}<p class="form-error">{{error}}</p>{% endif %}
   <form method="get" class="inline-form"><label>科目<select name="subject_id"><option value="">全部科目</option>{% for s in subjects %}<option value="{{s.id}}" {% if subject_id==s.id %}selected{% endif %}>{{s.subject_name}}</option>{% endfor %}</select></label><button class="secondary-button">篩選</button></form>
 </section>
-<section class="panel-card course-library"><h2>你的課程書架</h2><div class="course-library-grid">
+<section class="panel-card course-library"><h2>你的課程書架 <span class="ui-section-count">{{courses|length}} 堂</span></h2><div class="course-library-grid">
   {% for c in courses %}<article class="course-step"><div class="record-head"><div><strong>{{c.title}}</strong><p>{{c.subject_name}} / {{c.concept_name}} · {{c.estimated_minutes}} 分鐘</p></div><span class="pill">{{'完成' if c.status=='completed' else '進行中'}}</span></div><p>{{c.reason}}</p><a class="secondary-button" href="{{url_for('personal_ai.micro_course',course_id=c.id)}}">{{'查看課程' if c.status=='completed' else '繼續課程'}}</a></article>{% else %}<p>尚未建立微課程。</p>{% endfor %}</div>
 </section>
 <details class="resource-upload"><summary>依學習概念建立補強課程</summary><section class="panel-card"><h2>依弱項生成一堂課</h2>

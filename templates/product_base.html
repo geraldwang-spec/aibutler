@@ -2,9 +2,11 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>{{ title }}｜考試智伴</title>
-  {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign','question-workspace','product'] %}<link rel="stylesheet" href="{{ url_for('static',filename='css/'+name+'.css',v='workspace-2') }}">{% endfor %}
-  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='decor-1')}}">
+  <title>{{ title }}｜考試智伴</title><script src="{{url_for('static',filename='js/workspace-theme.js',v='1')}}"></script>
+  {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign','question-workspace','product'] %}<link rel="stylesheet" href="{{ url_for('static',filename='css/'+name+'.css',v='palette-4') }}">{% endfor %}
+  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='palette-4')}}">
+  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-order.css',v='status-5')}}">
+<link rel="stylesheet" href="{{url_for('static',filename='css/workspace-legacy-palette.css',v='2')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/workspace-theme.css',v='2')}}">
 </head>
 <body class="product-ui {{'workspace-host' if workspace_shell else ''}}" data-page="{{ request.endpoint }}">
 <a class="skip-content" href="#workspace-content">跳到主要內容</a>
@@ -27,8 +29,7 @@
       <span class="workspace-nav-label">學習資源</span>
       {{nav_item('personal_ai.knowledge','教材與講義','folder-open-o',endpoint=='personal_ai.knowledge')}}
       {{nav_item('personal_ai.micro_courses','我的課程','graduation-cap',endpoint.startswith('personal_ai.micro_course'))}}
-      {{nav_item('records','科目管理','book',endpoint=='records' and table=='subjects','subjects')}}
-      {{nav_item('records','章節管理','list',endpoint=='records' and table=='chapters','chapters')}}
+      {{nav_item('records','科目與章節','folder-open-o',endpoint=='records' and table in ['subjects','chapters'],'subjects')}}
       {{nav_item('records','固定題庫','list-alt',endpoint=='records' and table=='questions','questions')}}
       {{nav_item('imports','匯入工作區','upload',endpoint in ['imports','import_review'])}}
       {{nav_item('personal_ai.concepts','概念來源','sitemap',endpoint=='personal_ai.concepts')}}
@@ -53,6 +54,7 @@
       {{nav_item('records','運動動作庫','bolt',endpoint=='records' and table=='exercises','exercises')}}
       {{nav_item('profile','個人資料','user-o',endpoint=='profile')}}
     </nav>
+    <fieldset class="workspace-theme-picker"><legend>介面配色</legend><div class="workspace-theme-options" role="group" aria-label="配色模式"><button type="button" data-theme-mode="violet" aria-pressed="true"><span class="theme-swatch violet" aria-hidden="true"></span>紫藤</button><button type="button" data-theme-mode="apricot" aria-pressed="false"><span class="theme-swatch apricot" aria-hidden="true"></span>暖杏</button><button type="button" data-theme-mode="midnight" aria-pressed="false"><span class="theme-swatch midnight" aria-hidden="true"></span>夜幕</button></div><span id="workspace-theme-status" class="theme-screen-reader" role="status" aria-live="polite"></span></fieldset>
     <div class="workspace-account"><span class="account-avatar">{{(g.user.username if g.user else '訪')[:1]|upper}}</span><div><strong>{{g.user.username if g.user else '訪客'}}</strong><small>個人工作室</small></div>{% if g.user %}<form action="{{url_for('auth.logout')}}" method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="account-signout" title="登出帳號" aria-label="登出帳號"><i class="fa fa-sign-out" aria-hidden="true"></i></button></form>{% endif %}</div>
   </aside>
   <main id="workspace-content" tabindex="-1" class="workspace-main">
@@ -74,5 +76,6 @@
   </main>
 </div>
 <script src="{{url_for('static',filename='js/exam.js')}}"></script><script src="{{url_for('static',filename='js/live.js')}}"></script>
-{% if workspace_shell %}<script src="{{url_for('static',filename='js/workspace-navigation.js',v='workspace-2')}}"></script>{% endif %}
+<script src="{{url_for('static',filename='js/workspace-order.js',v='action-4')}}"></script>
+{% if workspace_shell %}<script src="{{url_for('static',filename='js/workspace-navigation.js',v='palette-4')}}"></script>{% endif %}
 </body></html>

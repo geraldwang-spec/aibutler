@@ -13,6 +13,7 @@ from flask import g, url_for
 
 active_job = contextvars.ContextVar('ai_job', default=None)
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='ai-job')
+_chat_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='chat-reply')
 _lock = threading.Lock()
 
 
@@ -47,6 +48,17 @@ def update(app,job_id,**values):
 
 def submit(app,user_id,kind,payload):
     from storage import read_only
+    from .data_safety import validate_user_text, redact_text
+    def protect_fields(data):
+        if not isinstance(data,dict): return data
+        result=dict(data)
+        for key,value in result.items():
+            if key in ('question','followup','focus') and isinstance(value,str):
+                validate_user_text(value)
+                result[key]=redact_text(value)
+            elif isinstance(value,dict): result[key]=protect_fields(value)
+        return result
+    payload=protect_fields(payload)
     if read_only(): raise ValueError('唯讀備援無法新增 AI 工作。')
     with _lock,ledger(app) as con:
         daily=con.execute('SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,COALESCE(SUM(calls),0) calls FROM jobs WHERE user_id=? AND created>?',(user_id,time.time()-86400)).fetchone()
@@ -58,8 +70,17 @@ def submit(app,user_id,kind,payload):
         now=time.time()
         con.execute('INSERT INTO jobs(id,user_id,kind,payload,status,created,updated) VALUES (?,?,?,?,?,?,?)',
                     (job_id,user_id,kind,json.dumps(payload,ensure_ascii=False),'queued',now,now))
-    _executor.submit(run,app,job_id,user_id)
+    (_chat_executor if kind=='chat' else _executor).submit(run,app,job_id,user_id)
     return job_id
+
+
+def latest_chat_job(app,user_id,chat_id):
+    with ledger(app) as con:
+        rows=con.execute("SELECT * FROM jobs WHERE user_id=? AND kind='chat' ORDER BY created DESC LIMIT 200",(user_id,)).fetchall()
+    for row in rows:
+        if json.loads(row['payload']).get('chat_id')==chat_id:
+            return dict(row)
+    return None
 
 
 def guard(reserve=0):
@@ -100,7 +121,7 @@ def run(app,job_id,user_id):
     from storage import db, read_only
     with app.app_context():
         row=read(app,job_id,user_id)
-        token=active_job.set(dict(app=app,id=job_id,user_id=user_id,deadline=time.monotonic()+600,
+        token=active_job.set(dict(app=app,id=job_id,user_id=user_id,deadline=time.monotonic()+(90 if row['kind']=='chat' else 600),
               max_calls=int(os.getenv('AI_JOB_MAX_CALLS','40')),max_tokens=int(os.getenv('AI_JOB_MAX_TOKENS','32000'))))
         try:
             if row['cancel']:
@@ -116,8 +137,10 @@ def run(app,job_id,user_id):
             pending=getattr(g,'import_pending_path',None)
             if pending: pending.unlink(missing_ok=True)
             latest=read(app,job_id,user_id)
-            update(app,job_id,status='cancelled' if latest['cancel'] else 'failed',error=str(exc)[:1000])
-            app.logger.exception('AI job %s failed',job_id)
+            from .data_safety import redact_text
+            import traceback
+            update(app,job_id,status='cancelled' if latest['cancel'] else 'failed',error=redact_text(str(exc))[:1000])
+            app.logger.error('AI job %s failed\n%s',job_id,redact_text(traceback.format_exc()))
         finally:
             active_job.reset(token)
 
@@ -167,8 +190,8 @@ def dispatch(app,user_id,kind,p):
         return dict(message=f'已補標 {count} 題概念',url='/ai/concepts?subject_id='+str(p['subject_id']))
     if kind=='chat':
         from .chat import generate_reply
-        generate_reply(user_id,**p)
-        return dict(message='回答已完成',url=f"/chat/{p['chat_id']}")
+        reply=generate_reply(user_id,**p)
+        return dict(message='回答已完成',url=f"/chat/{p['chat_id']}",**reply)
     raise ValueError('不支援的 AI 工作。')
 
 

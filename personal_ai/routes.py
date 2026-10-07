@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json, os, secrets, calendar as cal
 from pathlib import Path
-from flask import Blueprint,current_app,g,redirect,render_template,request,flash,url_for,abort
+from flask import Blueprint,current_app,g,redirect,render_template,request,flash,url_for,abort,jsonify
 from auth import login_required
 from storage import db, backend
 from .jobs import submit, read as read_job, update as update_job
@@ -39,6 +39,13 @@ def knowledge():
             root=Path(current_app.instance_path)/'personal_ai_uploads'/str(g.user['id']); root.mkdir(parents=True,exist_ok=True)
             safe=secrets.token_hex(8)+ext; path=root/safe; f.save(path)
             sections=parse_file(path); chunks=chunk_sections(sections)
+            from .data_safety import safe_source, redact_text
+            for chunk in chunks:
+                chunk['text']=safe_source(chunk['text'])
+                chunk['title']=redact_text(chunk['title'])
+            chunks=[chunk for chunk in chunks if chunk['text'].strip()]
+            if not chunks:
+                raise ValueError('教材沒有可用的安全文字內容，請確認檔案不是空白或僅含敏感資料／系統指令。')
             vectors=None; embedding_model=None
             embedder=get_embedder(current_app.config)
             if backend()=='postgresql' and embedder.enabled and embedder.provider != 'cpu' and chunks:
@@ -86,46 +93,31 @@ def ai_questions():
 @bp.post('/ai/questions/<int:draft_id>/approve')
 @login_required
 def approve_question(draft_id):
-    from storage import locked_sql
-    from .question_validation import validate
+    from storage import locked_sql, StorageIntegrityError
+    import sqlite3
+    from .draft_review import prepare, apply
+    action=request.form.get('action','approve')
+    if action not in ('approve','reject','save'): abort(400)
     db().execute('BEGIN IMMEDIATE')
     d=db().execute(locked_sql('SELECT * FROM ai_question_drafts WHERE id=? AND user_id=?'),(draft_id,g.user['id'])).fetchone()
-    if not d: abort(404)
-    if d['status']!='draft':
-        db().rollback()
-        return redirect(url_for('personal_ai.ai_questions'))
-    action=request.form.get('action','approve')
-    if action=='reject':
-        db().execute("UPDATE ai_question_drafts SET status='rejected' WHERE id=?",(draft_id,)); db().commit()
-        return redirect(url_for('personal_ai.ai_questions'))
+    if not d:
+        db().rollback(); abort(404)
     try:
-        data={k:request.form.get(k,d[k]) for k in ('q_type','content','answer_key','explanation','difficulty')}
-        options=json.loads(d['options_json'] or '{}')
-        options={k:request.form.get('option_'+k,options.get(k,'')) for k in 'ABCD'}
-        data,pairs=validate(data,options)
-        chapter_id=int(request.form.get('chapter_id') or d['chapter_id'] or 0)
-        if not db().execute('SELECT 1 FROM chapters WHERE id=? AND subject_id=?',(chapter_id,d['subject_id'])).fetchone():
-            raise ValueError('請指定此科目的章節。')
-        db().execute('UPDATE ai_question_drafts SET chapter_id=?,content=?,answer_key=?,explanation=?,options_json=?,difficulty=? WHERE id=?',
-                     (chapter_id,data['content'],data['answer_key'],data['explanation'],json.dumps(dict(pairs),ensure_ascii=False),data['difficulty'],draft_id))
-        if action=='save':
-            db().commit(); flash('草稿已修正。','success')
-            return redirect(url_for('personal_ai.ai_questions'))
-        qid=db().execute('INSERT INTO questions(chapter_id,q_type,content,answer_key,explanation,difficulty,source) VALUES (?,?,?,?,?,?,?)',
-             (chapter_id,data['q_type'],data['content'],data['answer_key'],data['explanation'],data['difficulty'],'rag_llm')).lastrowid
-        for n,(label,text) in enumerate(pairs,1):
-            db().execute('INSERT INTO question_options(question_id,option_label,option_text,order_no) VALUES (?,?,?,?)',(qid,label,text,n))
-        db().execute('INSERT INTO question_metadata(question_id,source_type,generation_model,evidence_chunk_ids,concepts_json,skill,is_verified) VALUES (?,?,?,?,?,?,1)',
-             (qid,'human_approved',d['model_name'],d['evidence_chunk_ids'],d['concepts_json'],d['skill']))
-        for name in json.loads(d['concepts_json'] or '[]'):
-            co=db().execute('SELECT id FROM concepts WHERE subject_id=? AND lower(name)=lower(?)',(d['subject_id'],str(name))).fetchone()
-            if co:
-                db().execute('INSERT INTO question_concepts(question_id,concept_id,weight) VALUES (?,?,1)',(qid,co['id']))
-        db().execute("UPDATE ai_question_drafts SET status='approved',approved_question_id=? WHERE id=?",(qid,draft_id)); db().commit()
-        flash('已加入正式題庫並建立概念關聯。','success')
-    except (ValueError,TypeError) as exc:
-        db().rollback(); flash(str(exc),'error')
+        if d['status']=='draft':
+            apply(d,action,None if action=='reject' else prepare(d,request.form,g.user['id']))
+            db().commit()
+            flash({'save':'草稿已修正。','approve':'已加入正式題庫並建立概念關聯。','reject':'草稿已退回。'}[action],'success')
+        else: db().rollback()
+    except (ValueError,TypeError,sqlite3.IntegrityError,StorageIntegrityError) as exc:
+        db().rollback(); flash(str(exc) if isinstance(exc,(ValueError,TypeError)) else '題庫資料有衝突，尚未寫入，請重新整理後再試。','error')
     return redirect(url_for('personal_ai.ai_questions'))
+
+
+@bp.post('/ai/questions/batch')
+@login_required
+def bulk_questions():
+    from .draft_batch import bulk_questions as review_batch
+    return review_batch()
 
 
 @bp.get('/ai/concepts')
@@ -310,9 +302,6 @@ def adaptive_planner():
     try:
         if month_arg:
             year,month=map(int,month_arg.split('-',1)); month_anchor=date(year,month,1)
-        elif current:
-            start=date.fromisoformat(str(current['created_at'])[:10]) if current['created_at'] else today_obj
-            month_anchor=date(today_obj.year,today_obj.month,1) if str(current['exam_date'])[:10] >= today_obj.isoformat() else date(start.year,start.month,1)
         else:
             month_anchor=date(today_obj.year,today_obj.month,1)
     except Exception:
@@ -323,7 +312,7 @@ def adaptive_planner():
     for t in tasks:
         by_date.setdefault(str(t['task_date'])[:10],[]).append(t)
     weeks=[]
-    for week in cal.Calendar(firstweekday=6).monthdatescalendar(month_anchor.year,month_anchor.month):
+    for week in cal.Calendar(firstweekday=0).monthdatescalendar(month_anchor.year,month_anchor.month):
         cells=[]
         for d in week:
             cells.append({'date':d.isoformat(),'day':d.day,'in_month':d.month==month_anchor.month,
@@ -435,15 +424,19 @@ def micro_course(course_id):
 def job_page(job_id):
     job=read_job(current_app,job_id,g.user['id'])
     if not job: abort(404)
+    from .data_safety import redact_text
+    job['error']=redact_text(job.get('error'))
     return render_template('ai_job.html',title='AI 工作',job=job,result=json.loads(job['result']) if job['result'] else None)
 
 @bp.get('/ai/jobs/<job_id>/status')
 @login_required
 def job_status(job_id):
-    from flask import jsonify
     job=read_job(current_app,job_id,g.user['id'])
-    if not job: abort(404)
-    return jsonify({k:job[k] for k in ('status','calls','input_tokens','output_tokens','error')},result=json.loads(job['result']) if job['result'] else None)
+    if not job: return jsonify(error='找不到這個工作，或您沒有存取權限。'),404
+    payload={k:job[k] for k in ('status','calls','input_tokens','output_tokens','error')}
+    payload['result']=json.loads(job['result']) if job['result'] else None
+    from .data_safety import sanitize
+    return jsonify(sanitize(payload))
 
 @bp.post('/ai/jobs/<job_id>/cancel')
 @login_required
@@ -458,15 +451,32 @@ def job_cancel(job_id):
 @login_required
 def chat_index():
     chats=db().execute('SELECT * FROM chat_sessions WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall()
-    return render_template('chat.html',title='AI 對話',chats=chats,chat=None,subjects=_subjects())
+    return render_template('chat.html',title='AI 對話',chats=chats,chat=None,messages=[],subjects=_subjects(),pending_job=None,chat_error=None)
 
 @bp.post('/chat/new')
 @login_required
 def chat_new():
-    title=(request.form.get('title') or '').strip()
-    if not title or len(title)>120: abort(400,'對話主題需為 1–120 字。')
-    cid=db().execute('INSERT INTO chat_sessions(user_id,title) VALUES (?,?)',(g.user['id'],title)).lastrowid; db().commit()
-    return redirect(url_for('personal_ai.chat_page',chat_id=cid))
+    from .chat import validate_question
+    ajax=request.headers.get('X-Requested-With')=='XMLHttpRequest'
+    cid=None
+    try:
+        question=validate_question(g.user['id'],request.form.get('question',''),request.form.get('subject_id',type=int))
+        cid=db().execute('INSERT INTO chat_sessions(user_id,title) VALUES (?,?)',(g.user['id'],'新對話')).lastrowid
+        db().commit()
+        job_id=submit(current_app._get_current_object(),g.user['id'],'chat',dict(chat_id=cid,question=question,subject_id=request.form.get('subject_id',type=int)))
+        if ajax:
+            return jsonify(chat_id=cid,chat_url=url_for('personal_ai.chat_page',chat_id=cid),
+                           status_url=url_for('personal_ai.job_status',job_id=job_id)),202
+        return redirect(url_for('personal_ai.chat_page',chat_id=cid))
+    except ValueError as exc:
+        db().rollback()
+        # No submitted job means the placeholder session has no content to keep.
+        if cid:
+            db().execute('DELETE FROM chat_sessions WHERE id=? AND user_id=?',(cid,g.user['id']))
+            db().commit()
+        if ajax: return jsonify(error=str(exc)),400
+        flash(str(exc),'error')
+        return redirect(url_for('personal_ai.chat_index'))
 
 @bp.route('/chat/<int:chat_id>',methods=['GET','POST'])
 @login_required
@@ -475,12 +485,25 @@ def chat_page(chat_id):
     if not chat: abort(404)
     if request.method=='POST':
         try:
-            job_id=submit(current_app._get_current_object(),g.user['id'],'chat',dict(chat_id=chat_id,question=request.form.get('question',''),subject_id=request.form.get('subject_id',type=int)))
-            return redirect(url_for('personal_ai.job_page',job_id=job_id))
-        except ValueError as exc: flash(str(exc),'error')
+            from .chat import validate_question
+            question=validate_question(g.user['id'],request.form.get('question',''),request.form.get('subject_id',type=int))
+            job_id=submit(current_app._get_current_object(),g.user['id'],'chat',dict(chat_id=chat_id,question=question,subject_id=request.form.get('subject_id',type=int)))
+            if request.headers.get('X-Requested-With')=='XMLHttpRequest':
+                return jsonify(chat_id=chat_id,chat_url=url_for('personal_ai.chat_page',chat_id=chat_id),
+                               status_url=url_for('personal_ai.job_status',job_id=job_id)),202
+            return redirect(url_for('personal_ai.chat_page',chat_id=chat_id))
+        except ValueError as exc:
+            if request.headers.get('X-Requested-With')=='XMLHttpRequest': return jsonify(error=str(exc)),400
+            flash(str(exc),'error')
     chats=db().execute('SELECT * FROM chat_sessions WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall()
     messages=db().execute('SELECT * FROM chat_messages WHERE chat_id=? ORDER BY id',(chat_id,)).fetchall()
-    return render_template('chat.html',title=chat['title'],chat=chat,chats=chats,messages=messages,subjects=_subjects())
+    from .jobs import latest_chat_job
+    latest=latest_chat_job(current_app,g.user['id'],chat_id)
+    pending=url_for('personal_ai.job_status',job_id=latest['id']) if latest and latest['status'] in ('queued','running') else None
+    chat_error=latest['error'] if latest and latest['status'] in ('failed','cancelled') else None
+    last_payload=json.loads(latest['payload']) if latest else {}
+    return render_template('chat.html',title=chat['title'],chat=chat,chats=chats,messages=messages,subjects=_subjects(),pending_job=pending,chat_error=chat_error,
+                           selected_subject_id=last_payload.get('subject_id'),retry_question=last_payload.get('question') if chat_error else None)
 
 
 @bp.post('/ai/concepts/<int:concept_id>/change')
@@ -519,6 +542,14 @@ def classify_fixed_start():
 def planner_read(task_id):
     task=db().execute('SELECT * FROM learning_tasks WHERE id=? AND user_id=?',(task_id,g.user['id'])).fetchone()
     if not task:abort(404)
-    if not task['question_count']:
+    if task['task_type'] in ('休息','運動建議'):
+        if request.headers.get('X-Requested-With')=='XMLHttpRequest':
+            return jsonify(error='休息與可選活動不需要記錄已閱讀。'),400
+        return redirect(url_for('personal_ai.adaptive_planner',goal_id=task['goal_id']))
+    if not task['question_count'] and task['status'] not in ('done','read'):
         db().execute("UPDATE learning_tasks SET status='read',completed_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,));db().commit()
+    if request.headers.get('X-Requested-With')=='XMLHttpRequest':
+        if task['question_count']:
+            return jsonify(error='測驗任務必須由系統評分驗收。'),400
+        return jsonify(task_id=task_id,status='done' if task['status']=='done' else 'read',message='已記錄閱讀；正式進度由測驗驗收。')
     return redirect(url_for('personal_ai.adaptive_planner',goal_id=task['goal_id']))

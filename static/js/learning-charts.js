@@ -1,6 +1,6 @@
 (() => {
   const NS = 'http://www.w3.org/2000/svg';
-  const COLORS = {correct: '#7868df', wrong: '#f2ae82', muted: '#c7c1e5'};
+  const COLORS = {correct: 'var(--theme-accent-medium, #7868df)', wrong: 'var(--theme-amber-medium, #f2ae82)', muted: 'var(--theme-border, #c7c1e5)'};
   function element(tag, attrs = {}, content) {
     const node = document.createElementNS(NS, tag);
     for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, String(value));
@@ -27,8 +27,8 @@
     const circumference = 2 * Math.PI * radius;
     chart.append(element('circle', {cx:120,cy:120,r:radius,fill:'none',stroke:COLORS.wrong,'stroke-width':28}));
     if (correct) chart.append(element('circle', {cx:120,cy:120,r:radius,fill:'none',stroke:COLORS.correct,'stroke-width':28,'stroke-dasharray':`${rate*circumference} ${circumference}` ,transform:'rotate(-90 120 120)'}));
-    chart.append(element('text', {x:120,y:120,'text-anchor':'middle',fill:'#303349','font-size':30,'font-weight':650}, `${(rate * 100).toFixed(1)}%`));
-    chart.append(element('text', {x:120,y:144,'text-anchor':'middle',fill:'#858997','font-size':12}, '整體正確率'));
+    chart.append(element('text', {x:120,y:120,'text-anchor':'middle',fill:'var(--theme-ink, #303349)','font-size':30,'font-weight':650}, `${(rate * 100).toFixed(1)}%`));
+    chart.append(element('text', {x:120,y:144,'text-anchor':'middle',fill:'var(--theme-muted, #858997)','font-size':12}, '整體正確率'));
     container.replaceChildren(chart);
   }
   function bars(container, rows, kind) {
@@ -38,24 +38,24 @@
     const chart = svg(620, height, kind === 'chapters' ? '章節正確率長條圖，詳細數據見下方表格' : '最近測驗正確率長條圖，詳細數據見下方測驗紀錄');
     for (const rate of [0,25,50,75,100]) {
       const x = 205 + rate * 3.4;
-      chart.append(element('line', {x1:x,y1:30,x2:x,y2:height,stroke:'#ececf3'}));
-      chart.append(element('text', {x,y:18,'text-anchor':'middle',fill:'#9295a6','font-size':11}, `${rate}%`));
+      chart.append(element('line', {x1:x,y1:30,x2:x,y2:height,stroke:'var(--theme-border, #ececf3)'}));
+      chart.append(element('text', {x,y:18,'text-anchor':'middle',fill:'var(--theme-muted, #9295a6)','font-size':11}, `${rate}%`));
     }
     selected.forEach((row, index) => {
       const y = 45 + index * 60;
       const raw = kind === 'chapters' ? Number(row.accuracy) : (Number(row.correct_count) / Number(row.total_count) * 100 || 0);
       const rate = Math.max(0, Math.min(100, raw));
       const label = kind === 'chapters' ? row.chapter_name : `${row.subject_name} · #${row.id}`;
-      const text = element('text', {x:0,y:y+12,fill:'#535a71','font-size':12}, label.length > 16 ? label.slice(0,16)+'…' : label);
+      const text = element('text', {x:0,y:y+12,fill:'var(--theme-ink, #535a71)','font-size':12}, label.length > 16 ? label.slice(0,16)+'…' : label);
       text.append(element('title', {}, label));
       chart.append(text);
       const subtitle = kind === 'chapters' ? `${row.subject_name} · ${row.n} 次${row.insufficient ? ' · 資料不足' : ''}` : String(row.finished_at || '').slice(0,16);
-      chart.append(element('text', {x:0,y:y+29,fill:'#9295a6','font-size':10}, subtitle));
-      chart.append(element('rect', {x:205,y,width:340,height:22,rx:5,fill:'#f3f1fa'}));
+      chart.append(element('text', {x:0,y:y+29,fill:'var(--theme-muted, #9295a6)','font-size':10}, subtitle));
+      chart.append(element('rect', {x:205,y,width:340,height:22,rx:5,fill:'var(--theme-surface-alt, #f3f1fa)'}));
       const bar = element('rect', {x:205,y,width:rate*3.4,height:22,rx:5,fill:row.insufficient ? COLORS.muted : COLORS.correct});
       bar.append(element('title', {}, `${label}：${rate.toFixed(1)}%`));
       chart.append(bar);
-      chart.append(element('text', {x:555,y:y+16,fill:'#535a71','font-size':12}, `${rate.toFixed(1)}%`));
+      chart.append(element('text', {x:555,y:y+16,fill:'var(--theme-ink, #535a71)','font-size':12}, `${rate.toFixed(1)}%`));
     });
     container.replaceChildren(chart);
   }

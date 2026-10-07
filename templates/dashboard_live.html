@@ -1,10 +1,60 @@
 {% extends 'live_base.html' %}{% block content %}
 <section class="dashboard-intro"><div><p class="eyebrow">YOUR LEARNING OVERVIEW</p><h2>你好，{{ g.user.username }}。</h2><p>看看今天的安排，從一件小事開始。</p></div><img class="dashboard-decoration" src="{{url_for('static',filename='images/learning/study.svg')}}" width="176" height="118" alt="" aria-hidden="true"><a class="action" href="{{ url_for('records',table='study_plans') }}">＋ 新增計畫</a></section>
 <div class="stats">{% for label in ['我的科目','完成測驗','待複習錯題'] %}<article><span>{{ label }}</span><strong>{{ counts[loop.index0] }}</strong></article>{% endfor %}</div>
-<section class="panel-card schedule-card"><div class="section-heading"><div><p class="eyebrow">MY SCHEDULE</p><h2>學習與生活月曆</h2></div><div class="month-controls"><a class="outline-button" aria-label="上一個月" href="{{ url_for('dashboard',month=previous_month) }}">‹</a><strong>{{ calendar_month.year }} 年 {{ calendar_month.month }} 月</strong><a class="outline-button" aria-label="下一個月" href="{{ url_for('dashboard',month=next_month) }}">›</a><a class="outline-button" href="{{ url_for('dashboard') }}">本月</a></div></div>
-<div class="calendar-legend"><span class="study-dot">學習排程</span><span class="workout-dot">運動計畫</span><small>點選行程即可前往管理</small></div>
-<div class="home-calendar-scroll"><div class="home-calendar">{% for name in ['一','二','三','四','五','六','日'] %}<div class="home-weekday">{{ name }}</div>{% endfor %}{% for week in calendar_weeks %}{% for day in week %}<div class="home-day {% if day.month != calendar_month.month %}outside-month{% endif %} {% if day == calendar_today %}is-today{% endif %}"><span class="day-number">{{ day.day }}</span>{% if day == calendar_today %}<small class="today-label">今天</small>{% endif %}{% for event in calendar_events.get(day.isoformat(),[]) %}<a class="calendar-event {{ 'event-workout' if event.kind=='workout' else 'event-study' }} {% if event.status in ['done','completed'] %}event-done{% endif %}" href="{{ event.url }}" title="{{ event.title }}">{{ event.title }}</a>{% endfor %}</div>{% endfor %}{% endfor %}</div></div></section>
+<section class="panel-card schedule-card"><div class="section-heading"><div><p class="eyebrow">MY SCHEDULE</p><h2>學習與生活月曆</h2></div><div class="month-controls"><a class="outline-button" aria-label="上一個月" href="{{ url_for('dashboard',month=previous_month,goal_id=selected_goal) }}">‹</a><strong>{{ calendar_month.year }} 年 {{ calendar_month.month }} 月</strong><a class="outline-button" aria-label="下一個月" href="{{ url_for('dashboard',month=next_month,goal_id=selected_goal) }}">›</a><a class="outline-button" href="{{ url_for('dashboard',goal_id=selected_goal) }}">本月</a></div></div>
+<form method="get" action="{{url_for('dashboard')}}" class="calendar-scope-filter"><input type="hidden" name="month" value="{{calendar_month.strftime('%Y-%m')}}"><label>顯示範圍<select name="goal_id"><option value="">全部學習目標與手動安排</option>{% for goal_id,name in (schedule_goals|default({})).items() %}<option value="{{goal_id}}" {% if goal_id==selected_goal %}selected{% endif %}>{{name}}</option>{% endfor %}{% if selected_goal and selected_goal not in schedule_goals %}<option value="{{selected_goal}}" selected>指定目標（本月無安排）</option>{% endif %}</select></label><button type="submit" class="secondary-button">套用範圍</button></form>
+<p class="calendar-scope-note">{% if selected_goal %}讀書區只統計所選目標；運動安排仍保留。<a href="{{url_for('personal_ai.adaptive_planner',goal_id=selected_goal,month=calendar_month.strftime('%Y-%m'))}}">查看同一月份的學習計畫 ↗</a>{% else %}讀書區合計所有學習目標與手動讀書安排；可篩選單一目標與學習計畫對照。{% endif %}</p>
+<div class="calendar-legend"><span class="study-dot">學習排程</span><span class="rest-dot">休息／輕量</span><span class="workout-dot">運動／活動建議</span><small>點選安排查看細項</small></div>
+<div class="home-calendar-scroll"><div class="home-calendar">
+{% for name in ['一','二','三','四','五','六','日'] %}<div class="home-weekday">{{name}}</div>{% endfor %}
+{% for week in calendar_weeks %}{% for day in week %}
+<div class="home-day {% if day.month != calendar_month.month %}outside-month{% endif %} {% if day == calendar_today %}is-today{% endif %}">
+  <span class="day-number">{{day.day}}</span>{% if day == calendar_today %}<small class="today-label">今天</small>{% endif %}
+  {% set events=calendar_events.get(day.isoformat(),[]) %}
+  {% for kind,label in [('study','讀書安排'),('rest','休息與輕量'),('workout','運動安排')] %}
+    {% set items=events|selectattr('kind','equalto',kind)|list %}
+    {% if items %}
+    {% set completed=items|selectattr('status','in',['done','completed'])|list|length %}
+    {% set schedule=namespace(minutes=0,untimed=0) %}{% for item in items %}{% if item.minutes|default(0)>0 %}{% set schedule.minutes=schedule.minutes+item.minutes %}{% else %}{% set schedule.untimed=schedule.untimed+1 %}{% endif %}{% endfor %}
+    <article class="calendar-event calendar-summary event-{{kind}}">
+      <div class="calendar-summary-head"><span><i class="fa fa-{{'book' if kind=='study' else 'heartbeat'}}" aria-hidden="true"></i> {{label}}</span><span class="calendar-summary-count">{{items|length}} 項</span></div>
+      <p class="calendar-summary-time"><i class="fa fa-clock-o" aria-hidden="true"></i> {% if schedule.minutes>0 %}{{'%g'|format(schedule.minutes)}} 分鐘{% if schedule.untimed and kind!='rest' %}<small>另有 {{schedule.untimed}} 項未設時長</small>{% endif %}{% elif kind=='rest' %}留白休息，不需打卡{% else %}未設定時長{% endif %}</p>
+      <small class="calendar-summary-progress">{% if kind=='rest' %}依狀態選擇休息或輕量回顧{% else %}已完成 {{completed}} / {{items|length}}{% endif %}</small>
+      <button type="button" class="calendar-summary-open" data-calendar-details="calendar-{{day.isoformat()}}-{{kind}}" aria-haspopup="dialog" aria-controls="calendar-details" aria-label="{{day.month}} 月 {{day.day}} 日，{{label}}，{{items|length}} 項，查看安排">查看安排 <span aria-hidden="true">→</span></button>
+    </article>
+    <template id="calendar-{{day.isoformat()}}-{{kind}}">
+      <p class="eyebrow">{{day.year}} 年 {{day.month}} 月 {{day.day}} 日</p>
+      <h2 id="calendar-detail-heading">{{label}}</h2>
+      <p class="calendar-detail-description">{% if kind=='rest' %}依目前狀態選擇休息或短時間回顧，不需補進度。{% else %}共 {{items|length}} 項安排 · 已完成 {{completed}} 項。時間為預計所需時長。{% endif %}</p>
+      <div class="calendar-detail-list">
+      {% for event in items %}
+      <article class="calendar-detail-item detail-{{kind}}">
+        <div class="calendar-task-heading"><span class="calendar-task-category">{{event.task_type if event.source=='task' else ('手動讀書計畫' if kind=='study' else '運動計畫')}}</span><span class="calendar-task-status">{{'自由安排' if kind=='rest' else {'planned':'待完成','done':'已完成','completed':'已完成','read':'已閱讀','failed':'待重測','missed':'已逾期','pending':'待完成','in_progress':'進行中'}.get(event.status,event.status)}}</span></div>
+        {% if event.source=='task' %}<small class="calendar-task-goal">學習目標：{{event.goal_name}}</small>{% endif %}
+        <strong>{{event.title}}</strong>
+        <p class="calendar-task-time"><i class="fa fa-clock-o" aria-hidden="true"></i> {{event.duration_label|default('未設定時長')}}{% if event.source=='task' and event.question_count %} · {{event.question_count}} 題{% elif event.source=='plan' and not event.minutes and event.target_label %} · 目標 {{event.target_label}}{% endif %}</p>
+        {% if event.source=='plan' and event.minutes and event.time_source!='本項安排' %}<small>{{event.time_source}} {{event.duration_label}}</small>{% endif %}
+        {% if event.source=='task' %}<small>{{'可選建議，不需完成打卡。' if event.task_type in ['休息','運動建議'] else ('由系統測驗驗收，通過後更新進度。' if event.question_count else '記錄已閱讀不等於驗收通過。')}}</small>{% endif %}
+        <div class="calendar-task-actions">
+          <a class="calendar-task-manage" href="{{event.url}}">{{'查看學習計畫' if event.source=='task' else '管理安排'}} ↗</a>
+          {% if event.source=='task' and event.task_type not in ['休息','運動建議'] and event.status not in ['done','completed'] %}
+          {% if event.question_count %}<form method="post" action="{{url_for('personal_ai.adaptive_plan_checkpoint_start',task_id=event.task_id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="calendar-task-action" {% if database_read_only %}disabled{% endif %}>{{'重新挑戰' if event.status=='failed' else '開始系統測驗'}}</button></form>
+          {% elif event.status!='read' %}<form method="post" action="{{url_for('personal_ai.planner_read',task_id=event.task_id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button class="calendar-task-action" {% if database_read_only %}disabled{% endif %}>記錄已閱讀</button></form>{% endif %}
+          {% endif %}
+        </div>
+      </article>
+      {% endfor %}
+      </div>
+    </template>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endfor %}{% endfor %}
+</div></div></section>
+<dialog id="calendar-details" class="calendar-detail-dialog" aria-labelledby="calendar-detail-heading"><button type="button" class="calendar-detail-close secondary-button" aria-label="關閉行程細項">×</button><div class="calendar-detail-content"></div></dialog>
+<link rel="stylesheet" href="{{url_for('static',filename='css/calendar-summary.css',v='palette-4')}}">
+<script src="{{url_for('static',filename='js/calendar-summary.js')}}" defer></script>
 <div class="dashboard-bottom"><section class="panel-card today-card"><div class="section-heading"><div><p class="eyebrow">TODAY'S FOCUS</p><h2>今天要做的事</h2></div><span class="pill">{{ today_events|length }} 項安排</span></div>{% for event in today_events %}<a class="todo-row" href="{{ event.url }}"><span class="todo-icon {{ 'warm' if event.kind=='workout' else '' }}"><i class="fa fa-{{ 'heart-o' if event.kind=='workout' else 'book' }}" aria-hidden="true"></i></span><div><strong>{{ event.title }}</strong><small>{{ '運動計畫' if event.kind=='workout' else '學習任務' }} · {{ {'planned':'待完成','done':'已完成','completed':'已完成','missed':'已逾期'}.get(event.status,event.status) }}</small></div><span aria-hidden="true">↗</span></a>{% else %}<div class="quiet-empty"><i class="fa fa-calendar-check-o" aria-hidden="true"></i><h3>今天還沒有安排</h3><p>從一個小目標開始，讓學習與運動都有自己的節奏。</p><a href="{{ url_for('records',table='study_plans') }}">安排今天的計畫 →</a></div>{% endfor %}</section>
 <section class="quick-section"><p class="eyebrow">PICK UP WHERE YOU LEFT OFF</p><h2>你的學習工具箱</h2><div class="quick-grid">{% for endpoint,icon,label,description in [('quiz_start','pencil-square-o','開始一場練習','從題庫抽題，累積每一次進步'),('personal_ai.micro_courses','graduation-cap','繼續微課程','用短課程補齊還不熟悉的觀念'),('personal_ai.adaptive_planner','calendar','安排學習路線','讓目標變成每天可完成的小步驟'),('body.index','heartbeat','記錄運動與健康','照顧狀態，也照顧學習的續航力')] %}<a class="quick-card" href="{{ url_for(endpoint) }}"><span class="todo-icon"><i class="fa fa-{{ icon }}" aria-hidden="true"></i></span><span class="quick-arrow" aria-hidden="true">↗</span><h3>{{ label }}</h3><p>{{ description }}</p></a>{% endfor %}</div></section></div>
-<section class="panel-card"><div class="section-heading"><div><p class="eyebrow">YOUR PROGRESS</p><h2>每日學習與訓練紀錄</h2></div><a href="{{ url_for('results') }}">查看測驗成果 ↗</a></div><div class="table-scroll"><table><thead><tr><th>日期</th><th>作答題數</th><th>正確率</th><th>訓練量 kg×次</th></tr></thead><tbody>{% for row in daily %}<tr><td>{{ row.summary_date }}</td><td>{{ row.answered_count }}</td><td>{{ row.accuracy }}%</td><td>{{ row.workout_volume }}</td></tr>{% else %}<tr><td colspan="4" class="empty-cell">完成一場練習或記錄訓練後，你的進步會顯示在這裡。</td></tr>{% endfor %}</tbody></table></div></section>
+<details class="resource-upload"><summary>查看每日學習與訓練統計紀錄</summary><section class="panel-card"><div class="section-heading"><div><p class="eyebrow">YOUR PROGRESS</p><h2>每日學習與訓練紀錄</h2></div><a href="{{ url_for('results') }}">查看測驗成果 ↗</a></div><div class="table-scroll"><table><thead><tr><th>日期</th><th>作答題數</th><th>正確率</th><th>訓練量 kg×次</th></tr></thead><tbody>{% for row in daily %}<tr><td>{{ row.summary_date }}</td><td>{{ row.answered_count }}</td><td>{{ row.accuracy }}%</td><td>{{ row.workout_volume }}</td></tr>{% else %}<tr><td colspan="4" class="empty-cell">完成一場練習或記錄訓練後，你的進步會顯示在這裡。</td></tr>{% endfor %}</tbody></table></div></section></details>
 {% endblock %}

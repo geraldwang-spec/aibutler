@@ -21,7 +21,7 @@
     for (const link of links) {
       const target = new URL(link.href);
       const bodyMatch = path(target) === '/body' && path(url) === '/body';
-      const samePath = path(target) === path(url);
+      const samePath = path(target) === path(url) || (path(target) === '/records/subjects' && path(url) === '/records/chapters');
       const childPath = target.pathname !== '/' && url.pathname.startsWith(target.pathname + '/');
       const score = bodyMatch
         ? ((target.searchParams.get('tab') || 'train') === (url.searchParams.get('tab') || 'train') ? 1000 : -1)

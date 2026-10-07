@@ -3,8 +3,9 @@
 {% set chart_kind='chapters' %}{% set chart_rows=rows %}{% set chart_note='每章僅採最近 '+recent_limit|string+' 次已完成測驗的實際作答；圓餅圖為這些樣本合計，並非全部歷史作答。' %}
 {% include '_learning_charts.html' %}
 <section class="panel-card">
-  <h2>章節弱項分析</h2>
-  <p>每個章節最多採最近 {{ recent_limit }} 次實際作答，依正確率由低到高排序；少於 {{ minimum_sample }} 次會標示「資料不足」，避免把單一失誤直接解讀成穩定弱項。</p>
+  <h2>章節弱項分析 <span class="ui-section-count">{{rows|length}} 個章節</span></h2>
+  <p class="note">從需要複習的章節開始，作答樣本不足時會另外標示。</p>
+  <details class="ui-disclosure"><summary>分析範圍與判讀方式</summary><div class="ui-disclosure-body"><p>每個章節最多採最近 {{ recent_limit }} 次實際作答，依正確率由低到高排序；少於 {{ minimum_sample }} 次會標示「資料不足」，避免把單一失誤直接解讀成穩定弱項。</p></div></details>
   <div class="table-scroll">
     <table>
       <thead><tr><th>科目</th><th>章節</th><th>最近作答</th><th>答對</th><th>答錯</th><th>正確率</th><th>判讀</th></tr></thead>
