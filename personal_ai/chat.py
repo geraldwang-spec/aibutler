@@ -3,7 +3,7 @@ from flask import current_app
 from storage import db
 from .llm_provider import get_tutor_llm
 from .prompt_budget import bounded_json
-from .response_style import STYLE, scope_reply
+from .response_style import STYLE, interaction_reply
 
 
 def validate_question(user_id,question,subject_id=None):
@@ -43,12 +43,16 @@ def generate_reply(user_id,chat_id,question,subject_id=None):
     db().commit()
     evidence=''
     chunks=[]
-    if subject_id:
+    interaction=interaction_reply(question,subject_mode=bool(subject_id),history=history)
+    if subject_id and not interaction:
         from .rag import retrieve
         chunks=retrieve(user_id,subject_id,question,limit=3,require_relevance=True)
         evidence='\n\n'.join(f"[教材片段 {row['id']}] {row['material_title']} · {row['section_title'] or ''}\n{row['content']}" for row in chunks)
-    if subject_id and not chunks:
-        response={'answer':scope_reply(question),
+    if interaction:
+        response={'answer':interaction,'title':initial_title(question)}
+    elif subject_id and not chunks:
+        from .conversation_fallback import respond
+        response={'answer':respond(question,history),
                   'title':initial_title(question)}
     else:
         model=get_tutor_llm(current_app.config)
@@ -68,7 +72,8 @@ def generate_reply(user_id,chat_id,question,subject_id=None):
             citations=response.get('evidence_chunk_ids')
             allowed={int(chunk['id']) for chunk in chunks}
             if response.get('supported') is not True or not isinstance(citations,list) or not citations or any(type(cid) is not int or cid not in allowed for cid in citations):
-                response['answer']=scope_reply(question)
+                from .conversation_fallback import respond
+                response['answer']=respond(question,history,allow_llm=False)
             else:
                 used=set(citations)
                 sources='；'.join(f"{chunk['material_title']}（{chunk['source_locator']}，片段 {chunk['id']}）" for chunk in chunks if int(chunk['id']) in used)

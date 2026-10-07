@@ -10,7 +10,7 @@ from .llm_provider import LLMError, get_course_llm, get_tutor_llm, model_usage_l
 from .rag import retrieve
 from .prompt_budget import bounded_json
 from .data_safety import safe_source, validate_user_text, redact_text
-from .response_style import STYLE, scope_reply
+from .response_style import STYLE
 
 
 def _concept_row(user_id: int, concept_id: int):
@@ -369,8 +369,9 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
     )
 
     if not supported:
-        answer=scope_reply(question,context='這堂課和教材',in_chat=False)
-        model_name='教材範圍檢查（未呼叫模型）'
+        from .conversation_fallback import respond
+        answer=respond(question,course['messages'],context='這堂課和教材',in_chat=False)
+        model_name='教材範圍外互動回覆'
     elif not model.enabled or getattr(model, "provider", "") == "mock":
         answer = (
             "DEV 模式：這裡已接好微課程互動 Tutor。啟用真 Qwen 後，會只依本課 Concept、課程內容與 RAG 教材回答你的追問。"

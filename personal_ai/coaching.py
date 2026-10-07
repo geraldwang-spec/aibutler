@@ -11,7 +11,7 @@ from .llm_provider import model_usage_label, get_llm, LLMError
 from .rag import retrieve
 from .prompt_budget import bounded_json
 from .schedule_rhythm import RecoveryRhythm
-from .response_style import STYLE, scope_reply
+from .response_style import STYLE
 
 RECENT_CONCEPT_LIMIT = 20
 MIN_CONCEPT_SAMPLE = 3
@@ -236,8 +236,9 @@ def answer_wrong_question(user_id: int, question_id: int, followup: str = ""):
     context_text=' '.join([safe_source(q['content']),safe_source(q.get('explanation'))]+concept_names+[c['content'] for c in chunks])
     clarification=followup.strip('？?。!！ ') in {'為什麼','為甚麼','為什麼錯','再解釋一次','可以舉例嗎','看不懂','請解釋','請舉例'}
     if followup and not clarification and not related(followup,context_text):
-        answer=scope_reply(followup,context='這筆錯題和教材',in_chat=False)
-        mode='教材範圍檢查（未呼叫模型）'
+        from .conversation_fallback import respond
+        answer=respond(followup,tutor_history(user_id,question_id),context='這筆錯題和教材',in_chat=False)
+        mode='教材範圍外互動回覆'
     elif not llm.enabled or getattr(llm, "provider", "") == "mock":
         pieces = []
         if q.get("explanation"):
