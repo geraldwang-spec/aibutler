@@ -557,6 +557,25 @@ def register_learning(app):
         writer.writerow(['範例章節','單選','下列何者是關聯式資料庫？','A','SQLite 是關聯式資料庫。',1,'SQLite','HTML','',''])
         return Response('\ufeff'+output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=questions-template.csv'})
 
+    @app.post('/imports/subjects')
+    @login_required
+    def import_create_subject():
+        try:
+            # Same validation and ownership as the subject management screen.
+            data=parse_fields(CATALOG['subjects'][2])
+            db().execute(locked_sql('SELECT id FROM users WHERE id=?'),(g.user['id'],)).fetchone()
+            existing=db().execute('SELECT id,subject_name FROM subjects WHERE created_by=? AND LOWER(TRIM(subject_name))=LOWER(?)',
+                                  (g.user['id'],data['subject_name'])).fetchone()
+            if existing:
+                db().commit()
+                return jsonify(ok=True,created=False,subject=dict(existing),message='已有同名科目，已選取現有科目。')
+            sid=insert('subjects',dict(data,created_by=g.user['id']))
+            db().commit()
+            return jsonify(ok=True,created=True,subject=dict(id=sid,subject_name=data['subject_name']),message='科目已建立，可直接繼續匯入。'),201
+        except (ValueError,sqlite3.IntegrityError,StorageIntegrityError) as exc:
+            db().rollback()
+            return jsonify(ok=False,message=str(exc) if isinstance(exc,ValueError) else '無法建立科目，請重新檢查名稱。'),400
+
     @app.route('/imports',methods=['GET','POST'])
     @login_required
     def imports():
@@ -748,8 +767,6 @@ def process_import_file(app,form,upload):
                     for line in iterator:
                         if any(v is not None for v in line):
                             rows.append(dict(zip(keys,line)))
-                        if len(rows)>500:
-                            raise ValueError('每批最多 500 題。')
                     parser_name='結構化 Excel'
         finally:
             book.close()
@@ -764,10 +781,8 @@ def process_import_file(app,form,upload):
     if rows is None:
         rows,parser_name=extract_questions(path,default_chapter,app.config,parse_mode)
 
-    if not 1<=len(rows)<=500:
-        if not rows:
-            raise ValueError('沒有判讀到可匯入的完整考題。若是 PDF，可能是掃描檔或文字層編碼異常；請先 OCR 為可讀文字，或改用 CSV／文字題庫。')
-        raise ValueError('每批需為 1–500 題。')
+    if not rows:
+        raise ValueError('沒有判讀到可匯入的完整考題。若是 PDF，可能是掃描檔或文字層編碼異常；請先 OCR 為可讀文字，或改用 CSV／文字題庫。')
 
     clean=[]
     for i,row in enumerate(rows,1):
@@ -787,6 +802,8 @@ def process_import_file(app,form,upload):
         if not 1<=item['difficulty']<=5:
             item['difficulty']=2
         item,_=validate_question(item,item)
+        if row.get('_question_no') is not None:
+            item['_question_no']=row['_question_no']
         if row.get('_answer_source')=='ai_inferred':
             item['_answer_source']='ai_inferred'
             item['_answer_model']=str(row.get('_answer_model') or '')[:120]
@@ -796,8 +813,11 @@ def process_import_file(app,form,upload):
     if import_strategy not in {'concept','question_bank'}:
         import_strategy='concept'
     classifier_name='未使用'
+    from personal_ai import import_checkpoints as checkpoints
+    checkpoints.put('total',len(clean))
+    checkpoints.put('questions',clean)
+    checkpoints.put('stage','題目與答案已完成，準備概念分類' if import_strategy=='concept' else '準備建立匯入預覽')
     if import_strategy=='concept':
-        if len(clean)>20: raise ValueError('概念型 AI 匯入每批最多 20 題；固定題庫規則解析仍可 500 題。')
         from personal_ai.concept_classifier import classify_question_batch, attach_classifications
         classifications,classifier_name=classify_question_batch(clean,subject_id,app.config)
         clean=attach_classifications(clean,classifications,'concept')
@@ -813,5 +833,8 @@ def process_import_file(app,form,upload):
     for item in clean:
         encoded=json.dumps(item,ensure_ascii=False)
         insert('import_items',dict(import_id=batch,raw_content=encoded,parsed_json=encoded))
+    checkpoints.put('final_batch_id',batch)
     db().commit()
+    checkpoints.put('questions',clean)
+    checkpoints.put('stage','完整預覽已建立')
     return batch

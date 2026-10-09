@@ -6,6 +6,75 @@
   var numbers = document.getElementById('editor-lines');
   var format = document.getElementById('editor-format');
   var file = form.querySelector('input[type=file]');
+  var subject = document.getElementById('import-subject');
+  var createSubject = document.getElementById('import-create-subject');
+  var newSubject = document.getElementById('import-new-subject');
+  var subjectStatus = document.getElementById('import-subject-status');
+  var manageSubject = document.getElementById('import-manage-subject');
+  var creatingSubject = false;
+  function syncSubjectLink() {
+    if (!manageSubject) return;
+    var url = new URL(manageSubject.dataset.url, window.location.origin);
+    if (subject.value) url.searchParams.set('subject_id', subject.value);
+    manageSubject.href = url.pathname + url.search;
+  }
+  subject.addEventListener('change', syncSubjectLink);
+  syncSubjectLink();
+  form.addEventListener('submit', function (event) {
+    if (creatingSubject) {
+      event.preventDefault();
+      subjectStatus.textContent = '科目正在儲存，完成後即可匯入。';
+    }
+  });
+  createSubject.addEventListener('click', async function () {
+    if (creatingSubject) return;
+    var name = newSubject.value.trim();
+    if (!name || name.length > 80) {
+      subjectStatus.textContent = '請輸入 1–80 字的科目名稱。';
+      subjectStatus.setAttribute('role', 'alert');
+      newSubject.focus(); return;
+    }
+    creatingSubject = true;
+    createSubject.disabled = true;
+    newSubject.disabled = true;
+    subjectStatus.setAttribute('role', 'status');
+    subjectStatus.textContent = '正在建立科目…';
+    try {
+      var response = await fetch(createSubject.dataset.url, {
+        method: 'POST', credentials: 'same-origin', headers: {'Accept': 'application/json'},
+        body: new URLSearchParams({subject_name: name, csrf_token: form.querySelector('input[name=csrf_token]').value})
+      });
+      if (response.redirected) throw new Error('登入已過期，請另開登入頁重新登入，再回到這裡。');
+      if (!response.headers.get('Content-Type')?.includes('application/json')) {
+        throw new Error(response.status === 503 ? '目前資料庫暫時無法寫入，請稍後再試。' : '頁面或登入狀態已過期，請保留題目內容後重新整理。');
+      }
+      var result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.message || '無法建立科目，請稍後再試。');
+      var id = String(result.subject.id);
+      var option = Array.from(subject.options).find(function (item) { return item.value === id; });
+      if (!option) {
+        option = new Option(result.subject.subject_name, id);
+        subject.add(option);
+      }
+      subject.value = id;
+      subject.dispatchEvent(new Event('change', {bubbles: true}));
+      newSubject.value = '';
+      subjectStatus.textContent = result.message;
+    } catch (error) {
+      subjectStatus.setAttribute('role', 'alert');
+      subjectStatus.textContent = error.message || '連線失敗，請稍後再試。';
+    } finally {
+      creatingSubject = false;
+      createSubject.disabled = false;
+      newSubject.disabled = false;
+    }
+  });
+  newSubject.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (!createSubject.disabled) createSubject.click();
+    }
+  });
   function syncMode() {
     var textMode = form.querySelector('input[name=source_mode]:checked').value === 'text';
     document.getElementById('import-file-pane').hidden = textMode;

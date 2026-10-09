@@ -1,0 +1,9 @@
+{% extends 'live_base.html' %}{% block content %}
+<section class="panel-card"><h2>已保存的匯入结果</h2>
+<p>已完成 {{progress.completed}} / {{progress.total}} 題，剩餘 {{progress.remaining}} 題。階段：{{progress.stage}}</p>
+<p>這是中間成果，不代表整份題庫完成，也尚未寫入正式題庫。AI 推定答案仍需核對。</p>
+<a href="{{url_for('personal_ai.job_download',job_id=job.id)}}">下載 JSON</a> · <a href="{{url_for('personal_ai.job_download',job_id=job.id,format='csv')}}">下載 CSV</a> · <a href="{{url_for('personal_ai.job_page',job_id=job.id)}}">返回工作</a>
+{% if job.status in ['failed','cancelled'] %}<form method="post" action="{{url_for('personal_ai.job_resume',job_id=job.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>接續未完成部分</button></form>{% endif %}
+</section>
+{% for item in progress.questions %}<article class="panel-card"><h3>{{item.get('_question_no',loop.index)}}. {{item.q_type}}</h3><p class="prewrap">{{item.content}}</p>{% for label in 'ABCD' %}{% if item.get('option_'+label) %}<p>{{label}}. {{item.get('option_'+label)}}</p>{% endif %}{% endfor %}<p>答案：{{item.answer_key}}</p><p class="prewrap">{{item.explanation}}</p></article>{% else %}<p>尚未保存完整題目。已取得的有效模型回應可能仍可在接續時重用。</p>{% endfor %}
+{% endblock %}

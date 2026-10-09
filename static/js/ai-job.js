@@ -33,6 +33,10 @@
       retry.hidden = true;
       const pending = ['queued', 'running'].includes(job.status);
       if (cancel) cancel.hidden = !pending;
+      const resume = document.getElementById('job-resume-form');
+      if (resume) resume.hidden = !['failed', 'cancelled'].includes(job.status);
+      const progress = document.getElementById('job-progress');
+      if (progress && job.progress) progress.textContent = `已保存 ${job.progress.completed} / ${job.progress.total} 題 · ${job.progress.stage}`;
       if (job.result?.url) {
         const destination = new URL(job.result.url, location.href);
         if (destination.origin !== location.origin) throw new Error('成果連結格式不正確。');

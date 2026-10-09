@@ -4,13 +4,20 @@
 <form method="post" enctype="multipart/form-data" id="question-import-form">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <div class="import-workspace"><section class="panel-card import-settings"><p class="eyebrow">01 / IMPORT SETTINGS</p><h2>匯入設定</h2>
-<label>匯入科目<select name="subject_id" required><option value="">請選擇科目</option>{% for id,name in subjects %}<option value="{{ id }}" {% if request.form.get('subject_id')==id|string %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+<label>匯入科目<select name="subject_id" id="import-subject" required><option value="">請選擇科目</option>{% for id,name in subjects %}<option value="{{ id }}" {% if request.form.get('subject_id',request.args.get('subject_id',''))==id|string %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+<details id="import-subject-create" {% if not subjects %}open{% endif %}><summary>＋ 在這裡新增科目</summary>
+<label for="import-new-subject">新科目名稱<input id="import-new-subject" maxlength="80" autocomplete="off" placeholder="例如：國中英文"></label>
+<button type="button" class="outline-button" id="import-create-subject" data-url="{{url_for('import_create_subject')}}" {% if database_read_only %}disabled{% endif %}>建立並選取科目</button>
+<p class="setting-help" id="import-subject-status" role="status" aria-live="polite">新增後會自動選取，不會清除已選檔案或編輯中的題目。</p>
+</details>
+<p class="setting-help"><a href="{{url_for('records',table='subjects')}}" id="import-manage-subject" data-url="{{url_for('records',table='subjects')}}">管理科目與章節 ↗</a></p>
 <label>預設章節<input name="default_chapter" maxlength="120" value="{{ request.form.get('default_chapter','') }}" placeholder="例如：Python 入門"></label>
+<p class="setting-help">可直接輸入新章節名稱；確認匯入時會建立在所選科目下。科目會立即建立，章節與考題則在預覽確認後儲存。</p>
 <label>題庫類型<select name="import_strategy"><option value="question_bank" {% if request.form.get('import_strategy','question_bank')=='question_bank' %}selected{% endif %}>傳統固定型 · 保留原題</option><option value="concept" {% if request.form.get('import_strategy')=='concept' %}selected{% endif %}>概念型 · 歸類來源樣本</option></select></label>
 <p class="setting-help">固定型可立即隨機抽題；概念型保留考點與來源樣本，之後由模型重新設計題目。</p>
 <label>解析方式<select name="parse_mode">{% for value,label in [('rules','快速解析 · 不呼叫模型拆題'),('auto','自動解析 · 必要時使用模型'),('llm','AI 強化解析')] %}<option value="{{ value }}" {% if request.form.get('parse_mode','auto')==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
 <p class="setting-help">概念型匯入仍會進行模型分類；固定型搭配快速解析可完全不使用 AI。</p>
-<p class="setting-help">自動／AI 強化解析：缺少答案時由 AI 推定並標示為非官方，必須在預覽核對。圖片題可能將題目與頁面圖片傳送至設定的雲端模型（預設 Groq），會使用 API 額度；不希望傳送請選快速解析。概念型每批最多 20 題。</p>
+<p class="setting-help">自動／AI 強化解析：缺少答案時由 AI 推定並標示為非官方，必須在預覽核對。圖片題可能將題目與頁面圖片傳送至設定的雲端模型（預設 Groq），會使用 API 額度；不希望傳送請選快速解析。匯入不設總題數上限；Groq 概念分類仍會分小批處理。</p>
 <button class="action" type="submit">解析並預覽題目 →</button></section>
 <section class="panel-card import-editor"><p class="eyebrow">02 / QUESTION SOURCE</p><h2>題目編輯工作區</h2>
 <div class="editor-tabs" role="group" aria-label="題目來源"><label><input type="radio" name="source_mode" value="file" {% if request.form.get('source_mode','file')!='text' %}checked{% endif %}>檔案上傳</label><label><input type="radio" name="source_mode" value="text" {% if request.form.get('source_mode')=='text' %}checked{% endif %}>文字編輯</label></div>
@@ -20,5 +27,5 @@
 <div class="editor-status"><span id="editor-count">0 字元</span><span>UTF-8 · 先預覽，後匯入</span></div><p class="setting-help">每題以「1. 單選／多選／是非／填空」開始，選項用 A.、B.，並附上「答案：」與「解析：」。CSV 請使用下載範本的欄位。</p></div>
 </section></div></form>
 <details class="resource-upload"><summary>查看匯入紀錄 <span class="ui-section-count">{{batches|length}} 批</span></summary><section class="panel-card"><div class="section-heading"><div><p class="eyebrow">IMPORT HISTORY</p><h2>匯入批次</h2></div><span class="pill">{{ batches|length }} 批</span></div><div class="table-scroll"><table><thead><tr><th>文件</th><th>狀態</th><th>已匯入 / 題數</th><th>解析資訊</th><th>操作</th></tr></thead><tbody>{% for row in batches %}<tr><td>{{ row.file_name }}</td><td><span class="pill">{{ row.status }}</span></td><td>{{ row.imported_count }}/{{ row.total_rows }}</td><td>{{ row.error_log or '—' }}</td><td><a href="{{ url_for('import_review',batch=row.id) }}">查看預覽 ↗</a></td></tr>{% else %}<tr><td colspan="5" class="empty-cell">還沒有匯入紀錄。從第一份題庫開始吧。</td></tr>{% endfor %}</tbody></table></div></section></details>
-<script src="{{ url_for('static',filename='js/question-workspace.js') }}"></script>
+<script src="{{ url_for('static',filename='js/question-workspace.js',v='inline-subject-1') }}"></script>
 {% endblock %}

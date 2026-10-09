@@ -258,14 +258,14 @@ def _normalize_llm_item(item, default_chapter):
     return result
 
 
-def extract_with_llm(sections, default_chapter: str, config):
+def extract_with_llm(sections, default_chapter: str, config, allow_missing_answers=False):
     llm = get_parser_llm(config)
     if not llm.enabled or getattr(llm, 'provider', '') == 'mock':
         raise LLMError('目前沒有可用的真實 LLM 題庫解析器；DEV Mock 只測流程，不拿來判讀題庫。')
     source='\n'.join(section.get('text','') for section in sections)
     # Copy wording from source via bounded layout windows instead of asking the
     # model to reproduce long questions under an 800-token output ceiling.
-    return extract_layout(source, llm, default_chapter)
+    return extract_layout(source, llm, default_chapter, allow_missing_answers=allow_missing_answers)
 
 
 def extract_pdf_with_vision(path: Path, default_chapter: str, config):
@@ -310,12 +310,21 @@ def extract_pdf_with_vision(path: Path, default_chapter: str, config):
     return result
 
 def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
-    sections = parse_file(path, include_pdf_images=path.suffix.lower()=='.pdf' and mode!='rules')
+    from . import import_checkpoints as checkpoints
+    sections=checkpoints.get('source_sections')
+    if sections is None:
+        sections = parse_file(path, include_pdf_images=path.suffix.lower()=='.pdf' and mode!='rules')
+        checkpoints.put('source_sections',sections)
+    checkpoints.put('stage','文件文字／OCR 已完成')
     by_rules = extract_by_rules(sections, default_chapter)
     is_pdf = path.suffix.lower() == '.pdf'
 
     # Never accept a partial parse just because it passed a percentage threshold.
     joined = '\n'.join(sec.get('text', '') for sec in sections)
+    if re.search(r'(?im)^\s*(?:[（(]\s*[E-FＥ-Ｆ]\s*[）)]|[E-FＥ-Ｆ][.．、:：)])\s*\S', joined):
+        raise ValueError('偵測到 E／F 選項。目前題庫與評分只支援 A–D，請調整題型；不會捨棄額外選項。')
+    if re.search(r'(?m)^\s*(?:第.{1,8}題\s*)?[【\[]?(?:申論題|問答題|簡答題|配合題|連連看)', joined):
+        raise ValueError('偵測到申論／簡答／配合題，目前評分尚未支援，不會誤轉成填空題。')
     answer_count = len(_answer_key(joined)[0])
     rule_reliable = bool(by_rules)
     main = re.split(ANSWER_HEADING, joined, maxsplit=1)[0]
@@ -353,8 +362,11 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
     if mode == 'llm' and rule_reliable:
         return by_rules, 'AI 強化：原文格式完整，使用無損規則解析'
     if mode == 'llm':
-        items = extract_with_llm(sections, default_chapter, config)
+        items = extract_with_llm(sections, default_chapter, config, allow_missing_answers=True)
         if items:
+            if any(not x.get('answer_key') for x in items):
+                from .question_answering import infer_missing_answers
+                items = infer_missing_answers(items, sections, path, config)
             return items, 'LLM 文字強化解析'
 
         return [], 'LLM 文字強化解析'
@@ -362,8 +374,11 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
     if rule_reliable:
         return by_rules, '自動：快速規則解析'
     try:
-        items = extract_with_llm(sections, default_chapter, config)
+        items = extract_with_llm(sections, default_chapter, config, allow_missing_answers=True)
         if items:
+            if any(not x.get('answer_key') for x in items):
+                from .question_answering import infer_missing_answers
+                items = infer_missing_answers(items, sections, path, config)
             return items, '自動：LLM 文字強化解析'
     except LLMError:
         raise

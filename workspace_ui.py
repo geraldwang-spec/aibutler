@@ -5,7 +5,7 @@ from flask import g, render_template, request
 PAGE_ENDPOINTS = {
     'dashboard', 'profile', 'records', 'imports', 'import_review',
     'quiz_start', 'quiz_take', 'results', 'analysis', 'body.index',
-    'personal_ai.knowledge', 'personal_ai.ai_questions', 'personal_ai.concepts',
+    'personal_ai.knowledge', 'personal_ai.material_reader', 'personal_ai.ai_questions', 'personal_ai.concepts',
     'personal_ai.ai_status', 'personal_ai.wrong_tutor',
     'personal_ai.concept_weakness', 'personal_ai.adaptive_planner',
     'personal_ai.micro_courses', 'personal_ai.micro_course',

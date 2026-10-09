@@ -1,5 +1,19 @@
 (() => {
+ const collapsedBySubject = new Map();
  function initialize() {
+  const workspace = document.querySelector('.subject-workspace');
+  if (!workspace) return;
+  document.querySelectorAll('[data-open-details]').forEach(button => {
+    button.addEventListener('click', () => {
+      const panel = document.getElementById(button.dataset.openDetails);
+      if (!panel) return;
+      panel.open = true;
+      panel.querySelector('input:not([type="hidden"])')?.focus();
+    });
+  });
+  document.querySelectorAll('.directory-more').forEach(menu => menu.addEventListener('toggle', () => {
+    if (menu.open) document.querySelectorAll('.directory-more').forEach(other => { if (other !== menu) other.open = false; });
+  }));
   const folders = [...document.querySelectorAll('[data-subject-name]')];
   document.getElementById('subject-search')?.addEventListener('input', event => {
     const query = event.target.value.trim().toLocaleLowerCase();
@@ -14,7 +28,7 @@
   for (const chapter of chapters) {
     for (const link of chapter.querySelectorAll('a')) link.draggable = false;
     chapter.addEventListener('dragstart', event => {
-      if (event.target.closest('button, input, select, textarea')) { event.preventDefault(); return; }
+      if (event.target.closest('button, input, select, textarea, summary, a')) { event.preventDefault(); return; }
       dragged = chapter;
       event.dataTransfer.setData('application/x-study-chapter', chapter.dataset.chapterId);
       event.dataTransfer.effectAllowed = 'move';
@@ -75,18 +89,48 @@
       form.submit();
     });
   }
-  document.getElementById('chapter-search')?.addEventListener('input', event => {
-    const query = event.target.value.trim().toLocaleLowerCase();
+  const subjectKey = workspace.dataset.selectedSubject;
+  const collapsed = collapsedBySubject.get(subjectKey) || new Set();
+  collapsedBySubject.set(subjectKey, collapsed);
+  const search = document.getElementById('chapter-search');
+  const toggles = [...document.querySelectorAll('[data-collapse-chapter]')];
+  function updateTree() {
+    const query = (search?.value || '').trim().toLocaleLowerCase();
     const visible = new Set();
+    let matches = 0;
     for (const chapter of chapters) {
       if (chapter.dataset.chapterName.toLocaleLowerCase().includes(query)) {
+        matches++;
         visible.add(chapter.dataset.chapterId);
         for (const ancestor of chapter.dataset.ancestors.split(' ').filter(Boolean)) visible.add(ancestor);
       }
     }
-    for (const chapter of chapters) chapter.hidden = !visible.has(chapter.dataset.chapterId);
-    document.getElementById('chapter-search-empty').hidden = visible.size > 0;
+    for (const chapter of chapters) {
+      const folded = chapter.dataset.ancestors.split(' ').some(id => collapsed.has(id));
+      chapter.hidden = query ? !visible.has(chapter.dataset.chapterId) : folded;
+    }
+    for (const toggle of toggles) {
+      const open = Boolean(query) || !collapsed.has(toggle.dataset.collapseChapter);
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.textContent = open ? '▾' : '▸';
+      const name = toggle.closest('[data-chapter-id]').dataset.chapterName;
+      toggle.setAttribute('aria-label', (open ? '收合 ' : '展開 ') + name + ' 的子章節');
+    }
+    const empty = document.getElementById('chapter-search-empty');
+    if (empty) empty.hidden = !query || matches > 0;
+    const count = document.getElementById('chapter-result-count');
+    if (count) count.textContent = query ? `找到 ${matches} 個章節（保留上層位置）` : `${chapters.length} 個章節`;
+  }
+  search?.addEventListener('input', updateTree);
+  for (const toggle of toggles) toggle.addEventListener('click', () => {
+    if (search?.value.trim()) search.value = '';
+    const id = toggle.dataset.collapseChapter;
+    if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+    updateTree();
   });
+  document.getElementById('chapter-expand-all')?.addEventListener('click', () => { collapsed.clear(); if (search) search.value = ''; updateTree(); });
+  document.getElementById('chapter-collapse-all')?.addEventListener('click', () => { toggles.forEach(toggle => collapsed.add(toggle.dataset.collapseChapter)); if (search) search.value = ''; updateTree(); });
+  updateTree();
   // Parent options belong to the displayed subject; do not submit stale parents
   // when selecting a different destination subject for an empty chapter.
   const subject = document.getElementById('subject_id');
@@ -101,4 +145,7 @@
  }
  initialize();
  document.addEventListener('records-workspace-updated', initialize);
+ document.addEventListener('click', event => {
+  document.querySelectorAll('.directory-more[open]').forEach(menu => { if (!menu.contains(event.target)) menu.open = false; });
+ });
 })();

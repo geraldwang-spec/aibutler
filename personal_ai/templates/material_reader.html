@@ -1,0 +1,31 @@
+{% extends 'live_base.html' %}
+{% block content %}
+<link rel="stylesheet" href="{{url_for('static',filename='css/material-reader.css')}}">
+<div class="section-heading"><div><p class="resource-subject">{{material.subject_name}} · {{material.file_type|upper}}</p><h2>{{material.title}}</h2><p>閱讀教材與 AI 檢索分開保存，閱讀時不會呼叫模型。</p></div></div>
+<nav class="material-actions" aria-label="教材操作">
+  <a class="outline-button" href="{{url_for('personal_ai.knowledge')}}">返回教材書架</a>
+  {% if original_available %}<a class="outline-button" href="{{url_for('personal_ai.material_original',material_id=material.id,download=1)}}">下載原檔</a>{% endif %}
+  <a class="primary-button" href="{{url_for('personal_ai.chat_index',subject_id=material.subject_id)}}">詢問這個科目的教材</a>
+</nav>
+{% if not original_available %}<p class="material-notice">本機找不到原始檔案，可能上傳於另一台電腦或檔案已移動。下方仍可閱讀資料庫保留的知識片段；若要看原版面，請重新上傳原檔。</p>{% endif %}
+{% if pdf_available %}
+<section class="panel-card"><h3>PDF 原始教材</h3><p class="note">保留原本的頁面、圖表與公式。若瀏覽器無法顯示，請使用「下載原檔」。</p>
+  <iframe class="material-pdf" src="{{url_for('personal_ai.material_original',material_id=material.id)}}" title="{{material.title}} 原始 PDF"></iframe>
+</section>
+{% endif %}
+<section class="panel-card material-text-reader">
+  <h3>{{'解析文字' if reading_copy else '資料庫知識片段'}}</h3>
+  <p class="note">{% if reading_copy %}保留解析時的段落與換行；圖片、公式及排版請以原檔為準。{% else %}這是 RAG 檢索用的文字，不等於完整原檔；相鄰片段可能重複，換行或圖表可能缺失。{% endif %}</p>
+  {% if section %}
+  <form method="get" class="material-sections"><label for="material-section">{{'頁面／段落' if reading_copy else '片段'}}（{{selected}} / {{sections|length}}）</label>
+    <select id="material-section" name="section">{% for item in sections %}<option value="{{loop.index}}" {% if loop.index==selected %}selected{% endif %}>{{loop.index}} · {{item.title or item.locator or '教材內容'}}</option>{% endfor %}</select><button class="outline-button" type="submit">前往</button>
+  </form>
+  <h4>{{section.title or '教材內容'}} <small>{{section.locator or ''}}</small></h4>
+  <pre class="material-text">{{section.text}}</pre>
+  <nav class="material-actions" aria-label="段落翻頁">
+    {% if selected>1 %}<a class="outline-button" href="{{url_for('personal_ai.material_reader',material_id=material.id,section=selected-1)}}">上一段</a>{% endif %}
+    {% if selected<sections|length %}<a class="outline-button" href="{{url_for('personal_ai.material_reader',material_id=material.id,section=selected+1)}}">下一段</a>{% endif %}
+  </nav>
+  {% else %}<p>尚無可閱讀的解析文字。{% if original_available %}你仍可下載原檔閱讀。{% endif %}</p>{% endif %}
+</section>
+{% endblock %}

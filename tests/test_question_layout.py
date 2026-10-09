@@ -36,6 +36,66 @@ class LayoutModel:
 
 
 class QuestionLayoutTests(unittest.TestCase):
+    def test_layout_shrinks_on_truncation_without_losing_source(self):
+        class Limited(LayoutModel):
+            def complete_json(self,system,user):
+                payload=json.loads(user.split('\n回傳 ')[0])
+                if len(payload['fragments'])>2:
+                    raise LLMError('truncated',error_code='output_truncated')
+                return super().complete_json(system,user)
+        source='1. Choose.\nA. apple\nB. book\n答案：B\n解析：理由'
+        rows=extract_layout(source,Limited(),'測試')
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['option_B'],'book')
+        self.assertEqual(rows[0]['answer_key'],'B')
+
+    def test_layout_rejects_incomplete_runs_before_mutation(self):
+        class Repair(LayoutModel):
+            failed=False
+            def complete_json(self,system,user):
+                if not self.failed:
+                    self.failed=True
+                    return {'parts':[dict(s=0,e=0,field='content',new=True,type='單選')]}
+                return super().complete_json(system,user)
+        rows=extract_layout('1. Choose.\nA. apple\nB. book\n答案：B',Repair(),'測試')
+        self.assertEqual(rows[0]['content'],'Choose.')
+        self.assertEqual(len(rows),1)
+
+    def test_answer_aliases_and_numeric_choices(self):
+        from personal_ai.question_layout import split_fields,answer_text
+        options,stem,answer,_=split_fields('Choose.\n（一）apple\n（二）book\n解答：二')
+        self.assertEqual(options,{'A':'apple','B':'book'})
+        self.assertEqual(answer,'B')
+        self.assertEqual(answer_text('Correct Answer: ○'),'是')
+        self.assertEqual(answer_text('答案為：×'),'否')
+
+    def test_extra_options_are_not_silently_dropped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'book.txt'
+            path.write_text('1. Choose\nA. one\nB. two\nC. three\nD. four\nE. five\n答案：A',encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'E／F'):
+                extract_questions(path,'測試',{},'rules')
+
+    def test_inference_shrinks_truncated_batch(self):
+        from unittest.mock import patch
+        from personal_ai.question_answering import infer_missing_answers
+        class Solver:
+            enabled=True
+            provider='test'
+            model='test'
+            sizes=[]
+            def complete_json(self,s,u):
+                batch=json.loads(u.split('\n回傳 ')[0])
+                self.sizes.append(len(batch))
+                if len(batch)>1: raise LLMError('truncated',error_code='output_truncated')
+                return {'answers':[dict(number=batch[0]['number'],status='answered',answer='B',explanation='理由',context='')]}
+        model=Solver()
+        items=[dict(_question_no=i,content='乙',q_type='單選',answer_key='',option_A='a',option_B='b') for i in (1,2)]
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=model):
+            rows=infer_missing_answers(items,[],Path('book.txt'),{})
+        self.assertEqual(model.sizes,[2,1,1])
+        self.assertEqual([r['_question_no'] for r in rows],[1,2])
+
     def test_inferred_answers_do_not_replace_official_answers(self):
         from unittest.mock import patch
         from personal_ai.question_answering import infer_missing_answers

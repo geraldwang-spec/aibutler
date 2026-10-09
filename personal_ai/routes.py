@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json, os, secrets, calendar as cal
 from pathlib import Path
-from flask import Blueprint,current_app,g,redirect,render_template,request,flash,url_for,abort,jsonify
+from flask import Blueprint,current_app,g,redirect,render_template,request,flash,url_for,abort,jsonify,Response,send_file
 from auth import login_required
 from storage import db, backend
 from .jobs import submit, read as read_job, update as update_job
@@ -26,6 +26,7 @@ def knowledge():
     error=None
     if request.method=='POST':
         path=None
+        reader_path=None
         try:
             sid=int(request.form.get('subject_id','0')); _subject(sid)
             chapter_id=int(request.form.get('chapter_id','0') or 0) or None
@@ -39,6 +40,10 @@ def knowledge():
             root=Path(current_app.instance_path)/'personal_ai_uploads'/str(g.user['id']); root.mkdir(parents=True,exist_ok=True)
             safe=secrets.token_hex(8)+ext; path=root/safe; f.save(path)
             sections=parse_file(path); chunks=chunk_sections(sections)
+            # Keep a reading copy separate from sanitized/overlapping RAG chunks.
+            # It never enters the model prompt and retains paragraphs/newlines.
+            reader_path=path.with_suffix(path.suffix+'.reader.json')
+            reader_path.write_text(json.dumps(sections,ensure_ascii=False),encoding='utf-8')
             from .data_safety import safe_source, redact_text
             for chunk in chunks:
                 chunk['text']=safe_source(chunk['text'])
@@ -58,15 +63,89 @@ def knowledge():
                 if vectors is not None:
                     db().execute('UPDATE rag_chunks SET embedding=?::vector, embedding_model=? WHERE id=?',(vector_literal(vectors[i]),embedding_model,cid))
                 db().execute('INSERT INTO rag_chunk_meta(chunk_id,source_locator,section_title) VALUES (?,?,?)',(cid,c['locator'],c['title']))
-            db().commit(); mode='pgvector' if vectors is not None else '文字檢索 fallback'
+            db().commit(); mode='pgvector' if vectors is not None else ('CPU 語意排序＋科目內文字檢索' if embedder.provider=='cpu' else '文字檢索 fallback')
             flash(f'教材已解析：{len(sections)} 個區段、{len(chunks)} 個 chunks；檢索模式：{mode}。','success')
             return redirect(url_for('personal_ai.knowledge'))
         except Exception as exc:
             db().rollback(); error=str(exc)
             if path: path.unlink(missing_ok=True)
+            if reader_path: reader_path.unlink(missing_ok=True)
     mats=db().execute('''SELECT m.*,s.subject_name,(SELECT count(*) FROM rag_documents rd JOIN rag_chunks rc ON rc.doc_id=rd.id WHERE rd.material_id=m.id) chunk_count FROM materials m JOIN subjects s ON s.id=m.subject_id WHERE m.user_id=? ORDER BY m.id DESC''',(g.user['id'],)).fetchall()
     chapters=db().execute('''SELECT c.* FROM chapters c JOIN subjects s ON s.id=c.subject_id WHERE s.created_by=? ORDER BY c.subject_id,c.order_no,c.id''',(g.user['id'],)).fetchall()
     return render_template('knowledge.html',title='教材知識庫',subjects=_subjects(),chapters=chapters,materials=mats,error=error)
+
+
+def _owned_material(material_id):
+    material=db().execute('''SELECT m.*,s.subject_name FROM materials m
+        JOIN subjects s ON s.id=m.subject_id WHERE m.id=? AND m.user_id=? AND s.created_by=?''',
+        (material_id,g.user['id'],g.user['id'])).fetchone()
+    if not material: abort(404)
+    return material
+
+
+def _material_file(material):
+    """Only serve files inside this owner's private upload root (incl. symlinks)."""
+    if not material['file_path']: return None
+    root=(Path(current_app.instance_path)/'personal_ai_uploads'/str(g.user['id'])).resolve()
+    try:
+        path=Path(material['file_path']).resolve()
+        if path.is_relative_to(root) and path.is_file(): return path
+    except (OSError,ValueError):
+        pass
+    return None
+
+
+@bp.get('/knowledge/<int:material_id>')
+@login_required
+def material_reader(material_id):
+    material=_owned_material(material_id)
+    path=_material_file(material)
+    sections=[]
+    reading_copy=False
+    if path:
+        snapshot=path.with_suffix(path.suffix+'.reader.json').resolve()
+        root=(Path(current_app.instance_path)/'personal_ai_uploads'/str(g.user['id'])).resolve()
+        if snapshot.is_relative_to(root) and snapshot.is_file():
+            try:
+                sections=json.loads(snapshot.read_text(encoding='utf-8'))
+                if not isinstance(sections,list) or any(not isinstance(s,dict) or not isinstance(s.get('text'),str) for s in sections):
+                    sections=[]
+            except (ValueError,OSError):
+                sections=[]
+        elif path.suffix.lower() in {'.txt','.md','.csv','.docx','.xlsx','.xlsm'}:
+            try: sections=parse_file(path)
+            except (RuntimeError,ValueError,OSError): pass
+        reading_copy=bool(sections)
+    if not sections:
+        rows=db().execute('''SELECT rc.content,rm.source_locator,rm.section_title
+            FROM rag_documents rd JOIN rag_chunks rc ON rc.doc_id=rd.id
+            LEFT JOIN rag_chunk_meta rm ON rm.chunk_id=rc.id
+            WHERE rd.material_id=? ORDER BY rd.id,rc.chunk_index,rc.id''',(material_id,)).fetchall()
+        sections=[dict(text=r['content'],locator=r['source_locator'],title=r['section_title'] or f'知識片段 {i}') for i,r in enumerate(rows,1)]
+    try: selected=int(request.args.get('section','1'))
+    except ValueError: abort(400)
+    selected=max(1,min(selected,len(sections) or 1))
+    response=current_app.make_response(render_template('material_reader.html',title=material['title'],material=material,
+        original_available=bool(path),pdf_available=bool(path and path.suffix.lower()=='.pdf'),
+        reading_copy=reading_copy,sections=sections,selected=selected,
+        section=sections[selected-1] if sections else None))
+    response.headers['Cache-Control']='private, no-store'
+    return response
+
+
+@bp.get('/knowledge/<int:material_id>/file')
+@login_required
+def material_original(material_id):
+    material=_owned_material(material_id)
+    path=_material_file(material)
+    if not path: abort(404)
+    inline=path.suffix.lower()=='.pdf' and request.args.get('download')!='1'
+    response=send_file(path,as_attachment=not inline,download_name=Path(material['title']).name,
+        mimetype='application/pdf' if inline else 'application/octet-stream',max_age=0)
+    response.headers['Cache-Control']='private, no-store'
+    response.headers['X-Content-Type-Options']='nosniff'
+    response.headers['Content-Security-Policy']="frame-ancestors 'self'"
+    return response
 
 @bp.route('/ai/questions',methods=['GET','POST'])
 @login_required
@@ -427,7 +506,9 @@ def job_page(job_id):
     if not job: abort(404)
     from .data_safety import redact_text
     job['error']=redact_text(job.get('error'))
-    return render_template('ai_job.html',title='AI 工作',job=job,result=json.loads(job['result']) if job['result'] else None)
+    from .import_checkpoints import snapshot
+    progress=snapshot(current_app,job_id,g.user['id']) if job['kind']=='import' else None
+    return render_template('ai_job.html',title='AI 工作',job=job,result=json.loads(job['result']) if job['result'] else None,progress=progress)
 
 @bp.get('/ai/jobs/<job_id>/status')
 @login_required
@@ -436,6 +517,10 @@ def job_status(job_id):
     if not job: return jsonify(error='找不到這個工作，或您沒有存取權限。'),404
     payload={k:job[k] for k in ('status','calls','input_tokens','output_tokens','error')}
     payload['result']=json.loads(job['result']) if job['result'] else None
+    if job['kind']=='import':
+        from .import_checkpoints import snapshot
+        progress=snapshot(current_app,job_id,g.user['id'])
+        payload['progress']={k:v for k,v in progress.items() if k!='questions'}
     from .data_safety import sanitize
     return jsonify(sanitize(payload))
 
@@ -448,11 +533,67 @@ def job_cancel(job_id):
     return redirect(url_for('personal_ai.job_page',job_id=job_id))
 
 
+@bp.get('/ai/jobs/<job_id>/partial')
+@login_required
+def job_partial(job_id):
+    job=read_job(current_app,job_id,g.user['id'])
+    if not job or job['kind']!='import': abort(404)
+    from .import_checkpoints import snapshot
+    progress=snapshot(current_app,job_id,g.user['id'])
+    return render_template('import_partial.html',title='已保存的匯入結果',job=job,progress=progress)
+
+
+@bp.get('/ai/jobs/<job_id>/download')
+@login_required
+def job_download(job_id):
+    job=read_job(current_app,job_id,g.user['id'])
+    if not job or job['kind']!='import': abort(404)
+    from .import_checkpoints import snapshot
+    progress=snapshot(current_app,job_id,g.user['id'])
+    if request.args.get('format')=='csv':
+        import csv,io
+        out=io.StringIO()
+        fields=['chapter_name','q_type','content','option_A','option_B','option_C','option_D','answer_key','explanation','difficulty']
+        writer=csv.DictWriter(out,fieldnames=fields)
+        writer.writeheader()
+        for item in progress['questions']:
+            values={k:item.get(k,'') for k in fields}
+            for key,value in values.items():
+                if isinstance(value,str) and value.lstrip().startswith(('=','+','-','@')):
+                    values[key]="'"+value  # Prevent spreadsheet formula execution.
+            writer.writerow(values)
+        return Response('\ufeff'+out.getvalue(),mimetype='text/csv',headers={'Content-Disposition':f'attachment; filename="import-{job_id}.csv"','Cache-Control':'no-store'})
+    return Response(json.dumps(progress,ensure_ascii=False,indent=2),mimetype='application/json',
+                    headers={'Content-Disposition':f'attachment; filename="import-{job_id}.json"','Cache-Control':'no-store'})
+
+
+@bp.post('/ai/jobs/<job_id>/resume')
+@login_required
+def job_resume(job_id):
+    job=read_job(current_app,job_id,g.user['id'])
+    if not job or job['kind']!='import': abort(404)
+    try:
+        if job['status'] not in ('failed','cancelled'): raise ValueError('只能接續已失敗或取消的工作。')
+        payload=json.loads(job['payload'])
+        path=Path(payload['path']).resolve()
+        folder=(Path(current_app.instance_path)/'job_uploads').resolve()
+        if not path.is_relative_to(folder) or not path.is_file():
+            raise ValueError('原始上傳檔已不存在，無法接續；仍可下載已保存結果。')
+        payload['resume_from']=job_id
+        resumed=submit(current_app._get_current_object(),g.user['id'],'import',payload)
+        return redirect(url_for('personal_ai.job_page',job_id=resumed))
+    except (ValueError,RuntimeError) as exc:
+        flash(str(exc),'error')
+        return redirect(url_for('personal_ai.job_page',job_id=job_id))
+
+
 @bp.get('/chat')
 @login_required
 def chat_index():
     chats=db().execute('SELECT * FROM chat_sessions WHERE user_id=? ORDER BY id DESC',(g.user['id'],)).fetchall()
-    return render_template('chat.html',title='AI 對話',chats=chats,chat=None,messages=[],subjects=_subjects(),pending_job=None,chat_error=None)
+    subject_id=request.args.get('subject_id',type=int)
+    if subject_id: _subject(subject_id)
+    return render_template('chat.html',title='AI 對話',chats=chats,chat=None,messages=[],subjects=_subjects(),pending_job=None,chat_error=None,selected_subject_id=subject_id)
 
 @bp.post('/chat/new')
 @login_required

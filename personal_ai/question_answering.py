@@ -19,10 +19,9 @@ def _limited_request(call):
         except (ValueError,TypeError): raise exc
         if not 0<delay<=60: raise
         # At most one bounded retry, honoring provider Retry-After. Do not
-        # sleep through cancellation or the existing background-job deadline.
+        # sleep through cancellation. Background jobs have no total deadline.
         from .jobs import active_job, read
         job=active_job.get()
-        if job and time.monotonic()+delay+10>=job['deadline']: raise
         for _ in range(min(60,math.ceil(delay))):
             if job and read(job['app'],job['id'],job['user_id'])['cancel']:
                 raise RuntimeError('工作已取消。')
@@ -31,6 +30,12 @@ def _limited_request(call):
 
 
 def infer_missing_answers(items, sections, path, config):
+    from . import import_checkpoints as checkpoints
+    checkpoints.put('total',len(items))
+    saved={x.get('_question_no'):x for x in checkpoints.get('questions',[])}
+    items=[saved.get(x.get('_question_no'),x) if not x.get('answer_key') else x for x in items]
+    checkpoints.put('questions',[x for x in items if x.get('answer_key')])
+    checkpoints.put('stage','分批推定答案')
     pdf = path.suffix.lower()=='.pdf'
     text_model=get_parser_llm(config)
     vision_model=get_vision_llm(config) if pdf else None
@@ -55,6 +60,7 @@ def infer_missing_answers(items, sections, path, config):
                         page_by_number[number]=index
         result=[]
         pending=[x for x in items if not x.get('answer_key')]
+        batch_limit=4
         while pending:
             first=pending[0]
             use_vision=needs_vision(first)
@@ -63,7 +69,7 @@ def infer_missing_answers(items, sections, path, config):
             if pdf and page_index is None:
                 raise LLMError('題號無法對應原始 PDF 頁面，已停止推定答案。')
             batch=[]
-            while pending and len(batch)<4:
+            while pending and len(batch)<batch_limit:
                 item=pending[0]
                 if needs_vision(item)!=use_vision: break
                 if pdf and page_by_number.get(item.get('_question_no'))!=page_index: break
@@ -89,14 +95,30 @@ def infer_missing_answers(items, sections, path, config):
                 regions=[r for r in regions if r.y0>page.rect.height*.12 and r.width>35 and r.height>25 and r.width*r.height<page.rect.width*page.rect.height*.03]
                 for rect in sorted(regions,key=lambda r:r.width*r.height)[:1]:
                     images.append(base64.b64encode(page.get_pixmap(matrix=fitz.Matrix(3,3),clip=rect,alpha=False).tobytes('png')).decode('ascii'))
-                data=_limited_request(lambda:model.complete_json_with_images(system,user,images))
-            else:
-                data=_limited_request(lambda:model.complete_json(system,user))
+            try:
+                if use_vision:
+                    data=_limited_request(lambda:model.complete_json_with_images(system,user,images))
+                else:
+                    data=_limited_request(lambda:model.complete_json(system,user))
+            except LLMError as exc:
+                if exc.error_code=='output_truncated' and len(batch)>1:
+                    pending=batch+pending
+                    batch_limit=max(1,len(batch)//2)
+                    continue
+                raise
             answers=data.get('answers') if isinstance(data,dict) else None
             expected={x['number'] for x in payload}
             if not isinstance(answers,list) or len(answers)!=len(batch) or any(not isinstance(x,dict) for x in answers):
+                if len(batch)>1:
+                    pending=batch+pending
+                    batch_limit=max(1,len(batch)//2)
+                    continue
                 raise LLMError('模型解題結果不完整，已停止匯入。')
             if {x.get('number') for x in answers}!=expected:
+                if len(batch)>1:
+                    pending=batch+pending
+                    batch_limit=max(1,len(batch)//2)
+                    continue
                 raise LLMError('模型解題題號漏掉或重複，已停止匯入。')
             mapped={x['number']:x for x in answers}
             for item,target in zip(batch,payload):
@@ -115,6 +137,9 @@ def infer_missing_answers(items, sections, path, config):
                 if context.strip():
                     copied['content']='【AI 擷取／描述的題組資料，需核對原卷】\n'+context.strip()+'\n\n'+item['content']
                 result.append(copied)
+                completed={x.get('_question_no'):x for x in items if x.get('answer_key')}
+                completed.update({x['_question_no']:x for x in result})
+                checkpoints.put('questions',[completed[x['_question_no']] for x in items if x['_question_no'] in completed])
         inferred={x['_question_no']:x for x in result}
         return [inferred.get(x.get('_question_no'),x) for x in items]
     finally:

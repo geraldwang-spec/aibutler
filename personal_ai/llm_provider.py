@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import time
@@ -99,18 +100,21 @@ class OpenAICompatibleLLM(BaseLLM):
         except urllib.error.HTTPError as exc:
             detail = ""
             try:
-                detail = exc.read().decode("utf-8", errors="replace")[:1200]
+                detail = exc.read(8192).decode("utf-8", errors="replace")
             except Exception:
                 pass
             from .data_safety import redact_text
-            suffix = f"：{redact_text(detail)}" if detail else ""
+            suffix = f"：{redact_text(detail[:1200])}" if detail else ""
+            retry_after=exc.headers.get('Retry-After') if exc.headers else None
             try:
-                api_error=json.loads(detail).get('error') or {}
-                error_code=api_error.get('code') or api_error.get('type')
+                body=json.loads(detail)
+                api_error=body.get('error') or body
+                error_code=api_error.get('code') or api_error.get('error_code') or api_error.get('type')
+                retry_after=retry_after or body.get('retry_after')
             except (ValueError,AttributeError):
                 error_code=None
             raise LLMError(f"LLM API HTTP {exc.code}{suffix}",status_code=exc.code,
-                           error_code=error_code,retry_after=exc.headers.get('Retry-After')) from exc
+                           error_code=error_code,retry_after=retry_after) from exc
         except Exception as exc:
             from .data_safety import redact_text
             raise LLMError(f"LLM API 呼叫失敗：{redact_text(str(exc))}") from exc
@@ -287,8 +291,35 @@ class GroqLLM(OpenAICompatibleLLM):
             options['response_format']={'type':'json_object'}
         return options
 
+    def _wait_for_retry(self, retry_after):
+        from .jobs import active_job, read
+        try:
+            delay=max(60,float(retry_after or 60))
+        except (TypeError,ValueError):
+            delay=60
+        if not math.isfinite(delay) or delay>60:
+            return False
+        job=active_job.get()
+        # Short interruptible waits, never one blocking minute-long sleep.
+        for _ in range(60):
+            if job:
+                if read(job['app'],job['id'],job['user_id'])['cancel']:
+                    raise RuntimeError('工作已取消。')
+            time.sleep(1)
+        return True
+
     def _request(self, messages, temperature=0.2):
         # UTF-8 bytes are a conservative bound, not an exact tokenizer count.
+        from . import import_checkpoints as checkpoints
+        cache_key='llm:'+checkpoints.fingerprint([self.base_url,self.model,self._request_options(),messages,temperature])
+        cached=checkpoints.get(cache_key)
+        if cached is not None:
+            # Reusing a response does not count as another billed API call.
+            from .jobs import active_job, read
+            job=active_job.get()
+            if job and read(job['app'],job['id'],job['user_id'])['cancel']:
+                raise RuntimeError('工作已取消。')
+            return cached
         counted = []
         images = 0
         for message in messages:
@@ -311,20 +342,39 @@ class GroqLLM(OpenAICompatibleLLM):
         size = len(json.dumps(counted, ensure_ascii=False).encode('utf-8'))
         if size > self.max_input_bytes:
             raise LLMError(f'送入模型的內容超過 {self.max_input_bytes} bytes 上限，請縮短內容或分批匯入。尚未呼叫 API。')
-        if __package__:
-            from .jobs import guard, usage
-            guard(size+self.max_output_tokens+512+images*2048)
-        else:
-            usage=lambda *args:None
+        from .jobs import guard, usage
         started=time.monotonic()
         try:
-            data=super()._request(messages, temperature)
+            for attempt in range(2):
+                # Each physical attempt counts against request/job limits.
+                guard(size+self.max_output_tokens+512+images*2048)
+                try:
+                    data=super()._request(messages, temperature)
+                    break
+                except LLMError as exc:
+                    if (attempt==0 and exc.status_code in (502,503,504,520)
+                            and self._wait_for_retry(exc.retry_after)):
+                        continue
+                    raise
             try:
                 usage(data,self.model,time.monotonic()-started)
             except OSError:
                 pass
+            choice=(data.get('choices') or [{}])[0]
+            if choice.get('finish_reason')!='length':
+                try:
+                    self._parse_json_text(choice.get('message',{}).get('content',''))
+                except LLMError:
+                    pass
+                else:
+                    checkpoints.put(cache_key,data)
             return data
         except LLMError as exc:
+            if exc.status_code in (502,503,504,520):
+                raise LLMError(f'Groq 服務暫時無法正常回應（HTTP {exc.status_code}）。'
+                    '已依服務商等待建議決定是否重試（最多一次）；目前仍無法完成。'
+                    '請至少等待 60 秒後再試；此錯誤不代表教材、API Key 或 GPU 有問題。',
+                    status_code=exc.status_code,error_code=exc.error_code,retry_after=exc.retry_after or 60) from exc
             if exc.status_code==429:
                 retry=f' 建議等待 {exc.retry_after} 秒後再試。' if exc.retry_after and str(exc.retry_after).replace('.','',1).isdigit() else ''
                 raise LLMError('Groq 速率或 token 額度限制（HTTP 429）。'+retry+' 已停止後續呼叫；'+str(exc),

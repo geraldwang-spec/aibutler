@@ -2,8 +2,14 @@
 <section class="panel-card" id="ai-job" data-status-url="{{ url_for('personal_ai.job_status',job_id=job.id) }}">
 <h2>AI 工作進度</h2><p id="job-status">{{job.status}}</p><p id="job-usage">請求 {{job.calls}} 次 · 輸入 {{job.input_tokens}} / 輸出 {{job.output_tokens}} tokens</p>
 <p id="job-error" role="alert">{{job.error or ''}}</p><a id="job-result" {% if not result %}hidden{% endif %} href="{{result.url if result else '#'}}">查看成果 →</a>
+{% if progress is not none %}
+<p id="job-progress">已保存 {{progress.completed}} / {{progress.total}} 題 · {{progress.stage}}</p>
+<a href="{{url_for('personal_ai.job_partial',job_id=job.id)}}">查看已保存結果</a> · <a href="{{url_for('personal_ai.job_download',job_id=job.id)}}">下載 JSON</a> · <a href="{{url_for('personal_ai.job_download',job_id=job.id,format='csv')}}">下載 CSV</a>
+<form id="job-resume-form" {% if job.status not in ['failed','cancelled'] %}hidden{% endif %} method="post" action="{{url_for('personal_ai.job_resume',job_id=job.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>從中斷處繼續</button></form>
+<p>接續會重用已保存答案與有效的 Groq 回應；只對尚未完成的部分呼叫模型。系統不限制帳號每日用量，API 服務商的額度與速率限制仍適用。</p>
+{% endif %}
 <p id="job-connection" class="note" role="status" aria-live="polite"></p><button type="button" id="job-refresh" class="secondary-button" hidden>重新取得進度</button>
 {% if job.status in ['queued','running'] %}<form id="job-cancel-form" method="post" action="{{url_for('personal_ai.job_cancel',job_id=job.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>取消後續處理</button></form>{% endif %}
-<p>工作最多 10 分鐘、40 次請求、累計 32,000 tokens；已送出的請求需等待回應。關閉頁面不會自動取消。失敗時不會自動重複付費呼叫。</p>
-</section><script src="{{url_for('static',filename='js/ai-job.js',v='status-2')}}" defer></script>
+<p>系統不限制工作的總時間、請求數與累計 tokens；API 服務商限制仍適用。已送出的請求需等待回應。關閉頁面不會自動取消，可按取消停止後續處理；單次 API 仍有連線逾時與有限重試。</p>
+</section><script src="{{url_for('static',filename='js/ai-job.js',v='status-3')}}" defer></script>
 {% endblock %}
