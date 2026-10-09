@@ -20,7 +20,7 @@ from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
-from flask import Blueprint, current_app, g, jsonify, render_template, request
+from flask import Blueprint, current_app, g, jsonify, render_template, request, abort
 
 from auth import login_required
 
@@ -30,6 +30,24 @@ from .service import BodyService, Validator
 from .sql_process import BodySqlProcess
 
 body = Blueprint('body', __name__, url_prefix='/body')
+
+
+@body.app_template_global()
+def exercise_media(name):
+    from .exercise_media import media_for
+    return media_for(name)
+
+
+@body.get('/exercises/<int:exercise_id>/demo')
+@login_required
+def exercise_demo(exercise_id):
+    from storage import db
+    row = db().execute('SELECT * FROM exercises WHERE id=? AND created_by=?',
+                       (exercise_id, g.user['id'])).fetchone()
+    if row is None:
+        abort(404)
+    return render_template('body/exercise_demo.html', title=row['exercise_name'] + ' · 動作示範',
+                           exercise=row, media=exercise_media(row['exercise_name']))
 
 
 class BodyApi:

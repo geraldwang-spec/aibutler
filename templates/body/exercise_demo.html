@@ -1,0 +1,17 @@
+{% extends 'live_base.html' %}
+{% block content %}
+<link rel="stylesheet" href="{{url_for('static',filename='css/exercise-media.css')}}">
+<section class="panel-card exercise-demo">
+  <a class="exercise-back" href="{{url_for('records',table='exercises')}}">← 返回運動動作庫</a>
+  <header class="exercise-demo-heading"><div><p class="eyebrow">MOVEMENT LIBRARY</p><h2>{{exercise.exercise_name}}</h2></div><div class="exercise-demo-tags"><span class="pill">{{exercise.muscle_group}}</span><span class="pill">{{exercise.equipment or '徒手'}}</span></div></header>
+  {% if media %}
+  <p class="note">姿勢示範圖 · 兩張靜態圖片供對照，不是完整動作影片。</p>
+  {% if media.note %}<p class="notice info">{{media.note}}</p>{% endif %}
+  <div class="exercise-demo-grid">{% for photo in media.images %}
+    <figure><div class="exercise-photo-frame"><img src="{{url_for('static',filename=photo)}}" alt="{{exercise.exercise_name}}：姿勢示範 {{loop.index}}" width="600" height="600"></div><figcaption><span>{{'%02d'|format(loop.index)}}</span> 姿勢示範 {{loop.index}}</figcaption></figure>
+  {% endfor %}</div>
+  <p class="exercise-credit">圖片來源：<a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener noreferrer">Free Exercise DB</a> · 統一以原始靜態圖呈現</p>
+  {% else %}<div class="exercise-no-media"><h3>這個動作尚無對應示範</h3><p>保留你的動作與訓練紀錄，不以其他動作的圖片替代。</p></div>{% endif %}
+  <p class="note">示範僅供辨識動作與器材；實際姿勢、活動範圍及負重請依個人狀況與專業指導調整。</p>
+</section>
+{% endblock %}
