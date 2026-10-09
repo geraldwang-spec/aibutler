@@ -493,3 +493,7 @@ html[data-workspace-theme="midnight"] :is(.workspace-body-pane, .bd) {
 .bd-weight__chart line { stroke: var(--bd-line); }
 .bd-weight__chart polyline { stroke: var(--bd-warm); }
 .bd-weight__chart circle { fill: var(--bd-warm); }
+.bd-sug__profile { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; margin: 0 0 6px; padding: 10px 12px; border-radius: 8px; background: #fff4ec; color: #8e4218; }
+.bd-sug__profile p { margin: 0; }
+.bd-sug__first { margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: #f3f2fb; font-size: 13px; }
+.bd-sug__first .fa { color: var(--bd-primary); }

@@ -45,7 +45,7 @@ CATALOG = {
  'chat_messages': ('我的提問紀錄', 'comment-o', [ref('chat_id','對話主題','chat_sessions'), f('content','提問內容（目前只儲存，不產生 AI 回答）','textarea',limit=10000), choice('intent','主題','learning','diet','workout','rag')]),
 }
 
-PROFILE_FIELDS = [choice('gender','性別','m','f','other'), f('birth_date','生日','date'), f('height_cm','身高 cm','decimal',minimum=30,maximum=260), choice('activity_level','日常活動量','低','中','高'), choice('goal_type','運動目標','減脂','增肌','維持','體能'), f('workout_days_per_week','一週可運動天數','number',maximum=7), f('minutes_per_session','每次運動分鐘','number',minimum=1,maximum=1440)]
+PROFILE_FIELDS = [choice('gender','性別','男','女'), f('birth_date','生日','date'), f('height_cm','身高 cm','decimal',minimum=30,maximum=260), choice('activity_level','日常活動量','低','中','高'), choice('goal_type','運動目標','減脂','增肌','維持','體能'), f('workout_days_per_week','一週可運動天數','number',maximum=7), f('minutes_per_session','每次運動分鐘','number',minimum=1,maximum=1440)]
 
 OWNER = {
  'subjects': 'created_by=?', 'exercises': 'created_by=?',

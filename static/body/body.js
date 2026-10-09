@@ -156,7 +156,11 @@
     } catch (e) {
       data = { ok: false, error: '無法連線，請檢查網路後再試。' };
     }
-    if (!data.ok) throw new Error(data.error || data.message || '操作失敗，請再試一次。');
+    if (!data.ok) {
+      const err = new Error(data.error || data.message || '操作失敗，請再試一次。');
+      err.data = data;   // 例如 {need: 'profile', missing: [...]}，讓呼叫端顯示對應的按鈕
+      throw err;
+    }
     return data;
   }
 
@@ -796,11 +800,11 @@
 
   // ------------------------------------------------------------ 建議課表（程式排部位、組數、重量；AI 從候選挑動作）
   // 只是草稿：「套用到今天」填進預計組數（applySets），使用者逐組按 ✓ 才寫入資料庫
-  const sug = { d: null, data: null, busy: false, open: false };
+  const sug = { d: null, data: null, busy: false, open: false, needProfile: null };   // needProfile：缺個人資料時的訊息
 
   async function loadSuggest() {
     if (sug.d === state.d) return;
-    sug.d = state.d; sug.data = null;
+    sug.d = state.d; sug.data = null; sug.needProfile = null;
     try {
       const data = await call('GET', `/plan?d=${state.d}`);
       if (data && sug.d === state.d) { sug.data = data.plan; if (data.plan.saved) sug.open = true; render(); }
@@ -814,12 +818,14 @@
     if (sug.busy) return;
     sug.busy = true; sug.open = true; render();
     const d = state.d;
+    sug.needProfile = null;
     try {
       const data = await call('POST', '/plan', { d });
       if (data && state.d === d) sug.data = data.plan;
       showMessage('');
     } catch (err) {
-      showMessage(err.message, 'error');
+      if (err.data && err.data.need === 'profile') sug.needProfile = err.message;   // 卡片內顯示，不用上方訊息列
+      else showMessage(err.message, 'error');
     } finally {
       sug.busy = false; render();
     }
@@ -858,7 +864,10 @@
     if (!saved || !sug.open) {
       return h('section', { class: 'bd-ai bd-sug' }, head,
         info && info.error ? h('p', { class: 'bd-quick__warn', text: `讀取建議課表失敗：${info.error}` }) : null,
-        !saved ? h('p', {
+        sug.needProfile ? h('div', { class: 'bd-sug__profile', role: 'alert' },
+          h('p', { text: sug.needProfile }),
+          h('a', { class: 'bd-btn bd-btn--primary', href: root.dataset.profile }, icon('user'), ' 前往填寫個人資料與目標')) : null,
+        !saved && !sug.needProfile ? h('p', {
           class: 'bd-muted', text: info && info.enabled
             ? '依你的訓練紀錄排出今天的部位、組數與重量，AI 從動作庫挑動作並說明理由。'
             : '依你的訓練紀錄排出今天的部位、組數與重量（設定 AI 後會再加上挑選理由）。'
@@ -879,6 +888,8 @@
       h('p', { class: 'bd-sug__meta' }, chip(`${sk.split_name}・${sk.day_name}`, 'teal'),
         h('span', { class: 'bd-muted', text: `${saved.items.length} 個動作・約 ${sk.minutes} 分鐘${sk.goal ? `・目標：${sk.goal}` : ''}` })),
       saved.stale ? h('p', { class: 'bd-quick__warn', text: '訓練紀錄有更新，可以按「重新產生」。' }) : null,
+      sk.first_time ? h('p', { class: 'bd-sug__first' }, icon('info-circle'),
+        h('span', { text: ` 還沒有訓練紀錄，依個人資料排課（${sk.profile_text}）。先選容易上手的器材；起始重量依體重、性別與年齡估算後再往下抓一點（沒填體重或性別、或未滿 18 歲，請自己填），完成後下次就會依實際紀錄調整。` })) : null,
       saved.note ? h('p', { class: 'bd-quick__warn', text: saved.note }) : null,
       saved.summary ? h('p', { class: 'bd-ai__summary', text: saved.summary }) : null,
       skipped,

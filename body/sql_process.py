@@ -106,6 +106,12 @@ class BodySqlProcess:
             'WHERE w.user_id=? AND w.workout_date<=? GROUP BY e.muscle_group', (self.user_id, until)) if r['muscle_group']}
 
     # ------------------------------------------------------------ 個人資料與 AI 說明（ai_suggestions）
+    def gender_and_birth(self):
+        """性別與生日（建議課表估起始重量用）；另外查，不放進 profile()，避免被送進 AI 說明的提示詞。"""
+        row = self.conn.execute('SELECT gender, birth_date FROM user_profiles WHERE user_id=?', (self.user_id,)).fetchone()
+        return dict(gender=row['gender'], birth_date=str(row['birth_date'])[:10] if row['birth_date'] else None) \
+            if row else dict(gender=None, birth_date=None)
+
     def profile(self):
         row = self.conn.execute('SELECT goal_type, activity_level, workout_days_per_week, minutes_per_session '
                                 'FROM user_profiles WHERE user_id=?', (self.user_id,)).fetchone()
@@ -210,7 +216,7 @@ class BodySqlProcess:
         只看 since 之後的紀錄，避免資料多了以後整張表掃過一遍。
         """
         rows = self.conn.execute(
-            'SELECT s.exercise_id, s.set_no, s.weight_kg, s.reps, w.id AS workout_id '
+            'SELECT s.exercise_id, s.set_no, s.weight_kg, s.reps, s.rpe, w.id AS workout_id '
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
             'WHERE w.user_id=? AND w.workout_date<? AND w.workout_date>=? '
             'ORDER BY w.workout_date DESC, w.id DESC, s.set_no, s.id', (self.user_id, day, since)).fetchall()

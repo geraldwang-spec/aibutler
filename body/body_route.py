@@ -152,7 +152,7 @@ class BodyApi:
             except ApiError as exc:
                 if 'body_service' in g:
                     g.body_service.sql.rollback()
-                return jsonify(ok=False, error=exc.message), exc.status
+                return jsonify(ok=False, error=exc.message, **exc.extra), exc.status
         return wrapped
 
 

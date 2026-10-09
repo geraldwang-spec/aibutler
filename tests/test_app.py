@@ -174,7 +174,7 @@ class AppTests(unittest.TestCase):
 
     def test_profile_workouts_plan_and_record_persistence(self):
         self.register();self.login()
-        response=self.post('/profile',{'gender':'other','birth_date':'2000-01-01','height_cm':170,'activity_level':'中','goal_type':'維持','workout_days_per_week':3,'minutes_per_session':30,'initial_weight':65})
+        response=self.post('/profile',{'gender':'男','birth_date':'2000-01-01','height_cm':170,'activity_level':'中','goal_type':'維持','workout_days_per_week':3,'minutes_per_session':30,'initial_weight':65})
         self.assertEqual(response.status_code,302)
         self.assertEqual(self.sql('SELECT weight_kg FROM body_metrics')[0]['weight_kg'],65)
         response=self.post('/records/exercises',{'exercise_name':'深蹲','muscle_group':'腿','equipment':'槓鈴','is_cardio':'0'})

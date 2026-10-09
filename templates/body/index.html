@@ -11,7 +11,8 @@
      data-user="{{ g.user['id'] }}"
      data-tab="{{ tab }}"
      data-records-weight="{{ url_for('records', table='body_metrics') }}"
-     data-records-exercises="{{ url_for('records', table='exercises') }}">
+     data-records-exercises="{{ url_for('records', table='exercises') }}"
+     data-profile="{{ url_for('profile') }}">
   <script type="application/json" id="bd-initial">{{ state|tojson }}</script>
   <noscript><p class="notice error">這個頁面需要啟用 JavaScript。</p></noscript>
   <p class="notice" id="bd-message" role="status" hidden></p>

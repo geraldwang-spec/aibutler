@@ -454,13 +454,19 @@ class BodyService:
             library=library,
             usage=self.sql.exercise_usage((day - timedelta(days=90)).isoformat()),
             last_sessions=self.sql.latest_sessions_before(d, (day - timedelta(days=180)).isoformat()),
-            exercise_dates=self.sql.exercise_dates((day - timedelta(days=365)).isoformat(), d))
+            exercise_dates=self.sql.exercise_dates((day - timedelta(days=365)).isoformat(), d),
+            body=self._body(d))
         if with_passages:
             queries = [x['why'] for x in plan.skeleton['slots']][:DocumentRules.QUERIES]
             if plan.skeleton['goal']:
                 queries.append(f"{plan.skeleton['goal']} 的訓練建議")
             plan.passages = self._passages(queries)
         return plan
+
+    def _body(self, day):
+        """估起始重量用的性別、生日與最近一次體重（到 day 為止）。"""
+        metric = self.sql.latest_metric(day)
+        return dict(self.sql.gender_and_birth(), weight_kg=metric['weight_kg'] if metric else None)
 
     def suggested_plan(self, day):
         """讀取這一天已產生的建議課表；資料有變動時標示 stale（不會自動重新產生）。"""
@@ -485,6 +491,11 @@ class BodyService:
         """
         if day < self.today:
             raise ApiError('只能替今天或之後的日期建議課表。')
+        # 分化方式、動作數、次數都依個人資料決定，沒填就不排（後端檢查，不依賴前端）
+        missing = WorkoutPlan.missing_profile(self.sql.profile())
+        if missing:
+            raise ApiError(f"請先到「個人資料與目標」填寫：{'、'.join(missing)}，才能依你的目標排課。",
+                           need='profile', missing=missing)
         use_ai = self.llm_report is not None
         plan = self._plan(day, with_passages=use_ai)
         if not plan.library:
