@@ -139,7 +139,14 @@ def _guess_type(header_and_body: str, answer: str, options: dict):
     return '填空'
 
 
-def extract_by_rules(sections, default_chapter: str):
+def extract_by_rules(sections, default_chapter: str, allow_missing_answers=False):
+    image_passages={}
+    for section in sections:
+        for context in section.get('image_context',[]):
+            limits=context.get('range')
+            if limits and 0<limits[0]<=limits[1]<=500:
+                for number in range(limits[0],limits[1]+1):
+                    image_passages.setdefault(number,[]).append(context['text'])
     text = '\n'.join(sec.get('text', '') for sec in sections)
     answers, explanations = _answer_key(text)
     question_text = re.split(ANSWER_HEADING, text, maxsplit=1)[0]
@@ -192,18 +199,20 @@ def extract_by_rules(sections, default_chapter: str):
         if inline_note:
             explanations[qn] = inline_note
         ans = answer_text(ans)
-        shared = '\n'.join(block.get('passage',[])).strip()
+        shared = '\n'.join(block.get('passage',[])+image_passages.get(qn,[])).strip()
         if shared:
             stem = shared + ('\n\n' + stem if stem else '')
         qtype = _guess_type(body, ans, options)
 
         # Remove type-only headings left at the beginning.
         stem = re.sub(r'^[\s\[【]*(?:單選題?|多選題?|是非題?|填空題?)[\]】\s:：/（）()]*', '', stem).strip()
+        if not stem and allow_missing_answers and options:
+            stem = f'第 {qn} 題：依題組文章選出空格的正確選項。'
         if not stem:
             continue
-        if qtype in {'單選', '多選'} and (len(options) < 2 or not ans):
+        if qtype in {'單選', '多選'} and (len(options) < 2 or (not ans and not allow_missing_answers)):
             continue
-        if qtype in {'是非', '填空'} and not ans:
+        if qtype in {'是非', '填空'} and not ans and not allow_missing_answers:
             continue
 
         item = {
@@ -301,7 +310,7 @@ def extract_pdf_with_vision(path: Path, default_chapter: str, config):
     return result
 
 def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
-    sections = parse_file(path)
+    sections = parse_file(path, include_pdf_images=path.suffix.lower()=='.pdf' and mode!='rules')
     by_rules = extract_by_rules(sections, default_chapter)
     is_pdf = path.suffix.lower() == '.pdf'
 
@@ -312,8 +321,29 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
     main = re.split(ANSWER_HEADING, joined, maxsplit=1)[0]
     numbered = {_question_start(line) for line in main.splitlines()} - {None}
     expected = max(answer_count, len(numbered))
+    explicit_answer = (answer_count or
+                       re.search(ANSWER_LABEL+r'\s*[:：=]|【'+ANSWER_LABEL+r'】', joined, re.I) or
+                       re.search(r'(?m)^\s*[（(]\s*[A-D]\s*[）)]\s*\d', main))
+    if numbered and not by_rules and not explicit_answer:
+        if mode != 'rules':
+            from .question_answering import infer_missing_answers
+            candidates = extract_by_rules(sections, default_chapter, allow_missing_answers=True)
+            if len(candidates) != len(numbered):
+                raise ValueError('已辨識題號但題幹／選項不完整，請確認文字與題組圖片；尚未生成答案。')
+            return infer_missing_answers(candidates, sections, path, config), 'AI 推定答案（非官方，需人工確認）'
+        raise ValueError(
+            f'已辨識到 {len(numbered)} 個題號，但文件未找到明確的標準答案。'
+            '題本不等於附答案的題庫，系統不會由 AI 猜答案。'
+            '請將答案表與題目合併後重試（答案區下逐行填寫，例如「1. B」）。'
+            + ('若文章、漫畫或地圖是圖片，還需補上題組圖片／OCR 內容；單純文字擷取可能漏掉閱讀材料。' if is_pdf else ''))
     if expected:
         rule_reliable = len(by_rules) == expected
+
+    if mode!='rules' and not rule_reliable and explicit_answer:
+        candidates=extract_by_rules(sections,default_chapter,allow_missing_answers=True)
+        if len(candidates)==expected and any(not x.get('answer_key') for x in candidates):
+            from .question_answering import infer_missing_answers
+            return infer_missing_answers(candidates,sections,path,config), '原文答案＋AI 推定缺答（需人工確認）'
 
     if mode == 'rules':
         if not rule_reliable:

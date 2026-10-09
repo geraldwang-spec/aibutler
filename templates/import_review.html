@@ -9,6 +9,7 @@
 {% for item in items %}
 <article class="panel-card">
   <h2>{{ loop.index }}. {{ item.chapter_name }} · {{ item.q_type }}</h2>
+  {% if item.get('_answer_source') == 'ai_inferred' %}<p class="notice info">AI 推定答案，非官方答案。請核對原卷、圖片內容與解析後再確認匯入。模型：{{ item.get('_answer_model') }}</p>{% endif %}
   {% if item.get('_concept_name') %}
   <div class="concept-box">
     <span class="pill">Concept：{{ item.get('_concept_name') }}</span>

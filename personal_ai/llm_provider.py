@@ -284,16 +284,36 @@ class GroqLLM(OpenAICompatibleLLM):
                            response_format={'type': 'json_object'})
         if self.model == "qwen/qwen3.8-27b":
             options["reasoning_effort"] = "none"
+            options['response_format']={'type':'json_object'}
         return options
 
     def _request(self, messages, temperature=0.2):
         # UTF-8 bytes are a conservative bound, not an exact tokenizer count.
-        size = len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
+        counted = []
+        images = 0
+        for message in messages:
+            copy = dict(message)
+            if isinstance(copy.get('content'), list):
+                content = []
+                for part in copy['content']:
+                    if part.get('type') == 'image_url':
+                        images += 1
+                        url = part.get('image_url', {}).get('url','')
+                        if not url.startswith('data:image/') or len(url)>8*1024*1024:
+                            raise LLMError('圖片輸入必須是本機圖像，且每張編碼後不超過 8 MB。')
+                        content.append({'type':'text','text':'[本機頁面圖片]'})
+                    else:
+                        content.append(part)
+                copy['content'] = content
+            counted.append(copy)
+        if images>3 or len(json.dumps(messages).encode())>20*1024*1024:
+            raise LLMError('每次最多 3 張圖片，總請求不可超過 20 MB。')
+        size = len(json.dumps(counted, ensure_ascii=False).encode('utf-8'))
         if size > self.max_input_bytes:
             raise LLMError(f'送入模型的內容超過 {self.max_input_bytes} bytes 上限，請縮短內容或分批匯入。尚未呼叫 API。')
         if __package__:
             from .jobs import guard, usage
-            guard(size+self.max_output_tokens+512)
+            guard(size+self.max_output_tokens+512+images*2048)
         else:
             usage=lambda *args:None
         started=time.monotonic()
@@ -318,6 +338,19 @@ class GroqLLM(OpenAICompatibleLLM):
         if not self.api_key:
             raise LLMError("Groq 尚未設定 API Key。請在 .env 填入 GROQ_API_KEY。")
         return super().complete_json(system, user)
+
+    def complete_json_with_images(self, system, user, images):
+        if not self.api_key:
+            raise LLMError('Groq 尚未設定 API Key。')
+        from .data_safety import POLICY, safe_prompt, sanitize
+        parts=[{'type':'text','text':safe_prompt(user)}]
+        parts.extend({'type':'image_url','image_url':{'url':'data:image/png;base64,'+value}} for value in images)
+        data=self._request([{'role':'system','content':safe_prompt(system)+'\n'+POLICY+'\nReturn JSON.'},
+                            {'role':'user','content':parts}],temperature=.15)
+        choice=data['choices'][0]
+        if choice.get('finish_reason')=='length':
+            raise LLMError('視覺模型輸出超過上限，請減少單批題數。',error_code='output_truncated')
+        return sanitize(self._parse_json_text(choice['message']['content']))
 
     def ping(self):
         if not self.api_key:
@@ -471,6 +504,16 @@ def get_parser_llm(config):
     base = config.get("PARSER_BASE_URL") or (GROQ_BASE_URL if provider == "groq" else OLLAMA_BASE_URL)
     key = _api_key_for(config, "PARSER", provider, "LLM")
     return _provider_instance(provider, base, model, key)
+
+
+def get_vision_llm(config):
+    provider=str(config.get('VISION_PROVIDER') or os.getenv('VISION_PROVIDER') or 'groq').lower()
+    model=config.get('VISION_MODEL') or os.getenv('VISION_MODEL') or 'qwen/qwen3.8-27b'
+    base=config.get('VISION_BASE_URL') or os.getenv('VISION_BASE_URL') or (GROQ_BASE_URL if provider=='groq' else OLLAMA_BASE_URL)
+    instance=_provider_instance(provider,base,model,_api_key_for(config,'VISION',provider,'PARSER'))
+    if isinstance(instance,GroqLLM):
+        instance.max_output_tokens=1600
+    return instance
 
 
 def get_generator_llm(config):

@@ -8,8 +8,9 @@
 <label>預設章節<input name="default_chapter" maxlength="120" value="{{ request.form.get('default_chapter','') }}" placeholder="例如：Python 入門"></label>
 <label>題庫類型<select name="import_strategy"><option value="question_bank" {% if request.form.get('import_strategy','question_bank')=='question_bank' %}selected{% endif %}>傳統固定型 · 保留原題</option><option value="concept" {% if request.form.get('import_strategy')=='concept' %}selected{% endif %}>概念型 · 歸類來源樣本</option></select></label>
 <p class="setting-help">固定型可立即隨機抽題；概念型保留考點與來源樣本，之後由模型重新設計題目。</p>
-<label>解析方式<select name="parse_mode">{% for value,label in [('rules','快速解析 · 不呼叫模型拆題'),('auto','自動解析 · 必要時使用模型'),('llm','AI 強化解析')] %}<option value="{{ value }}" {% if request.form.get('parse_mode','rules')==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+<label>解析方式<select name="parse_mode">{% for value,label in [('rules','快速解析 · 不呼叫模型拆題'),('auto','自動解析 · 必要時使用模型'),('llm','AI 強化解析')] %}<option value="{{ value }}" {% if request.form.get('parse_mode','auto')==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
 <p class="setting-help">概念型匯入仍會進行模型分類；固定型搭配快速解析可完全不使用 AI。</p>
+<p class="setting-help">自動／AI 強化解析：缺少答案時由 AI 推定並標示為非官方，必須在預覽核對。圖片題可能將題目與頁面圖片傳送至設定的雲端模型（預設 Groq），會使用 API 額度；不希望傳送請選快速解析。概念型每批最多 20 題。</p>
 <button class="action" type="submit">解析並預覽題目 →</button></section>
 <section class="panel-card import-editor"><p class="eyebrow">02 / QUESTION SOURCE</p><h2>題目編輯工作區</h2>
 <div class="editor-tabs" role="group" aria-label="題目來源"><label><input type="radio" name="source_mode" value="file" {% if request.form.get('source_mode','file')!='text' %}checked{% endif %}>檔案上傳</label><label><input type="radio" name="source_mode" value="text" {% if request.form.get('source_mode')=='text' %}checked{% endif %}>文字編輯</label></div>

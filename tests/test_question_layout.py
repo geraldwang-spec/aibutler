@@ -36,6 +36,89 @@ class LayoutModel:
 
 
 class QuestionLayoutTests(unittest.TestCase):
+    def test_inferred_answers_do_not_replace_official_answers(self):
+        from unittest.mock import patch
+        from personal_ai.question_answering import infer_missing_answers
+        class Solver:
+            enabled=True
+            provider='test'
+            model='test'
+            def complete_json(self,s,u):
+                return {'answers':[dict(number=2,status='answered',answer='B',explanation='理由',context='')]}
+        official=dict(_question_no=1,content='甲',q_type='單選',answer_key='A',option_A='a',option_B='b')
+        missing=dict(_question_no=2,content='乙',q_type='單選',answer_key='',option_A='a',option_B='b')
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=Solver()):
+            result=infer_missing_answers([official,missing],[],Path('book.txt'),{})
+        self.assertIs(result[0],official)
+        self.assertEqual(result[1]['answer_key'],'B')
+
+    def test_rate_limit_retry_is_bounded(self):
+        from unittest.mock import patch,Mock
+        from personal_ai.question_answering import _limited_request
+        call=Mock(side_effect=[LLMError('rate limit',status_code=429,retry_after='2'),{'ok':True}])
+        with patch('personal_ai.question_answering.time.sleep') as sleep:
+            self.assertEqual(_limited_request(call),{'ok':True})
+        self.assertEqual(call.call_count,2)
+        self.assertEqual(sleep.call_count,2)
+
+    def test_ocr_step_numbers_do_not_become_question_numbers(self):
+        sections=[{'text':'（ ）20. Choose.\n(A)tea\n(B)water',
+                   'image_context':[{'range':(20,21),'text':'1. Boil water.\n2. Add tea.'}]}]
+        rows=extract_by_rules(sections,'測試',allow_missing_answers=True)
+        self.assertEqual([x['_question_no'] for x in rows],[20])
+        self.assertIn('1. Boil water.',rows[0]['content'])
+
+    def test_question_book_without_answers_reports_missing_answer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'book.txt'
+            path.write_text('（   ）1. Choose a word.\n(A)apple\n(B)book',encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'1 個題號.*標準答案'):
+                extract_questions(path,'測試',{},'rules')
+
+    def test_missing_answer_inference_is_labelled(self):
+        from unittest.mock import patch
+        from personal_ai.question_answering import infer_missing_answers,AI_PREFIX
+        class Solver:
+            enabled=True
+            provider='test'
+            model='test-solver'
+            def complete_json(self,system,user):
+                return {'answers':[dict(number=1,status='answered',answer='B',explanation='依題意判斷。',context='')]}
+        row=dict(_question_no=1,content='題目',q_type='單選',answer_key='',option_A='甲',option_B='乙')
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=Solver()):
+            result=infer_missing_answers([row],[],Path('test.txt'),{})
+        self.assertEqual(result[0]['answer_key'],'B')
+        self.assertEqual(result[0]['_answer_source'],'ai_inferred')
+        self.assertTrue(result[0]['explanation'].startswith(AI_PREFIX))
+        self.assertEqual(row['answer_key'],'')
+
+    def test_missing_answer_solver_refuses_unreadable_material(self):
+        from unittest.mock import patch
+        from personal_ai.question_answering import infer_missing_answers
+        class Solver:
+            enabled=True
+            provider='test'
+            model='test-solver'
+            def complete_json(self,system,user):
+                return {'answers':[dict(number=1,status='insufficient',answer='',explanation='圖片不清楚',context='')]}
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=Solver()):
+            with self.assertRaisesRegex(LLMError,'足夠可讀材料'):
+                infer_missing_answers([dict(_question_no=1,content='看圖',q_type='單選',option_A='甲',option_B='乙')],[],Path('test.txt'),{})
+
+    def test_background_and_question_are_not_split_without_answer(self):
+        class SplitModel:
+            max_input_bytes=16000
+            def complete_json(self,system,user):
+                return {'parts':[
+                    dict(s=0,e=0,field='content',new=True,type='單選'),
+                    dict(s=1,e=1,field='content',new=True,type='單選'),
+                    dict(s=2,e=2,field='A',new=False),
+                    dict(s=3,e=3,field='B',new=False),
+                    dict(s=4,e=4,field='answer',new=False)]}
+        rows=extract_layout('背景文章。\n請選出正確敘述。\n(A)甲\n(B)乙\n答案：A',SplitModel(),'測試')
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['content'],'背景文章。\n請選出正確敘述。')
+
     def test_numeric_options_are_not_question_numbers(self):
         from personal_ai.question_importer import _question_start
         self.assertIsNone(_question_start('(A)20 mL'))

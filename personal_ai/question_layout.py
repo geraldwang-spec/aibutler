@@ -97,8 +97,17 @@ def extract_layout(text, llm, chapter):
             batch.append(fragment)
             byte_count += cost
         context = (current or {}).get('content', '')[-240:]
-        payload = {'continuing_question_tail': context, 'fragments': dict(enumerate(batch))}
-        prompt = json.dumps(payload, ensure_ascii=False) + '\n回傳 {"parts":[{"s":0,"e":2,"field":"content","new":true,"type":"單選"}]}。s/e 是本批含首尾的片段編號。'
+        payload = {'continuing_question_tail': context,
+                   'continuing_question_has_answer': bool((current or {}).get('answer')),
+                   'fragments': dict(enumerate(batch))}
+        prompt = (json.dumps(payload, ensure_ascii=False) +
+                  '\n回傳 JSON 物件 parts 陣列，每項有 s/e/field/new/type。'
+                  's/e 是本批含首尾的片段編號，不是字數或題號。'
+                  f'本批共 {len(batch)} 個片段，必須完整覆蓋 0 到 {len(batch)-1}；最後一項 e 必須是 {len(batch)-1}。'
+                  '括號 A/B/C/D 開始的片段是選項；答案與解析標記後的片段分別是 answer 與 explanation。'
+                  '同一題跨批延續時 new=false。背景文章後的提問句也是同一題 content，不能另設 new=true。'
+                  '若 continuing_question_has_answer=false，不能只因出現提問句而開始新題。'
+                  'type 只能單選/多選/是非/填空或 null。不得因片段內容相似而省略任何編號。')
         data = llm.complete_json(system, prompt)
         runs = data.get('parts') if isinstance(data, dict) else None
         if not isinstance(runs, list) or not runs:
@@ -117,7 +126,14 @@ def extract_layout(text, llm, chapter):
             source = ''.join(batch[start:end+1])
             if field == 'ignore':
                 continue
-            if field == 'content' and (run.get('new') is True or current is None):
+            starts_new = run.get('new') is True
+            if starts_new and current is not None and not current['answer'].strip():
+                # Models often split a background passage from its final question.
+                # Only honor that split before an answer if an explicit question
+                # number exists; missing-answer numbered questions still fail.
+                from .question_importer import _question_start
+                starts_new = any(_question_start(line) is not None for line in source.splitlines())
+            if field == 'content' and (starts_new or current is None):
                 if current is not None:
                     output.append(current)
                 current = {'content':'', 'answer':'', 'explanation':'', 'type':run.get('type'),

@@ -11,7 +11,7 @@ def needs_ocr(text):
     broken = sum(ch == '\ufffd' or '\ue000' <= ch <= '\uf8ff' for ch in text)
     return broken / max(1, len(text)) > .15 or len(re.findall(r'\(cid:\d+\)', text)) >= 3
 
-def parse_file(path:Path):
+def parse_file(path:Path, include_pdf_images=False):
     ext=path.suffix.lower()
     if ext=='.pdf':
         try: import fitz
@@ -22,6 +22,7 @@ def parse_file(path:Path):
             if len(doc)>100: raise RuntimeError('每份 PDF 最多 100 頁，請拆分。')
             scanned=0
             for i,page in enumerate(doc,1):
+                image_context=[]
                 text=page.get_text('text').strip()
                 if needs_ocr(text):
                     scanned+=1
@@ -29,7 +30,25 @@ def parse_file(path:Path):
                     from .exam_modules import cpu
                     pixels=page.get_pixmap(matrix=fitz.Matrix(1.5,1.5),alpha=False)
                     text=cpu('ocr',image=base64.b64encode(pixels.tobytes('png')).decode('ascii'))
-                if text: sections.append({'locator':f'page:{i}','title':f'第 {i} 頁','text':text})
+                elif include_pdf_images and page.get_image_info():
+                    # Keep image OCR separate from numbered question text and
+                    # attach it to its explicitly labelled reading group.
+                    from .exam_modules import cpu
+                    last_range=None
+                    infos=sorted(page.get_image_info(),key=lambda x:(int((x['bbox'][0]+x['bbox'][2])/2>=page.rect.width/2),x['bbox'][1]))
+                    for info in infos:
+                        rect=fitz.Rect(info['bbox']) & page.rect
+                        if rect.width<35 or rect.height<25: continue
+                        scanned+=1
+                        if scanned>40: raise RuntimeError('每批最多 OCR 40 張圖片／掃描頁，請拆分。')
+                        pixels=page.get_pixmap(matrix=fitz.Matrix(2,2),clip=rect,alpha=False)
+                        image_text=cpu('ocr',image=base64.b64encode(pixels.tobytes('png')).decode('ascii'))
+                        # OCR list numbers/time values must never become exam
+                        # question numbers. Keep image text in separate metadata.
+                        group=re.search(r'[（(]\s*(\d+)\s*[-–~～至]\s*(\d+)\s*[)）]',image_text[:160])
+                        if group: last_range=(int(group[1]),int(group[2]))
+                        if image_text.strip(): image_context.append({'range':last_range,'text':image_text})
+                if text: sections.append({'locator':f'page:{i}','title':f'第 {i} 頁','text':text,'image_context':image_context})
         finally:
             doc.close()
         if not sections: raise RuntimeError('PDF 文字與 CPU OCR 均未取得文字，請檢查掃描品質。')

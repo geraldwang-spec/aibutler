@@ -787,6 +787,9 @@ def process_import_file(app,form,upload):
         if not 1<=item['difficulty']<=5:
             item['difficulty']=2
         item,_=validate_question(item,item)
+        if row.get('_answer_source')=='ai_inferred':
+            item['_answer_source']='ai_inferred'
+            item['_answer_model']=str(row.get('_answer_model') or '')[:120]
         clean.append(item)
 
     import_strategy=(form.get('import_strategy') or 'concept').strip().lower()
