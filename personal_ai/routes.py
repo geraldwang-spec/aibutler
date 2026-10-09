@@ -141,6 +141,7 @@ def concepts():
 @bp.route('/ai/status', methods=['GET','POST'])
 @login_required
 def ai_status():
+    from .exam_modules import installation_ready
     llm = get_llm(current_app.config)
     classifier = get_classifier_llm(current_app.config)
     generator = get_generator_llm(current_app.config)
@@ -196,7 +197,7 @@ def ai_status():
         tutor_fallback_model=current_app.config.get('TUTOR_FALLBACK_MODEL',''),
         groq_key_configured=bool(current_app.config.get('GROQ_API_KEY')),
         exam_modular_enabled=str(current_app.config.get('EXAM_MODULAR_AI','false')).lower()=='true',
-        exam_cpu_models_ready=all((Path(__file__).resolve().parents[1]/'models'/'exam'/name/'onnx'/'model.onnx').is_file() for name in ('embedding','nli')),
+        exam_cpu_models_ready=installation_ready(),
         voice_enabled=current_app.config.get('VOICE_ENABLED',False),
         stt_provider=current_app.config.get('STT_PROVIDER','faster_whisper'),
         stt_model=current_app.config.get('STT_MODEL','large-v3'),

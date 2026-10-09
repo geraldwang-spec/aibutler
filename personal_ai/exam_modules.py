@@ -21,6 +21,14 @@ def enabled(config):
     return str(config.get('EXAM_MODULAR_AI', os.getenv('EXAM_MODULAR_AI', 'false'))).lower() == 'true'
 
 
+def installation_ready():
+    python = Path(os.getenv('EXAM_CPU_PYTHON') or (ROOT / '.venv-exam-ai' / ('Scripts/python.exe' if os.name=='nt' else 'bin/python')))
+    return python.is_file() and all(
+        (ROOT/'models'/'exam'/name/'onnx'/filename).is_file()
+        and (ROOT/'models'/'exam'/name/'onnx'/filename).stat().st_size > 0
+        for name in ('embedding','nli') for filename in ('model.onnx','tokenizer.json','config.json'))
+
+
 def stop_worker():
     global _process
     if _process and _process.poll() is None:
@@ -51,7 +59,7 @@ def cpu(op, **payload):
             if not python.is_file():
                 raise ExamModuleError('尚未安裝考題 CPU 執行環境，請執行 tools/setup_exam_ai.ps1。')
             env = dict(os.environ, PYTHONUTF8='1', TOKENIZERS_PARALLELISM='false')
-            _process = subprocess.Popen([str(python), str(ROOT / 'tools' / 'exam_cpu_worker.py')],
+            _process = subprocess.Popen([str(python), '-X', 'utf8', str(ROOT / 'tools' / 'exam_cpu_worker.py')],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, encoding='utf-8', env=env,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

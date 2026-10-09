@@ -2,6 +2,14 @@ from __future__ import annotations
 from pathlib import Path
 import base64
 import zipfile
+import re
+
+
+def needs_ocr(text):
+    if len(text.strip()) < 40:
+        return True
+    broken = sum(ch == '\ufffd' or '\ue000' <= ch <= '\uf8ff' for ch in text)
+    return broken / max(1, len(text)) > .15 or len(re.findall(r'\(cid:\d+\)', text)) >= 3
 
 def parse_file(path:Path):
     ext=path.suffix.lower()
@@ -15,7 +23,7 @@ def parse_file(path:Path):
             scanned=0
             for i,page in enumerate(doc,1):
                 text=page.get_text('text').strip()
-                if len(text)<40:
+                if needs_ocr(text):
                     scanned+=1
                     if scanned>20: raise RuntimeError('每批最多 OCR 20 頁，請拆分掃描檔。')
                     from .exam_modules import cpu
@@ -33,16 +41,22 @@ def parse_file(path:Path):
         try: from docx import Document
         except ImportError as exc: raise RuntimeError('解析 Word 需要 python-docx。') from exc
         doc=Document(path); sections=[]; buf=[]; sec=1
-        for p in doc.paragraphs:
+        from docx.table import Table
+        table_no = 0
+        for p in doc.iter_inner_content():
+            if isinstance(p, Table):
+                if buf:
+                    sections.append({'locator':f'section:{sec}','title':buf[0][:80],'text':'\n'.join(buf)}); sec+=1; buf=[]
+                table_no += 1
+                rows=['\t'.join(cell.text for cell in row.cells) for row in p.rows]
+                sections.append(dict(locator=f'table:{table_no}',title=f'表格 {table_no}',text='\n'.join(rows)))
+                continue
             t=p.text.strip()
             if not t: continue
             if p.style and str(p.style.name).lower().startswith('heading') and buf:
                 sections.append({'locator':f'section:{sec}','title':buf[0][:80],'text':'\n'.join(buf)}); sec+=1; buf=[]
             buf.append(t)
         if buf: sections.append({'locator':f'section:{sec}','title':buf[0][:80],'text':'\n'.join(buf)})
-        for i,table in enumerate(doc.tables,1):
-            rows=['\t'.join(cell.text for cell in row.cells) for row in table.rows]
-            sections.append(dict(locator=f'table:{i}',title=f'表格 {i}',text='\n'.join(rows)))
         return sections
     if ext in ('.xlsx','.xlsm'):
         from openpyxl import load_workbook

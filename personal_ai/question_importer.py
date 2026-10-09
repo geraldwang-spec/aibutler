@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import base64
-import json
 import re
 from pathlib import Path
 
 from .llm_provider import LLMError, get_parser_llm
 from .parsers import parse_file
+from .question_layout import ANSWER_HEADING, ANSWER_LABEL, OPTION, answer_text, split_fields, extract_layout
 
 QUESTION_TYPES = {'單選', '多選', '是非', '填空'}
 
@@ -30,8 +30,11 @@ def _number(value: str):
 
 
 def _question_start(line: str):
-    s = line.strip()
+    s = re.sub(r'^\s*(?:#{1,6}\s*)?', '', line).strip().translate(str.maketrans('０１２３４５６７８９．', '0123456789.'))
     patterns = [
+        r'^(?:（\s*[A-D]?\s*）|\(\s+[A-D]?\s*\))\s*(\d{1,4})(?!\d)\s*[.、:：]?',
+        r'^(?:題目|問題|Question)\s*(\d{1,4})\s*[:：.、)]?',
+        r'^[（(]\s*(\d{1,4})\s*[）)]',
         r'^(?:Q\s*)?0*(\d{1,3})\s*(?:[\)\.、>:：]|\s+(?=(?:單選|多選|是非|填空)))',
         r'^【\s*0*(\d{1,3})\s*】',
         r'^第\s*([一二三四五六七八九十\d]+)\s*題',
@@ -44,8 +47,12 @@ def _question_start(line: str):
 
 
 def _strip_question_prefix(line: str):
-    s = line.strip()
+    s = re.sub(r'^\s*#{1,6}\s*', '', line).strip()
     for p in [
+        r'^(?:（\s*[A-D]?\s*）|\(\s+[A-D]?\s*\))\s*[0-9０-９]{1,4}(?![0-9０-９])\s*[.．、:：]?\s*',
+        r'^(?:題目|問題|Question)\s*[0-9０-９]{1,4}\s*[:：.．、)]?\s*',
+        r'^[（(]\s*[0-9０-９]{1,4}\s*[）)]\s*',
+        r'^[０-９]{1,4}\s*[．.、:：)]\s*',
         r'^(?:Q\s*)?0*\d{1,3}\s*(?:[\)\.、>:：]|\s{2,})\s*',
         r'^【\s*0*\d{1,3}\s*】\s*',
         r'^第\s*[一二三四五六七八九十\d]+\s*題\s*(?:[\/（(][^）)]*[）)]?)?\s*[:：]?\s*',
@@ -59,7 +66,7 @@ def _strip_question_prefix(line: str):
 def _answer_key(text: str):
     answers = {}
     explanations = {}
-    answer_section = re.split(r'(?im)^.*(?:答案區|Answer\s*Key)\b.*$', text, maxsplit=1)
+    answer_section = re.split(ANSWER_HEADING, text, maxsplit=1)
     if len(answer_section) < 2:
         return answers, explanations
     for raw in answer_section[1].splitlines():
@@ -125,28 +132,47 @@ def _guess_type(header_and_body: str, answer: str, options: dict):
         return '多選'
     if '是非' in text or answer in {'是', '否'} or re.search(r'(?i)True\s*/\s*False|正確\s*.*錯誤', text):
         return '是非'
-    if '填空' in text or '____' in text:
-        return '填空'
     if '單選' in text or options:
         return '單選'
+    if '填空' in text or '____' in text:
+        return '填空'
     return '填空'
 
 
 def extract_by_rules(sections, default_chapter: str):
     text = '\n'.join(sec.get('text', '') for sec in sections)
     answers, explanations = _answer_key(text)
-    question_text = re.split(r'(?im)^.*(?:答案區|Answer\s*Key)\b.*$', text, maxsplit=1)[0]
+    question_text = re.split(ANSWER_HEADING, text, maxsplit=1)[0]
+    # Unnumbered question/answer blocks are common in pasted worksheets.
+    if not any(_question_start(line) is not None for line in question_text.splitlines()):
+        candidates = re.split(r'\n\s*\n+', question_text.strip())
+        if candidates and all(re.search(ANSWER_LABEL+r'\s*[:：]|【'+ANSWER_LABEL+r'】', c, re.I) for c in candidates):
+            question_text = '\n'.join(f'{i}. {c}' for i,c in enumerate(candidates,1))
     lines = question_text.splitlines()
     blocks = []
     current = None
+    passage = []
+    passage_range = None
     for line in lines:
+        group = re.match(r'^\s*[（(【]?\s*(\d+)\s*[-–~～至]\s*(\d+)\s*[)）】]?\s*(?:題.*)?$', line)
+        if group:
+            if current:
+                blocks.append(current)
+                current = None
+            passage_range = (int(group[1]), int(group[2]))
+            passage = []
+            continue
         qn = _question_start(line)
         if qn is not None:
             if current:
                 blocks.append(current)
-            current = {'number': qn, 'lines': [_strip_question_prefix(line)]}
+            shared = list(passage) if passage_range and passage_range[0] <= qn <= passage_range[1] else []
+            current = {'number': qn, 'lines': [_strip_question_prefix(line)], 'passage': shared,
+                       'box_answer': (re.match(r'^\s*[（(]\s*([A-D])\s*[）)]',line) or [None,''])[1]}
         elif current:
             current['lines'].append(line)
+        elif passage_range:
+            passage.append(line)
     if current:
         blocks.append(current)
 
@@ -155,18 +181,20 @@ def extract_by_rules(sections, default_chapter: str):
         qn = block['number']
         body = '\n'.join(x for x in block['lines'] if x.strip()).strip()
         body = re.sub(r'(?im)^\s*(?:第[一二三四五六七八九十0-9]+頁|Page\s*\d+)(?:[^\n]*)$', '', body).strip()
-        ans = answers.get(qn, '')
+        ans = answers.get(qn, '') or block.get('box_answer','')
         # Editor-friendly format: each question can carry its own answer/explanation.
-        inline_answer = re.search(r'(?im)^\s*答案\s*[:：]\s*(.+)$', body)
-        inline_explanation = re.search(r'(?im)^\s*解析\s*[:：]\s*(.*)$', body)
+        options, stem, inline_answer, inline_note = split_fields(body)
+        if not options and len(list(OPTION.finditer(body))) >= 2:
+            # Ambiguous/repeated choices must not be misclassified as fill-in.
+            continue
         if not ans and inline_answer:
-            ans = inline_answer[1].strip().replace('，', ',')
-            if ans.lower() in ('true', 'false'):
-                ans = '是' if ans.lower() == 'true' else '否'
-        if inline_explanation:
-            explanations[qn] = inline_explanation[1].strip()
-        body = re.sub(r'(?im)^\s*(?:答案|解析)\s*[:：].*$', '', body).strip()
-        options, stem = _split_options(body)
+            ans = inline_answer
+        if inline_note:
+            explanations[qn] = inline_note
+        ans = answer_text(ans)
+        shared = '\n'.join(block.get('passage',[])).strip()
+        if shared:
+            stem = shared + ('\n\n' + stem if stem else '')
         qtype = _guess_type(body, ans, options)
 
         # Remove type-only headings left at the beginning.
@@ -226,33 +254,9 @@ def extract_with_llm(sections, default_chapter: str, config):
     if not llm.enabled or getattr(llm, 'provider', '') == 'mock':
         raise LLMError('目前沒有可用的真實 LLM 題庫解析器；DEV Mock 只測流程，不拿來判讀題庫。')
     source='\n'.join(section.get('text','') for section in sections)
-    answer_keys,answer_notes=_answer_key(source)
-    main=re.split(r'(?im)^.*(?:答案區|Answer\s*Key).*$',source,maxsplit=1)[0]
-    blocks=[];current=[];number=None
-    for line in main.splitlines():
-        found=_question_start(line)
-        if found is not None:
-            if current and number is not None: blocks.append((number,'\n'.join(current)))
-            current=[line];number=found
-        else: current.append(line)
-    if current: blocks.append((number,'\n'.join(current)))
-    if not blocks: raise LLMError('沒有可辨識的題目區塊。請加上題號後重試。')
-    result=[]
-    for number,block in blocks:
-        if not block.strip(): continue
-        if len(block.encode('utf-8'))>7000:
-            raise LLMError('單一題目區塊太長，請依題號拆分。尚未省略任何尾段內容。')
-        answer=answer_keys.get(number,'');note=answer_notes.get(number,'')
-        system='你是文件題庫解析器，只擷取本區塊的一道既有完整題目，禁止自行創作或補答案。使用繁體中文，短 JSON。'
-        prompt=f'預設章節：{default_chapter}\n題目區塊：\n{block}\n對應答案區：{answer}\n解析：{note}\n'
-        prompt+='回傳 {"questions":[{"chapter_name":"...","q_type":"單選|多選|是非|填空","content":"...","options":{"A":"...","B":"...","C":"...","D":"..."},"answer_key":"...","explanation":"文件有就保留，沒有則空字串","difficulty":2}]}。只回一題；沒有答案不得猜測。'
-        data=llm.complete_json(system,prompt)
-        raw=data.get('questions',[]) if isinstance(data,dict) else []
-        if len(raw)!=1: raise LLMError('模型未完整擷取此題，請在文字編輯區修正後重試。')
-        item=_normalize_llm_item(raw[0],default_chapter)
-        if not item: raise LLMError('題目擷取缺少內容或答案，已停止整批匯入。')
-        result.append(item)
-    return result
+    # Copy wording from source via bounded layout windows instead of asking the
+    # model to reproduce long questions under an 800-token output ceiling.
+    return extract_layout(source, llm, default_chapter)
 
 
 def extract_pdf_with_vision(path: Path, default_chapter: str, config):
@@ -301,20 +305,23 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
     by_rules = extract_by_rules(sections, default_chapter)
     is_pdf = path.suffix.lower() == '.pdf'
 
-    # When an answer key exists, use it as a completeness signal. A broken PDF
-    # text layer can leave question numbers/choices partly readable but merge
-    # multiple questions together. In that case partial rule results are unsafe.
+    # Never accept a partial parse just because it passed a percentage threshold.
     joined = '\n'.join(sec.get('text', '') for sec in sections)
     answer_count = len(_answer_key(joined)[0])
     rule_reliable = bool(by_rules)
-    if answer_count >= 3:
-        rule_reliable = len(by_rules) >= max(2, int(answer_count * 0.8 + 0.999))
+    main = re.split(ANSWER_HEADING, joined, maxsplit=1)[0]
+    numbered = {_question_start(line) for line in main.splitlines()} - {None}
+    expected = max(answer_count, len(numbered))
+    if expected:
+        rule_reliable = len(by_rules) == expected
 
     if mode == 'rules':
         if not rule_reliable:
             return [], '快速規則解析（完整度不足）'
         return by_rules, '快速規則解析'
 
+    if mode == 'llm' and rule_reliable:
+        return by_rules, 'AI 強化：原文格式完整，使用無損規則解析'
     if mode == 'llm':
         items = extract_with_llm(sections, default_chapter, config)
         if items:
@@ -322,7 +329,7 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
 
         return [], 'LLM 文字強化解析'
 
-    if rule_reliable and len(by_rules) >= 2:
+    if rule_reliable:
         return by_rules, '自動：快速規則解析'
     try:
         items = extract_with_llm(sections, default_chapter, config)

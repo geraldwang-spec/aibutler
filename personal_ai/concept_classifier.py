@@ -119,6 +119,9 @@ def classify_question_batch(items, subject_id, config):
     """
     concepts = _existing(subject_id)
     existing_ids = {int(c['id']) for c in concepts}
+    from .classification_context import prepare, mark_review
+    context_model = get_classifier_llm(config)
+    items = [prepare(item, context_model) for item in items]
     from .exam_modules import enabled, classify, specialist_heads
     if enabled(config):
         final = get_classifier_llm(config)
@@ -131,7 +134,7 @@ def classify_question_batch(items, subject_id, config):
             proposals = [classify(item, concepts, _heuristic(item)[0]) for item in batch]
             for item,proposal in zip(batch,proposals):
                 proposal['specialist_heads']=specialist_heads(item,subject_id)
-            payload = [dict(index=i, question=item.get('content','')[:700],
+            payload = [dict(index=i, question=item.get('content',''),
                             answer=item.get('answer_key'), chapter=item.get('chapter_name'),
                             proposal=proposal) for i,(item,proposal) in enumerate(zip(batch,proposals))]
             data = final.complete_json(
@@ -145,15 +148,17 @@ def classify_question_batch(items, subject_id, config):
                     raise LLMError('最終分類裁決未回傳全部題目，請減少匯入題數後重試。')
                 raw = mapped[i]
                 raw['reason'] = proposal['reason'] + (' 低信心，已交 LLM 裁決。' if proposal['needs_review'] else ' 已交 LLM 最終確認。')
-                output.append(_normalize_classification(raw,item,existing_ids))
+                normalized = _normalize_classification(raw,item,existing_ids)
+                output.append(mark_review(normalized) if item.get('_long_classification_context') else normalized)
         return output, 'CPU E5 + MiniLM NLI → ' + model_usage_label(final)
     classifier = get_classifier_llm(config)
     primary=getattr(classifier,'primary',classifier)
-    if getattr(primary,'provider','')=='groq' and len(items)>2:
+    batch_size = 1 if any(len(_question_text(item).encode('utf-8')) > 3000 for item in items) else 2
+    if getattr(primary,'provider','')=='groq' and len(items)>batch_size:
         output=[]
         label=model_usage_label(classifier)
-        for start in range(0,len(items),2):
-            batch,label=classify_question_batch(items[start:start+2],subject_id,config)
+        for start in range(0,len(items),batch_size):
+            batch,label=classify_question_batch(items[start:start+batch_size],subject_id,config)
             output.extend(batch)
         return output,label
     candidates = _embedding_candidates(items, concepts, config)
@@ -225,6 +230,9 @@ def classify_question_batch(items, subject_id, config):
                 'cognitive_level': 'understand', 'difficulty': int(item.get('difficulty') or 2),
                 'confidence': 0.35, 'reason': 'Classifier 未回傳此題，使用 fallback。'
             })
+    for item, classification in zip(items, out):
+        if item.get('_long_classification_context'):
+            mark_review(classification)
     return out, f"{model_usage_label(classifier)} 概念分類"
 
 

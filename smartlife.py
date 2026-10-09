@@ -776,7 +776,7 @@ def process_import_file(app,form,upload):
             item['chapter_name']=default_chapter
         if not item.get('content') or not item.get('answer_key'):
             raise ValueError(f'第 {i} 題缺少題目或答案。')
-        if len(item['chapter_name'])>120 or len(item['content'])>10000 or len(item['answer_key'])>50 or len(item.get('explanation',''))>10000:
+        if len(item['chapter_name'])>120 or len(item['content'])>20000 or len(item['answer_key'])>50 or len(item.get('explanation',''))>20000:
             raise ValueError(f'第 {i} 題文字過長。')
         if item.get('q_type') not in ('單選','多選','是非','填空'):
             raise ValueError(f'第 {i} 題題型無效：{item.get("q_type") or "未辨識"}。')
