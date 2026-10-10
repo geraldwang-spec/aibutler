@@ -15,7 +15,7 @@
   POST /body/api/weight               {d, weight_kg, body_fat_pct?, ex?}
   POST /body/api/workouts             {d, exercise_ids}    開始訓練（須先加好動作）
   POST /body/api/workouts/<id>/end    {}                   結束並儲存
-  POST /body/api/workouts/<id>/sets   {exercise_id, weight_kg, reps, rpe?}
+  POST /body/api/workouts/<id>/sets   {exercise_id, weight_kg, reps, rpe?}（有氧動作改送 duration_min, distance_km?）
   POST /body/api/sets/<id>/delete     {}                   取消完成
 所有 POST 需帶 X-CSRF-Token 標頭；回應一律為
   成功 {ok: true, message?, rest?, state}

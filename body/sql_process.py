@@ -78,14 +78,27 @@ class BodySqlProcess:
                               (self.user_id, day, weight_kg, body_fat_pct))
 
     # ------------------------------------------------------------ 分析用（一次查出整段期間，不在迴圈裡逐筆查）
+    # 重訓與有氧分開查：重訓的組數、部位、推拉比例、1RM 都不應該把跑步算進去
+    STRENGTH = 'COALESCE(e.is_cardio,0)=0'
+    CARDIO = 'COALESCE(e.is_cardio,0)<>0'
+
     def sets_between(self, start, end):
-        """期間內每一組，附上日期、動作名稱與部位。"""
+        """期間內每一組「重訓」，附上日期、動作名稱與部位（有氧用 cardio_between）。"""
         return [dict(r) for r in self.conn.execute(
             'SELECT w.workout_date AS workout_date, w.id AS workout_id, s.exercise_id AS exercise_id, '
             'e.exercise_name AS exercise_name, e.muscle_group AS muscle_group, s.set_no AS set_no, '
             's.weight_kg AS weight_kg, s.reps AS reps '
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
-            'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ? ORDER BY w.workout_date, w.id, s.id',
+            f'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ? AND {self.STRENGTH} ORDER BY w.workout_date, w.id, s.id',
+            (self.user_id, start, end))]
+
+    def cardio_between(self, start, end):
+        """期間內每一段有氧：時間（秒）與距離（km，沒填是 NULL）。"""
+        return [dict(r) for r in self.conn.execute(
+            'SELECT w.workout_date AS workout_date, w.id AS workout_id, s.exercise_id AS exercise_id, '
+            'e.exercise_name AS exercise_name, s.duration_sec AS duration_sec, s.distance_km AS distance_km '
+            'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
+            f'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ? AND {self.CARDIO} ORDER BY w.workout_date, w.id, s.id',
             (self.user_id, start, end))]
 
     def workouts_between(self, start, end):
@@ -99,11 +112,12 @@ class BodySqlProcess:
             'ORDER BY record_date', (self.user_id, start, end))]
 
     def last_trained_by_muscle(self, until):
-        """每個部位最後一次訓練的日期（到 until 為止），{部位: 日期}。"""
+        """每個部位最後一次「重訓」的日期（到 until 為止），{部位: 日期}；跑步不算練過腿。"""
         return {r['muscle_group']: r['last_date'] for r in self.conn.execute(
             'SELECT e.muscle_group AS muscle_group, MAX(w.workout_date) AS last_date '
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
-            'WHERE w.user_id=? AND w.workout_date<=? GROUP BY e.muscle_group', (self.user_id, until)) if r['muscle_group']}
+            f'WHERE w.user_id=? AND w.workout_date<=? AND {self.STRENGTH} GROUP BY e.muscle_group', (self.user_id, until))
+            if r['muscle_group']}
 
     # ------------------------------------------------------------ 個人資料與 AI 說明（ai_suggestions）
     def gender_and_birth(self):
@@ -207,7 +221,10 @@ class BodySqlProcess:
     def exercises(self):
         order = ' '.join(f"WHEN '{m}' THEN {i}" for i, m in enumerate(self.MUSCLE_ORDER))
         return self.conn.execute(
-            f'SELECT * FROM exercises WHERE created_by=? ORDER BY CASE muscle_group {order} ELSE 99 END, muscle_group, id',
+            # 重訓依部位排序；有氧排在最後，彼此照新增順序（不依部位，划船機才不會跑到跑步前面）
+            'SELECT * FROM exercises WHERE created_by=? ORDER BY COALESCE(is_cardio,0), '
+            f"CASE WHEN COALESCE(is_cardio,0)<>0 THEN 0 ELSE CASE muscle_group {order} ELSE 99 END END, "
+            "CASE WHEN COALESCE(is_cardio,0)<>0 THEN '' ELSE muscle_group END, id",
             (self.user_id,)).fetchall()
 
     def latest_sessions_before(self, day, since):
@@ -216,7 +233,7 @@ class BodySqlProcess:
         只看 since 之後的紀錄，避免資料多了以後整張表掃過一遍。
         """
         rows = self.conn.execute(
-            'SELECT s.exercise_id, s.set_no, s.weight_kg, s.reps, s.rpe, w.id AS workout_id '
+            'SELECT s.exercise_id, s.set_no, s.weight_kg, s.reps, s.duration_sec, s.distance_km, s.rpe, w.id AS workout_id '
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
             'WHERE w.user_id=? AND w.workout_date<? AND w.workout_date>=? '
             'ORDER BY w.workout_date DESC, w.id DESC, s.set_no, s.id', (self.user_id, day, since)).fetchall()
@@ -234,12 +251,13 @@ class BodySqlProcess:
         return self.conn.execute('SELECT MAX(id) FROM exercises WHERE created_by=? AND exercise_name=?',
                                  (self.user_id, name)).fetchone()[0]
 
-    def insert_default_exercises(self, exercises):
+    def insert_default_exercises(self, exercises, cardio=False):
         """動作庫是空的才一次寫入預設動作；已經有任何動作就什麼都不做。
 
         用單一 INSERT ... SELECT ... WHERE NOT EXISTS，同時開兩個分頁也不會重複寫入；
         預設動作用 UNION ALL 組成子查詢，SQLite 與 MariaDB 都能用。
         exercises: [(名稱, 部位, 器材, 是否有氧), ...]；回傳實際寫入的筆數。
+        cardio=True：改成「還沒有任何有氧動作」才寫入（讓已經有動作庫的舊帳號也能補到預設有氧動作）。
         """
         if not exercises:
             return 0
@@ -249,7 +267,7 @@ class BodySqlProcess:
         cursor = self.conn.execute(
             'INSERT INTO exercises (exercise_name, muscle_group, equipment, is_cardio, created_by) '
             f'SELECT d.exercise_name, d.muscle_group, d.equipment, d.is_cardio, ? FROM ({rows}) AS d '
-            'WHERE NOT EXISTS (SELECT 1 FROM exercises WHERE created_by=?)',
+            'WHERE NOT EXISTS (SELECT 1 FROM exercises WHERE created_by=?' + (' AND is_cardio<>0)' if cardio else ')'),
             (self.user_id, *params, self.user_id))
         return cursor.rowcount
 
@@ -283,7 +301,8 @@ class BodySqlProcess:
     def muscle_groups_by_date(self, start, end):
         groups = {}
         for r in self.conn.execute(
-                'SELECT DISTINCT w.workout_date, e.muscle_group FROM workout_sets s '
+                'SELECT DISTINCT w.workout_date, '
+                f"CASE WHEN {self.CARDIO} THEN '有氧' ELSE e.muscle_group END FROM workout_sets s "
                 'JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
                 'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ?', (self.user_id, start, end)):
             if r[1]:
@@ -336,10 +355,12 @@ class BodySqlProcess:
             'SELECT COALESCE(max(set_no),0)+1 FROM workout_sets WHERE workout_id=? AND exercise_id=?',
             (workout_id, exercise_id)).fetchone()[0]
 
-    def insert_set(self, workout_id, exercise_id, set_no, weight_kg, reps, rpe):
+    def insert_set(self, workout_id, exercise_id, set_no, weight_kg, reps, rpe, duration_sec=None, distance_km=None):
+        """重訓填 weight_kg/reps；有氧填 duration_sec，distance_km 選填（schema 原本就有這兩欄）。"""
         self.conn.execute(
-            'INSERT INTO workout_sets (workout_id,exercise_id,set_no,weight_kg,reps,rpe) VALUES (?,?,?,?,?,?)',
-            (workout_id, exercise_id, set_no, weight_kg, reps, rpe))
+            'INSERT INTO workout_sets (workout_id,exercise_id,set_no,weight_kg,reps,rpe,duration_sec,distance_km) '
+            'VALUES (?,?,?,?,?,?,?,?)',
+            (workout_id, exercise_id, set_no, weight_kg, reps, rpe, duration_sec, distance_km))
 
     def owned_set(self, set_id):
         """取得一組（含所屬訓練的日期），只限自己的資料。"""

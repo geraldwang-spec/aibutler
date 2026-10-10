@@ -109,7 +109,7 @@ class FakeSql:
     user_id = 0
 
     def exercises(self):
-        return [dict(id=e['id'], exercise_name=e['name']) for e in LIBRARY]
+        return [dict(id=e['id'], exercise_name=e['name'], is_cardio=0) for e in LIBRARY]   # 評估集只有重訓動作
 
     def exercise_usage(self, since):
         return {}

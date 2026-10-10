@@ -51,7 +51,7 @@ class AiReport:
                          metric='估計1RM(kg)' if p['metric'] == 'e1rm' else '單組最多次數',
                          value=p['value'], previous=p['prev_value'], change_pct=p['change_pct'])
                     for p in report['progress'][:8]]
-        return dict(
+        data = dict(
             period='週' if report['period'] == 'week' else '月',
             range=f"{report['start']}～{report['end']}",
             in_progress=report['in_progress'],
@@ -65,6 +65,16 @@ class AiReport:
             rule_findings=[f['text'] for f in report['findings']],
             profile={k: v for k, v in (profile or {}).items() if v not in (None, '')},
         )
+        # 有氧（分鐘、公里、次數）；兩期都沒有有氧就不放，沒做有氧的人雜湊值不變，已存的 AI 說明不會變成「過期」
+        # 距離只給「有填的加總」與「幾筆沒填」，讓 LLM 說明時知道公里數不是全部（不給逐筆清單，省 token）
+        cardio = report.get('cardio')
+        if cardio and (cardio['summary']['minutes'] or cardio['previous']['minutes']):
+            def brief(x):
+                return dict(sessions=x['sessions'], minutes=x['minutes'], records=x.get('records', 0),
+                            km_entered_total=x.get('km', 0), records_without_km=len(x.get('no_km') or []))
+            data['cardio'] = dict(this_period=brief(cardio['summary']), previous_period=brief(cardio['previous']),
+                                  change_minutes_pct=cardio['change_minutes'])
+        return data
 
     @property
     def has_data(self):

@@ -13,6 +13,11 @@
     workouts  [{id, workout_date, duration_min, ended_at}]
     metrics   [{record_date, weight_kg}]
     last_trained {部位: 'YYYY-MM-DD'}（查到 min(end, today) 為止）
+    cardio    [{workout_date, workout_id, exercise_id, exercise_name, duration_sec, distance_km}]（選填；距離沒填是 None）
+
+sets 只有重訓（sql_process 已排除 is_cardio 的動作），所以組數、訓練量、部位、推拉比例、1RM 都不含有氧；
+有氧另外算總時間、距離與次數（report['cardio']）。距離是選填：總距離只加總有填的，並列出哪幾筆沒填。
+只做有氧的那天仍算一次訓練。
 """
 from collections import defaultdict
 from datetime import date, timedelta
@@ -29,9 +34,11 @@ class TrainingAnalysis:
     PULL_WORDS = ('彎舉',)                              # 手臂裡算「拉」的動作
     PUSH_WORDS = ('下壓', '三頭', '窄握', '撐體')        # 手臂裡算「推」的動作
 
-    def __init__(self, period, start, end, today, sets, prev_sets, workouts, prev_workouts, metrics, last_trained):
+    def __init__(self, period, start, end, today, sets, prev_sets, workouts, prev_workouts, metrics, last_trained,
+                 cardio=(), prev_cardio=()):
         self.period, self.start, self.end, self.today = period, start, end, today
         self.sets, self.prev_sets = sets, prev_sets
+        self.cardio, self.prev_cardio = list(cardio), list(prev_cardio)
         self.workouts, self.prev_workouts = workouts, prev_workouts
         self.metrics, self.last_trained = metrics, last_trained
 
@@ -78,14 +85,29 @@ class TrainingAnalysis:
                 for m, v in result.items()}
 
     @classmethod
-    def sessions_summary(cls, workouts, sets):
-        """訓練次數、天數、總時長與平均時長（只算已結束且有時長的訓練）、總組數、總訓練量。"""
-        with_sets = {row['workout_id'] for row in sets}
+    def sessions_summary(cls, workouts, sets, cardio=()):
+        """訓練次數、天數、總時長與平均時長（只算已結束且有時長的訓練）、總組數、總訓練量。
+
+        sets 是重訓的組；cardio 只用來判斷「這次訓練有沒有紀錄」（只做有氧也算一次訓練）。
+        """
+        with_sets = {row['workout_id'] for row in sets} | {row['workout_id'] for row in cardio}
         done = [w for w in workouts if w['id'] in with_sets]
         timed = [int(w['duration_min'] or 0) for w in done if w['ended_at'] and (w['duration_min'] or 0) > 0]
         return dict(sessions=len(done), days=len({w['workout_date'] for w in done}),
                     total_minutes=sum(timed), avg_minutes=round(sum(timed) / len(timed)) if timed else None,
                     sets=len(sets), volume=round(sum(cls.volume(r) for r in sets), 1))
+
+    @staticmethod
+    def cardio_summary(rows):
+        """有氧：做了幾次（不同的訓練）、總分鐘數（四捨五入）、總距離。
+
+        距離是選填：km 只加總有填的那幾筆；no_km 列出沒填距離的紀錄（日期＋動作），
+        畫面與 AI 說明都要註明，避免把「部分加總」看成全部的距離。
+        """
+        seconds = sum(int(r['duration_sec'] or 0) for r in rows)
+        no_km = [dict(date=str(r['workout_date'])[:10], name=r['exercise_name']) for r in rows if not r.get('distance_km')]
+        return dict(sessions=len({r['workout_id'] for r in rows}), minutes=round(seconds / 60), records=len(rows),
+                    km=round(sum(float(r.get('distance_km') or 0) for r in rows), 1), no_km=no_km)
 
     @classmethod
     def arm_side(cls, name):
@@ -171,6 +193,17 @@ class TrainingAnalysis:
         if summary['sessions'] == 0:
             return [dict(level='info', text='這段期間還沒有訓練紀錄。')]
 
+        cardio = (report.get('cardio') or {}).get('summary') or {}
+        if cardio.get('minutes'):
+            missing = len(cardio.get('no_km') or [])
+            if not cardio.get('km'):
+                km = '（都沒有填距離）' if missing else ''
+            elif missing:
+                km = f"；有填距離的共 {cardio['km']:g} 公里（{cardio['records']} 筆中有 {missing} 筆沒填距離，未計入）"
+            else:
+                km = f"、{cardio['km']:g} 公里"
+            out.append(dict(level='good', text=f"有氧 {cardio['sessions']} 次，共 {cardio['minutes']} 分鐘{km}。"))
+
         if prev['sessions']:
             diff = summary['sessions'] - prev['sessions']
             if diff > 0:
@@ -225,8 +258,9 @@ class TrainingAnalysis:
         in_progress = start <= today <= end
         last_day = min(end, today) if in_progress else end
         weeks = 1 if self.period == 'week' else max(1, round((last_day - start).days / 7 + 0.5))
-        summary = self.sessions_summary(self.workouts, self.sets)
-        prev = self.sessions_summary(self.prev_workouts, self.prev_sets)
+        summary = self.sessions_summary(self.workouts, self.sets, self.cardio)
+        prev = self.sessions_summary(self.prev_workouts, self.prev_sets, self.prev_cardio)
+        cardio, prev_cardio = self.cardio_summary(self.cardio), self.cardio_summary(self.prev_cardio)
         report = dict(
             period=self.period, start=start.isoformat(), end=end.isoformat(), in_progress=in_progress, weeks=weeks,
             summary=summary, previous=prev,
@@ -234,6 +268,7 @@ class TrainingAnalysis:
             by_muscle=self.volume_by_muscle(self.sets), balance=self.balance(self.sets),
             progress=self.progress_by_exercise(self.sets, self.prev_sets),
             days_since=self.days_since_trained(self.last_trained, min(end, today)),   # 看過去的期間時，以期末為準
-            weight=self.weight_trend(self.metrics))
+            weight=self.weight_trend(self.metrics),
+            cardio=dict(summary=cardio, previous=prev_cardio, change_minutes=self.pct(cardio['minutes'], prev_cardio['minutes'])))
         report['findings'] = self.findings(report)
         return report

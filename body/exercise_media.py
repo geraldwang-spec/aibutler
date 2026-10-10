@@ -78,6 +78,15 @@ EXERCISE_MEDIA = {
     '俄羅斯轉體': 'Russian_Twist',
     '健腹輪': 'Ab_Roller',
     '纜繩捲腹': 'Cable_Crunch',
+    # 有氧（騎腳踏車的圖只有戴安全帽，看不出動作，所以不放）
+    '跑步': 'Trail_Running_Walking',
+    '跑步機': 'Running_Treadmill',
+    '健走': 'Walking_Treadmill',
+    '飛輪': 'Bicycling_Stationary',
+    '橢圓機': 'Elliptical_Trainer',
+    '划船機': 'Rowing_Stationary',
+    '跳繩': 'Rope_Jumping',
+    '爬梯機': 'Step_Mill',
 }
 
 VARIANT_NOTES = {
@@ -86,6 +95,8 @@ VARIANT_NOTES = {
     '低位划船機': '圖中為槓片式划船機；實際器械的握把與軌跡可能不同。',
     '啞鈴反向飛鳥': '圖中為坐姿俯身版本。',
     '仰臥抬腿': '圖中為平板凳版本。',
+    '健走': '圖中為跑步機上健走；戶外健走的姿勢相同。',
+    '跑步': '圖中為戶外越野跑。',
 }
 
 

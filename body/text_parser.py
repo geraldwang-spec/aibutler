@@ -26,13 +26,16 @@ class WorkoutTextParser:
     MAX_SETS = 20                # 每個動作最多幾組
     WEIGHT_RANGE = (0, 500)      # 解析時超過就標示「不合理」，使用者可自行修改
     REPS_RANGE = (1, 100)
+    MINUTES_RANGE = (1, 600)     # 有氧：一段最多 10 小時
+    KM_RANGE = (0, 300)
     MISSING_REPS = '沒有寫次數，加入後請在預計組數補上'
+    MISSING_MINUTES = '沒有寫時間，加入後請在預計組數補上分鐘數'
 
     # 中文數字
     _CN_DIGITS = {'零': 0, '〇': 0, '一': 1, '二': 2, '兩': 2, '两': 2, '三': 3, '四': 4,
                   '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
     _CN_NUM = '[零〇一二兩两三四五六七八九十百]+'
-    _UNITS = r'(?:公斤|kg|磅|lbs?|組|组|下|次|reps?)'
+    _UNITS = r'(?:公斤|kg|磅|lbs?|組|组|下|次|reps?|小時|分鐘|分|公里)'
 
     # 規則
     _RE_WEIGHT = re.compile(r'(\d+(?:\.\d+)?)\s*(公斤|kg|磅|lbs?)', re.I)
@@ -40,6 +43,10 @@ class WorkoutTextParser:
     _RE_SETS = re.compile(r'(\d+)\s*[組组]')
     _RE_REPS = re.compile(r'(\d+)\s*(?:下|次|reps?)', re.I)
     _RE_FIRST_NUM = re.compile(r'\d')
+    # 有氧：時間（必填）與距離（選填）；「公里」與「公斤」、「km」與「kg」分得開；5k 視為 5 公里
+    _RE_HOURS = re.compile(r'(\d+(?:\.\d+)?)\s*(?:個)?\s*(?:小時|hours?|hrs?)', re.I)
+    _RE_MINUTES = re.compile(r'(\d+(?:\.\d+)?)\s*(?:分鐘|分|minutes?|mins?)', re.I)
+    _RE_KM = re.compile(r'(\d+(?:\.\d+)?)\s*(?:公里|km|k(?![a-z]))', re.I)
     _SPLIT = re.compile(r'[,;。\n、]|然後|還有|接著')
     _FILLER = re.compile(r'^(?:今天|早上|晚上|下午|我|有|做了?|練了?|再|又|先|共|總共|另外|最後)+')
 
@@ -71,6 +78,7 @@ class WorkoutTextParser:
     def normalize(cls, text):
         """全形轉半形、中文數字（後面接單位時）轉阿拉伯數字、統一符號。"""
         text = text.translate(str.maketrans('０１２３４５６７８９．ｘＸ＊，；：', '0123456789.xx*,;:'))
+        text = re.sub(r'(?:一個)?半(?:個)?小時', '30分鐘', text)          # 慢跑半小時 → 30分鐘
 
         def convert(match):
             value = cls.cn_to_int(match.group(1))
@@ -93,6 +101,9 @@ class WorkoutTextParser:
         if not first:
             return None
         body = seg[first.start():]
+        cardio = cls.parse_cardio(body)
+        if cardio is not False:
+            return (name, *cardio) if cardio else None
 
         weight, unit = 0.0, 'kg'
         m = cls._RE_WEIGHT.search(body)
@@ -131,8 +142,42 @@ class WorkoutTextParser:
         return name, [dict(weight_kg=weight, reps=reps) for _ in range(min(sets, cls.MAX_SETS))], error
 
     @classmethod
+    def parse_cardio(cls, body):
+        """有氧寫法：「30 分鐘 5 公里」「1 小時 15 分」「半小時」「5k」；距離可以不寫。
+
+        回傳 False＝不是有氧寫法（交給重訓規則）；None＝像有氧但還有看不懂的數字；
+        否則回傳 ([一段], 錯誤訊息)。一段的格式：{weight_kg: None, reps: None, duration_min, distance_km}。
+        同一段裡出現組數、次數或公斤時，不當作有氧，避免把「3 組 1 分鐘」之類的寫法猜錯。
+        """
+        found = [m for rx in (cls._RE_HOURS, cls._RE_MINUTES, cls._RE_KM) for m in rx.finditer(body)]
+        if not found or cls._RE_WEIGHT.search(body) or cls._RE_SETS.search(body) or cls._RE_REPS.search(body):
+            return False
+        hours = sum(float(m.group(1)) for m in cls._RE_HOURS.finditer(body))
+        minutes = sum(float(m.group(1)) for m in cls._RE_MINUTES.finditer(body))
+        km = [float(m.group(1)) for m in cls._RE_KM.finditer(body)]
+        rest = body
+        for m in sorted(found, key=lambda x: -x.start()):
+            rest = rest[:m.start()] + ' ' + rest[m.end():]
+        if re.search(r'\d', rest) or len(km) > 1:     # 還有沒用到的數字 → 不要猜
+            return None
+        total = round(hours * 60 + minutes, 1) if hours or minutes else None   # 換算由程式負責
+        distance = round(km[0], 2) if km else None
+        error = None
+        if total is not None and not cls.MINUTES_RANGE[0] <= total <= cls.MINUTES_RANGE[1]:
+            error = f'時間 {total:g} 分鐘不合理'
+        elif distance is not None and not cls.KM_RANGE[0] < distance <= cls.KM_RANGE[1]:
+            error = f'距離 {distance:g} 公里不合理'
+        return [dict(weight_kg=None, reps=None, duration_min=total, distance_km=distance)], error
+
+    @staticmethod
+    def is_cardio_sets(sets):
+        return any('duration_min' in x for x in sets)
+
+    @classmethod
     def warning(cls, sets):
-        """有組數沒寫次數時的提醒（不影響加入，只是請使用者補）。"""
+        """有組數沒寫次數（重訓）或沒寫時間（有氧）時的提醒（不影響加入，只是請使用者補）。"""
+        if cls.is_cardio_sets(sets):
+            return cls.MISSING_MINUTES if any(x.get('duration_min') is None for x in sets) else None
         return cls.MISSING_REPS if any(x['reps'] is None for x in sets) else None
 
     # ------------------------------------------------------------------ 動作名稱比對
@@ -175,7 +220,7 @@ class WorkoutTextParser:
                 unparsed.append(seg)
                 continue
             name, sets, error = result
-            if not name and items:                          # 接續上一個動作
+            if not name and items and self.is_cardio_sets(items[-1]['sets']) == self.is_cardio_sets(sets):   # 接續上一個動作
                 last = items[-1]
                 last['sets'] = (last['sets'] + sets)[:self.MAX_SETS]
                 last['error'] = last['error'] or error
@@ -186,7 +231,8 @@ class WorkoutTextParser:
                 continue
             exercise_id, candidates = self.match(name)
             items.append(dict(input_text=name[:50], exercise_id=exercise_id, candidates=candidates,
-                              sets=sets, error=error, warning=self.warning(sets)))
+                              sets=sets, error=error, warning=self.warning(sets),
+                              kind='cardio' if self.is_cardio_sets(sets) else 'strength'))
             if len(items) >= self.MAX_ITEMS:
                 break
         return dict(items=items, unparsed=unparsed)
@@ -212,7 +258,8 @@ class WorkoutTextParser:
             sets, error = self._llm_sets(item.get('groups') or [])
             if sets or error:
                 items.append(dict(input_text=input_text, exercise_id=exercise_id, candidates=candidates,
-                                  sets=sets, error=error, warning=self.warning(sets)))
+                                  sets=sets, error=error, warning=self.warning(sets),
+                                  kind='cardio' if self.is_cardio_sets(sets) else 'strength'))
         unparsed = raw.get('unparsed')
         unparsed = [str(unparsed)[:200]] if isinstance(unparsed, str) and unparsed.strip() else \
             [str(u)[:200] for u in unparsed] if isinstance(unparsed, list) else []
@@ -222,6 +269,19 @@ class WorkoutTextParser:
         """把 LLM 的 groups 展開成每一組；看不懂或不合理的 group 丟掉並回傳錯誤訊息。"""
         sets, error = [], None
         for grp in groups[:self.MAX_SETS]:
+            if isinstance(grp, dict) and ({'minutes', 'hours', 'km'} & grp.keys()):   # 有氧：時間＋（選填）距離
+                try:
+                    minutes = float(grp.get('minutes') or 0) + float(grp.get('hours') or 0) * 60   # 小時換分鐘由程式負責
+                    km = round(float(grp['km']), 2) if grp.get('km') not in (None, '', 0) else None
+                except (TypeError, ValueError):
+                    error = '數值格式不正確'
+                    continue
+                if (minutes and not self.MINUTES_RANGE[0] <= minutes <= self.MINUTES_RANGE[1]) or (not minutes and km is None) \
+                        or (km is not None and not self.KM_RANGE[0] < km <= self.KM_RANGE[1]):
+                    error = '數值不合理，請檢查'
+                    continue
+                sets.append(dict(weight_kg=None, reps=None, duration_min=round(minutes, 1) if minutes else None, distance_km=km))
+                continue
             try:
                 weight = float(grp.get('weight') or 0)
                 raw_reps = grp.get('reps')
@@ -255,7 +315,7 @@ class ExerciseGuesser:
                         ('壺鈴', ('壺鈴',)), ('纜繩', ('纜繩', '滑輪', '繩索')), ('彈力帶', ('彈力帶', '彈力繩')),
                         ('機械', ('機械', '器械', '機', '推舉')), ('徒手', ('徒手', '伏地挺身', '引體', '捲腹', '棒式', '跳'))]
     _CARDIO_WORDS = ('跑', '慢跑', '騎', '飛輪', '單車', '腳踏車', '游泳', '跳繩', '橢圓', '划船機', '有氧',
-                     '走路', '健走', '爬樓梯')
+                     '走路', '健走', '爬樓梯', '爬梯')
 
     @classmethod
     def guess(cls, name):

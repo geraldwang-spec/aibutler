@@ -32,7 +32,7 @@ from .workout_plan import WorkoutPlan
 # 動作庫是空的時候預先放進去的常用動作：(名稱, 部位, 器材, 是否有氧)
 # 參考 BurnFit 的分類方式（依部位，再依器材：槓鈴／啞鈴／機械／纜繩／徒手…）整理。
 # 部位沿用 records.py「運動動作庫」的選項：胸、背、腿、肩、手臂、核心。
-# 這個頁面以「重量 × 次數」記錄，所以只放重訓動作；棒式、跑步等記時間／距離的動作沒有放。
+# 重訓以「重量 × 次數」記錄；有氧另外放在 DEFAULT_CARDIO，以「時間（必填）＋距離（選填）」記錄。
 DEFAULT_EXERCISES = [
     # 胸
     ('槓鈴臥推', '胸', '槓鈴', 0),
@@ -111,6 +111,22 @@ DEFAULT_EXERCISES = [
     ('俄羅斯轉體', '核心', '徒手', 0),
     ('健腹輪', '核心', '健腹輪', 0),
     ('纜繩捲腹', '核心', '纜繩', 0),
+]
+
+# 預設有氧動作（is_cardio=1）：時間必填；距離選填（不是每個人都有設備量距離），不計入「重量×次數」的訓練量。
+# 部位欄位沿用 6 個選項（主要用到的部位），只是讓「運動動作庫」頁面能編輯；
+# 分析、課表、週曆都依 is_cardio 判斷，跑步不會被算成練腿。
+# 分開成獨立清單：舊帳號的動作庫已經有重訓動作，也能補到這些（見 ensure_default_exercises）。
+DEFAULT_CARDIO = [
+    ('跑步', '腿', '徒手', 1),
+    ('跑步機', '腿', '跑步機', 1),
+    ('健走', '腿', '徒手', 1),
+    ('飛輪', '腿', '飛輪', 1),
+    ('騎腳踏車', '腿', '腳踏車', 1),
+    ('橢圓機', '腿', '橢圓機', 1),
+    ('划船機', '背', '划船機', 1),
+    ('跳繩', '腿', '跳繩', 1),
+    ('爬梯機', '腿', '爬梯機', 1),
 ]
 
 # 每個使用者每小時最多呼叫幾次 AI 解析（規則解析不受限制）
@@ -194,8 +210,13 @@ class BodyService:
 
     # ============================================================ 預設動作
     def ensure_default_exercises(self):
-        """使用者的動作庫是空的時候，先寫入預設動作，「加入動作」才有東西可以選。回傳寫入筆數。"""
+        """使用者的動作庫是空的時候，先寫入預設動作，「加入動作」才有東西可以選。回傳寫入筆數。
+
+        有氧動作另外判斷：動作庫裡還沒有任何有氧動作時才補上（已有動作庫的舊帳號也會補到）。
+        取捨：使用者把有氧動作全部刪掉後，下次打開頁面會再補回來；要停用請保留至少一個有氧動作。
+        """
         added = self.sql.insert_default_exercises(DEFAULT_EXERCISES)
+        added += self.sql.insert_default_exercises(DEFAULT_CARDIO, cardio=True)
         if added:
             self.sql.commit()
         return added
@@ -242,12 +263,22 @@ class BodyService:
         since = (day - timedelta(days=180)).isoformat()
         sessions = self.sql.latest_sessions_before(day.isoformat(), since)
         return [dict(id=r['id'], name=r['exercise_name'], muscle_group=r['muscle_group'], equipment=r['equipment'],
-                     last=[dict(set_no=x['set_no'], weight_kg=x['weight_kg'], reps=x['reps']) for x in sessions.get(r['id'], [])])
+                     is_cardio=bool(r['is_cardio']),
+                     last=[dict(set_no=x['set_no'], **self._pair(x)) for x in sessions.get(r['id'], [])])
                 for r in self.sql.exercises()]
 
     @staticmethod
     def _pair(row):
-        return dict(weight_kg=row['weight_kg'], reps=row['reps']) if row else None
+        """一組的成績：重訓看 weight_kg/reps，有氧看 duration_sec/distance_km（另一邊是 None；距離沒填也是 None）。"""
+        if not row:
+            return None
+        return dict(weight_kg=row['weight_kg'], reps=row['reps'],
+                    duration_sec=row['duration_sec'], distance_km=row['distance_km'])
+
+    @staticmethod
+    def _group(info):
+        """畫面上顯示的部位：有氧動作顯示「有氧」，不顯示成腿或背。"""
+        return '有氧' if info.get('is_cardio') else info['muscle_group']
 
     @staticmethod
     def _volume(sets):
@@ -270,32 +301,41 @@ class BodyService:
 
         exercises, groups, current = [], [], None
         for ex_id in order:
-            info = lib.get(ex_id, dict(id=ex_id, name=f'動作 #{ex_id}', muscle_group=None, equipment=None))
+            info = lib.get(ex_id, dict(id=ex_id, name=f'動作 #{ex_id}', muscle_group=None, equipment=None, is_cardio=False))
             mine = [s for s in sets if s['exercise_id'] == ex_id]
-            if mine and info['muscle_group'] and info['muscle_group'] not in groups:
-                groups.append(info['muscle_group'])
-            exercises.append(dict({k: v for k, v in info.items() if k != 'last'}, done=len(mine), volume=self._volume(mine)))
+            if mine and self._group(info) and self._group(info) not in groups:
+                groups.append(self._group(info))
+            exercises.append(dict({k: v for k, v in info.items() if k != 'last'}, done=len(mine), volume=self._volume(mine),
+                                  cardio_sec=sum(s['duration_sec'] or 0 for s in mine)))
             if ex_id == current_id:
                 current = self._current(info, mine, row)
 
         workout = dict(id=row['id'], started_at=row['started_at'], ended_at=row['ended_at'],
                        in_progress=row['ended_at'] is None, duration_min=row['duration_min'] or 0,
-                       volume=self._volume(sets), set_count=len(sets), groups=groups, exercises=exercises)
+                       volume=self._volume(sets), set_count=len(sets), groups=groups, exercises=exercises,
+                       cardio_sec=sum(s['duration_sec'] or 0 for s in sets),
+                       cardio_km=round(sum(s['distance_km'] or 0 for s in sets), 2),
+                       # 沒填距離的有氧筆數：畫面要註明公里數只是部分加總
+                       cardio_no_km=sum(1 for s in sets if s['duration_sec'] and not s['distance_km']))
         return workout, current
 
     def _current(self, info, mine, workout_row):
         """目前正在記錄的動作：已完成的各組、上一次的成績、下一組預填值。"""
         prev = self.sql.previous_session_sets(info['id'], workout_row)
-        best = max(prev.values(), key=lambda r: ((r['weight_kg'] or 0), (r['reps'] or 0)), default=None)
+        cardio = bool(info.get('is_cardio'))
+        # 上次最佳：重訓比重量再比次數；有氧只比時間（距離不一定有填，用它比較不公平）
+        rank = (lambda r: (r['duration_sec'] or 0,)) if cardio else \
+            (lambda r: ((r['weight_kg'] or 0), (r['reps'] or 0)))
+        best = max(prev.values(), key=rank, default=None)
         next_no = (mine[-1]['set_no'] if mine else 0) + 1
         seed = mine[-1] if mine else prev.get(next_no)   # 下一組先填剛做的那組；第一組填上次同一組
         return dict(
-            exercise_id=info['id'], name=info['name'], muscle_group=info['muscle_group'], equipment=info['equipment'],
-            best=self._pair(best),
-            sets=[dict(id=s['id'], set_no=s['set_no'], weight_kg=s['weight_kg'], reps=s['reps'], rpe=s['rpe'],
-                       last=self._pair(prev.get(s['set_no']))) for s in mine],
+            exercise_id=info['id'], name=info['name'], muscle_group=self._group(info), equipment=info['equipment'],
+            is_cardio=cardio, best=self._pair(best),
+            sets=[dict(id=s['id'], set_no=s['set_no'], rpe=s['rpe'], last=self._pair(prev.get(s['set_no'])), **self._pair(s))
+                  for s in mine],
             next=dict(set_no=next_no, last=self._pair(prev.get(next_no)),
-                      weight_kg=seed['weight_kg'] if seed else None, reps=seed['reps'] if seed else None))
+                      **(self._pair(seed) or dict(weight_kg=None, reps=None, duration_sec=None, distance_km=None))))
 
     # ============================================================ 一句話輸入（只產生草稿，不寫資料庫）
     def parse_text(self, data):
@@ -308,7 +348,7 @@ class BodyService:
             raise ApiError('請輸入今天的訓練內容。')
         if len(text) > WorkoutTextParser.MAX_TEXT:
             raise ApiError(f'內容太長，請在 {WorkoutTextParser.MAX_TEXT} 字以內。')
-        library = [dict(id=r['id'], name=r['exercise_name']) for r in self.sql.exercises()]
+        library = [dict(id=r['id'], name=r['exercise_name'], is_cardio=bool(r['is_cardio'])) for r in self.sql.exercises()]
         if not library:
             raise ApiError('動作庫是空的，請先新增動作。')
         usage = self.sql.exercise_usage((self.today - timedelta(days=90)).isoformat())
@@ -340,9 +380,16 @@ class BodyService:
             note = '有部分內容需要 AI 解析，目前尚未啟用；請改用「動作 重量 組數 次數」的寫法。'
 
         names = {e['id']: e['name'] for e in library}
+        cardio_ids = {e['id'] for e in library if e['is_cardio']}
         for item in result['items']:
+            is_cardio = item.get('kind') == 'cardio'
             if item['exercise_id'] is None:
                 item['suggest'] = ExerciseGuesser.guess(item['input_text'])   # 新增動作時的預填值
+                item['suggest']['is_cardio'] = item['suggest']['is_cardio'] or is_cardio   # 寫了時間就預設是有氧
+            elif (item['exercise_id'] in cardio_ids) != is_cardio and item['sets'] and not item['error']:
+                # 例如把「跳繩 3 組 100 下」對到有氧動作：記錄方式不同，數字不會套用，請使用者確認
+                item['warning'] = ('這是有氧動作，請改寫時間（例如 30 分鐘，距離可加可不加）' if not is_cardio
+                                   else '這是重訓動作，時間與距離不會套用，請改選有氧動作或改寫重量與次數')
             item['name'] = names.get(item['exercise_id'])
             item['candidates'] = [dict(id=c, name=names[c]) for c in item['candidates'] if c in names]
         return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note, usage=llm_usage)
@@ -359,7 +406,8 @@ class BodyService:
             period, start, end, self.today,
             sets=self.sql.sets_between(s, e), prev_sets=self.sql.sets_between(ps, pe),
             workouts=self.sql.workouts_between(s, e), prev_workouts=self.sql.workouts_between(ps, pe),
-            metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference)).build()
+            metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference),
+            cardio=self.sql.cardio_between(s, e), prev_cardio=self.sql.cardio_between(ps, pe)).build()
 
     # ============================================================ AI 分析說明（數字由程式算，LLM 只負責說明）
     def _ai_report(self, period, anchor, with_passages=False):
@@ -689,17 +737,28 @@ class BodyService:
         return self._result(day, message='訓練已結束並儲存。')
 
     def add_set(self, workout_id, data):
+        """完成一組。動作是不是有氧由資料庫的 is_cardio 決定（不信任前端送來的欄位）：
+        重訓必填重量與次數；有氧必填時間（分鐘），距離選填，存成 duration_sec／distance_km（沒填就是 NULL）。"""
         workout = self._owned_workout(workout_id)
         exercise = self._owned_exercise(Validator.identifier(data.get('exercise_id')))
-        weight = Validator.number(data, 'weight_kg', '重量', 0, 1000)
-        reps = Validator.number(data, 'reps', '次數', 1, 10000, integer=True)
         rpe = Validator.number(data, 'rpe', 'RPE', 1, 10, required=False, integer=True)
+        cardio = bool(exercise['is_cardio'])
+        if cardio:
+            duration_sec = round(Validator.number(data, 'duration_min', '時間（分鐘）', 1, 600) * 60)
+            distance = Validator.number(data, 'distance_km', '距離（公里）', 0, 300, required=False)
+            distance = round(distance, 2) if distance else None        # 0 或沒填 → NULL（「沒填」，不是跑了 0 公里）
+            weight = reps = None
+        else:
+            weight = Validator.number(data, 'weight_kg', '重量', 0, 1000)
+            reps = Validator.number(data, 'reps', '次數', 1, 10000, integer=True)
+            duration_sec = distance = None
         set_no = self.sql.next_set_no(workout_id, exercise['id'])
-        self.sql.insert_set(workout_id, exercise['id'], set_no, weight, reps, rpe)
+        self.sql.insert_set(workout_id, exercise['id'], set_no, weight, reps, rpe, duration_sec, distance)
         self.sql.refresh_stats()
         self.sql.commit()
+        # 有氧做完通常不需要組間休息計時
         return self._result(date.fromisoformat(workout['workout_date']), exercise['id'],
-                            rest=workout['ended_at'] is None)
+                            rest=workout['ended_at'] is None and not cardio)
 
     def delete_set(self, set_id):
         row = self.sql.owned_set(set_id)
