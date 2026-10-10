@@ -160,6 +160,77 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(db().execute('SELECT COUNT(*) FROM import_items WHERE import_id=?',(batch,)).fetchone()[0],43)
         self.assertEqual(checkpoints.snapshot(self.app,'old',1)['completed'],43)
 
+    def test_insufficient_question_does_not_block_later_answers_and_resume(self):
+        items=[dict(_question_no=i,content='題目',q_type='單選',answer_key='',option_A='甲',option_B='乙') for i in range(1,10)]
+        class Solver:
+            enabled=True
+            provider='test'
+            model='test'
+            fail=True
+            seen=[]
+            def complete_json(self,s,u):
+                payload=json.loads(u.split('\n回傳 ')[0])
+                self.seen.extend(x['number'] for x in payload)
+                return {'answers':[dict(number=x['number'],status='insufficient' if self.fail and x['number']==2 else 'answered',answer='' if self.fail and x['number']==2 else 'B',explanation='理由',context='') for x in payload]}
+        solver=Solver()
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=solver):
+            usable=infer_missing_answers(items,[],Path('book.txt'),{})
+            self.assertEqual(len(usable),8)
+            progress=checkpoints.snapshot(self.app,'old',1)
+            self.assertEqual(progress['completed'],8)
+            self.assertEqual(solver.seen,list(range(1,10)))
+            self.assertEqual(progress['answer_failures'][0]['number'],2)
+            solver.fail=False
+            solver.seen=[]
+            result=infer_missing_answers(items,[],Path('book.txt'),{})
+        self.assertEqual(solver.seen,[2])
+        self.assertEqual(len(result),9)
+        self.assertEqual(checkpoints.snapshot(self.app,'old',1)['answer_failures'],[])
+
+    def test_partial_answers_continue_to_classification_and_completed_preview(self):
+        db().execute("INSERT INTO subjects(id,subject_name,created_by) VALUES(1,'測試',1)")
+        db().commit()
+        folder=Path(self.app.instance_path)/'job_uploads'
+        folder.mkdir()
+        source=folder/'partial.txt'
+        source.write_text('測試文件',encoding='utf-8')
+        items=[dict(_question_no=i,chapter_name='測試',content='題目',q_type='單選',answer_key='',option_A='甲',option_B='乙',difficulty=2) for i in range(1,6)]
+        class Solver:
+            enabled=True
+            provider='test'
+            model='test'
+            def complete_json(self,s,u):
+                payload=json.loads(u.split('\n回傳 ')[0])
+                return {'answers':[dict(number=x['number'],status='insufficient' if x['number']==2 else 'answered',answer='' if x['number']==2 else 'B',explanation='理由',context='') for x in payload]}
+        def extract(*args):
+            return infer_missing_answers(items,[],Path('book.txt'),{}),'測試解析'
+        def classify(rows,*args):
+            self.assertEqual([x['_question_no'] for x in rows],[1,3,4,5])
+            return [dict(concept_id=None,concept_name='概念',concept_description='',skill='理解',cognitive_level='understand',difficulty=2,confidence=.8,reason='test') for _ in rows],'測試分類'
+        jobs.update(self.app,'old',payload=json.dumps(dict(path=str(source),filename='partial.txt',form=[('subject_id','1'),('import_strategy','concept')])))
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=Solver()),patch('personal_ai.question_importer.extract_questions',side_effect=extract),patch('personal_ai.concept_classifier.classify_question_batch',side_effect=classify) as classifier:
+            jobs.run(self.app,'old',1)
+        row=jobs.read(self.app,'old',1)
+        self.assertEqual(row['status'],'completed',row['error'])
+        classifier.assert_called_once()
+        self.assertEqual(db().execute('SELECT COUNT(*) FROM import_items').fetchone()[0],4)
+        progress=checkpoints.snapshot(self.app,'old',1)
+        self.assertEqual((progress['completed'],progress['total'],progress['remaining']),(4,5,1))
+        self.assertEqual(progress['answer_failures'][0]['number'],2)
+        client=self.app.test_client()
+        with client.session_transaction() as session: session['user_id']=1
+        batch=db().execute('SELECT id FROM exam_imports').fetchone()[0]
+        self.assertIn('待補資料題號：2',client.get(f'/imports/{batch}',headers={'Sec-Fetch-Dest':'iframe'}).get_data(as_text=True))
+
+    def test_insufficient_groq_response_is_not_reused_forever(self):
+        model=GroqLLM('test-model','test-key')
+        insufficient={'choices':[{'message':{'content':'{"answers":[{"number":2,"status":"insufficient","answer":""}]}'}}]}
+        answered={'choices':[{'message':{'content':'{"answers":[{"number":2,"status":"answered","answer":"B"}]}'}}]}
+        with patch.object(OpenAICompatibleLLM,'_request',side_effect=[insufficient,answered]) as remote:
+            model.complete_json('JSON','retry')
+            self.assertEqual(model.complete_json('JSON','retry')['answers'][0]['answer'],'B')
+        self.assertEqual(remote.call_count,2)
+
     def test_download_and_preview_owner_only(self):
         checkpoints.put('questions',[dict(content='完成題',answer_key='B',q_type='單選',explanation='AI 推定')])
         checkpoints.put('total',2)

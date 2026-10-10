@@ -814,7 +814,7 @@ def process_import_file(app,form,upload):
         import_strategy='concept'
     classifier_name='未使用'
     from personal_ai import import_checkpoints as checkpoints
-    checkpoints.put('total',len(clean))
+    checkpoints.put('total',max(len(clean),checkpoints.get('total',0)))
     checkpoints.put('questions',clean)
     checkpoints.put('stage','題目與答案已完成，準備概念分類' if import_strategy=='concept' else '準備建立匯入預覽')
     if import_strategy=='concept':
@@ -825,16 +825,18 @@ def process_import_file(app,form,upload):
         for item in clean:
             item['_import_strategy']='question_bank'
 
+    failures=checkpoints.get('answer_failures',[])
+    warning=('；待補資料題號：'+ '、'.join(str(x['number']) for x in failures)) if failures else ''
     batch=insert('exam_imports',dict(
         user_id=g.user['id'],subject_id=subject_id,
         file_name=Path(upload.filename).name[:255],file_path=str(path),
         file_type=suffix[1:],status='待確認',total_rows=len(clean),
-        error_log=f'解析器：{parser_name}；概念分類：{classifier_name}'[:1000]))
+        error_log=(f'解析器：{parser_name}；概念分類：{classifier_name}'+warning)[:1000]))
     for item in clean:
         encoded=json.dumps(item,ensure_ascii=False)
         insert('import_items',dict(import_id=batch,raw_content=encoded,parsed_json=encoded))
     checkpoints.put('final_batch_id',batch)
     db().commit()
     checkpoints.put('questions',clean)
-    checkpoints.put('stage','完整預覽已建立')
+    checkpoints.put('stage',f'已完成 {len(clean)} 題分析與預覽；{len(failures)} 題待補資料' if failures else '完整預覽已建立')
     return batch

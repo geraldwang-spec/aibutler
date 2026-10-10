@@ -6,6 +6,7 @@
 <p class="notice info"><strong>傳統題庫匯入：</strong>確認後原題會直接加入正式題庫。</p>
 {% endif %}
 <p class="notice info">{{ batch.file_name }} · {{ batch.status }} · {{ items|length }} 題。請確認題目、答案與概念歸類。</p>
+{% if batch.error_log and '待補資料題號' in batch.error_log %}<p class="notice info">{{ batch.error_log }}。待補題目未加入本次預覽，不影響其餘題目的分析與確認匯入；補齊資料後可另外匯入。</p>{% endif %}
 {% for item in items %}
 <article class="panel-card">
   <h2>{{ loop.index }}. {{ item.chapter_name }} · {{ item.q_type }}</h2>

@@ -36,6 +36,11 @@ def infer_missing_answers(items, sections, path, config):
     items=[saved.get(x.get('_question_no'),x) if not x.get('answer_key') else x for x in items]
     checkpoints.put('questions',[x for x in items if x.get('answer_key')])
     checkpoints.put('stage','分批推定答案')
+    failures=[]
+    checkpoints.put('answer_failures',failures)
+    def defer(item,reason):
+        failures.append(dict(number=item.get('_question_no'),reason=reason))
+        checkpoints.put('answer_failures',failures)
     pdf = path.suffix.lower()=='.pdf'
     text_model=get_parser_llm(config)
     vision_model=get_vision_llm(config) if pdf else None
@@ -67,7 +72,8 @@ def infer_missing_answers(items, sections, path, config):
             model=vision_model if use_vision else text_model
             page_index=page_by_number.get(first.get('_question_no')) if pdf else None
             if pdf and page_index is None:
-                raise LLMError('題號無法對應原始 PDF 頁面，已停止推定答案。')
+                defer(pending.pop(0),'題號無法對應原始 PDF 頁面，請補充文字或圖片。')
+                continue
             batch=[]
             while pending and len(batch)<batch_limit:
                 item=pending[0]
@@ -113,25 +119,30 @@ def infer_missing_answers(items, sections, path, config):
                     pending=batch+pending
                     batch_limit=max(1,len(batch)//2)
                     continue
-                raise LLMError('模型解題結果不完整，已停止匯入。')
+                defer(batch[0],'模型解題結果不完整，需重新辨識。')
+                continue
             if {x.get('number') for x in answers}!=expected:
                 if len(batch)>1:
                     pending=batch+pending
                     batch_limit=max(1,len(batch)//2)
                     continue
-                raise LLMError('模型解題題號漏掉或重複，已停止匯入。')
+                defer(batch[0],'模型解題題號漏掉或重複，需重新辨識。')
+                continue
             mapped={x['number']:x for x in answers}
             for item,target in zip(batch,payload):
                 answer=mapped[target['number']]
                 key=answer_text(answer.get('answer',''))
                 if answer.get('status')!='answered' or not key:
-                    raise LLMError(f'第 {target["number"]} 題缺少足夠可讀材料，模型未產生答案；請補充圖片／文字。')
+                    defer(item,'缺少足夠可讀材料，請補充圖片／文字。')
+                    continue
                 if item['q_type'] in ('單選','多選') and any(k not in 'ABCD' or not item.get('option_'+k) for k in key.split(',')):
-                    raise LLMError('模型答案與原文選項不符，已停止匯入。')
+                    defer(item,'模型答案與原文選項不符，需重新核對。')
+                    continue
                 note=answer.get('explanation')
                 context=answer.get('context','')
                 if not isinstance(note,str) or not note.strip() or len(note)>1000 or not isinstance(context,str) or len(context)>1500:
-                    raise LLMError('模型解析／題組補充格式不完整。')
+                    defer(item,'模型解析／題組補充格式不完整，需重新辨識。')
+                    continue
                 copied=dict(item,answer_key=key,explanation=AI_PREFIX+'\n'+note.strip(),
                             _answer_source='ai_inferred',_answer_model=model.model)
                 if context.strip():
@@ -140,6 +151,15 @@ def infer_missing_answers(items, sections, path, config):
                 completed={x.get('_question_no'):x for x in items if x.get('answer_key')}
                 completed.update({x['_question_no']:x for x in result})
                 checkpoints.put('questions',[completed[x['_question_no']] for x in items if x['_question_no'] in completed])
+        if failures:
+            checkpoints.put('stage','其他題目已處理，部分題目待補資料／重試')
+            inferred={x['_question_no']:x for x in result}
+            completed=[inferred.get(x.get('_question_no'),x) for x in items
+                       if x.get('answer_key') or x.get('_question_no') in inferred]
+            # Missing evidence is an item-level warning, not a failed pipeline.
+            if completed:
+                return completed
+            raise LLMError(f'所有題目都待補資料，尚無可分析的完整題目。{failures[0]["reason"]}')
         inferred={x['_question_no']:x for x in result}
         return [inferred.get(x.get('_question_no'),x) for x in items]
     finally:

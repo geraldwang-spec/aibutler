@@ -182,7 +182,9 @@ def dispatch(app,user_id,kind,p):
         with path.open('rb') as f:
             batch=process_import_file(app,MultiDict(p['form']),FileStorage(f,filename=p['filename']))
         path.unlink(missing_ok=True)
-        return dict(message='解析已完成，請確認',url=f'/imports/{batch}')
+        missing=get('answer_failures',[])
+        message=f'可用題目分析已完成（{len(missing)} 題待補資料），請確認' if missing else '解析已完成，請確認'
+        return dict(message=message,url=f'/imports/{batch}')
     if kind=='classify_fixed':
         from .concept_admin import classify_fixed
         count=classify_fixed(user_id,p['subject_id'],app.config)

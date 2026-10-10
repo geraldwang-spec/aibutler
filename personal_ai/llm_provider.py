@@ -308,12 +308,25 @@ class GroqLLM(OpenAICompatibleLLM):
             time.sleep(1)
         return True
 
+    def _cacheable_response(self,data):
+        choice=(data.get('choices') or [{}])[0]
+        if choice.get('finish_reason')=='length': return False
+        try:
+            parsed=self._parse_json_text(choice.get('message',{}).get('content',''))
+        except LLMError:
+            return False
+        if isinstance(parsed,dict) and 'answers' in parsed:
+            answers=parsed['answers']
+            return (isinstance(answers,list) and bool(answers) and
+                    all(isinstance(a,dict) and a.get('status')=='answered' and a.get('answer') for a in answers))
+        return True
+
     def _request(self, messages, temperature=0.2):
         # UTF-8 bytes are a conservative bound, not an exact tokenizer count.
         from . import import_checkpoints as checkpoints
         cache_key='llm:'+checkpoints.fingerprint([self.base_url,self.model,self._request_options(),messages,temperature])
         cached=checkpoints.get(cache_key)
-        if cached is not None:
+        if cached is not None and self._cacheable_response(cached):
             # Reusing a response does not count as another billed API call.
             from .jobs import active_job, read
             job=active_job.get()
@@ -360,14 +373,8 @@ class GroqLLM(OpenAICompatibleLLM):
                 usage(data,self.model,time.monotonic()-started)
             except OSError:
                 pass
-            choice=(data.get('choices') or [{}])[0]
-            if choice.get('finish_reason')!='length':
-                try:
-                    self._parse_json_text(choice.get('message',{}).get('content',''))
-                except LLMError:
-                    pass
-                else:
-                    checkpoints.put(cache_key,data)
+            if self._cacheable_response(data):
+                checkpoints.put(cache_key,data)
             return data
         except LLMError as exc:
             if exc.status_code in (502,503,504,520):
