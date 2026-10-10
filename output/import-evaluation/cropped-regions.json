@@ -1,0 +1,252 @@
+{
+  "corpus": [
+    {
+      "name": "chinese",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-00-C.pdf",
+      "expected": 50,
+      "parsed": 50,
+      "source_numbers": 50,
+      "repair_units": [],
+      "error": null
+    },
+    {
+      "name": "english",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-00-E.pdf",
+      "expected": 50,
+      "parsed": 50,
+      "source_numbers": 50,
+      "repair_units": [],
+      "error": null
+    },
+    {
+      "name": "math",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-08-1.pdf",
+      "expected": 20,
+      "parsed": 20,
+      "source_numbers": 20,
+      "repair_units": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          6
+        ],
+        [
+          7
+        ],
+        [
+          8
+        ],
+        [
+          9
+        ],
+        [
+          10
+        ],
+        [
+          11
+        ],
+        [
+          12
+        ],
+        [
+          13
+        ],
+        [
+          14
+        ],
+        [
+          15
+        ],
+        [
+          16
+        ],
+        [
+          17
+        ],
+        [
+          18
+        ],
+        [
+          19
+        ],
+        [
+          20
+        ]
+      ],
+      "error": null
+    }
+  ],
+  "live": [
+    {
+      "name": "local-chinese-repeat-1",
+      "number": 3,
+      "content": "【資料一】歷史，大多是猜測，剩下的，是偏見。史學家的價值判斷如同一把最尖利的剪刀，裁剪出他筆下最符合他好惡的形狀。\n【資料二】史學與時俱變，史學家的解釋也互有出入，那麼歷史究竟有沒有客觀性呢？其實歷史的客觀性是不容懷疑的。史學家從各種角度來觀察歷史，使歷史的面貌越來越清楚。\n\n上課時老師提供這兩則資料給同學討論，關於資料的解讀，下列何者的發言最恰當？",
+      "options": {
+        "A": "根據資料一，我認為史學家對歷史的猜測不帶偏見",
+        "B": "依照資料二，我看見歷史不一定具有客觀性",
+        "C": "我發現資料一、二都認為我們不可以懷疑史學家的記載",
+        "D": "我覺得資料一、二都認為史學家對歷史會有不同詮釋"
+      },
+      "structural_pass": true,
+      "no_neighbor_dictionary": true,
+      "both_sources": true
+    },
+    {
+      "name": "english-reading",
+      "number": 36,
+      "content": "Many people believe that success is only for the lucky few, but this idea is far from the truth. When challenges arise, we must learn to . 36 . them with courage rather than escape. Those who continue to . 37 . despite repeated setbacks often discover unanticipated strength. Another important step is to . 38 . clear goals, because without direction, our efforts may be wasted. In addition, it helps to . 39 .supportive friends who can encourage us during difficult times. Finally, we should . 40 .ourselves frequently, reminding our hearts why we began the journey. With patience and determination, success becomes possible for anyone.\n\nWhen challenges arise, we must learn to . 36 . them with courage rather than escape.",
+      "options": {
+        "A": "abandon",
+        "B": "confront",
+        "C": "dismiss",
+        "D": "ignore"
+      },
+      "structural_pass": true
+    },
+    {
+      "name": "math",
+      "number": 1,
+      "content": "下列何者為微分方程式 dy/dx = 1/(1+x²) 的通解？",
+      "options": {
+        "A": "y(x) = arctan(x) + C",
+        "B": "y(x) = arcsin(x) + C",
+        "C": "y(x) = tan(x) + C",
+        "D": "y(x) = sin(x) + C"
+      },
+      "structural_pass": true
+    }
+  ],
+  "calls": 4,
+  "input_tokens": 6083,
+  "output_tokens": 579,
+  "limitations": "Structural smoke tests, not a calibrated accuracy estimate; no production data modified.",
+  "local_image_regions": [
+    {
+      "bbox": [
+        189.35000610351562,
+        632.2000122070312,
+        352.6500244140625,
+        698.6500244140625
+      ],
+      "range": [
+        4,
+        4
+      ],
+      "candidates": [
+        4
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        535.9000244140625,
+        794.8499755859375,
+        694.75,
+        829.8499755859375
+      ],
+      "range": [
+        10,
+        10
+      ],
+      "candidates": [
+        10
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        550.2999877929688,
+        718.7000122070312,
+        694.25,
+        791.75
+      ],
+      "range": [
+        10,
+        10
+      ],
+      "candidates": [
+        10
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        33.95000076293945,
+        42.500022888183594,
+        693.9500122070312,
+        110.6500244140625
+      ],
+      "range": null,
+      "candidates": [],
+      "status": "unresolved",
+      "reason": "cross_column_region"
+    },
+    {
+      "bbox": [
+        87.0,
+        438.0999755859375,
+        349.54998779296875,
+        497.04998779296875
+      ],
+      "range": [
+        3,
+        3
+      ],
+      "candidates": [
+        3
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        89.1500015258789,
+        537.1000366210938,
+        361.4499816894531,
+        628.9000244140625
+      ],
+      "range": [
+        3,
+        3
+      ],
+      "candidates": [
+        3
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        429.3500061035156,
+        342.85003662109375,
+        691.7000122070312,
+        416.6500244140625
+      ],
+      "range": [
+        8,
+        8
+      ],
+      "candidates": [
+        8
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    }
+  ]
+}

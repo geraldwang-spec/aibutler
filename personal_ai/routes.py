@@ -155,7 +155,7 @@ def ai_questions():
         try:
             sid=int(request.form.get('subject_id','0')); _subject(sid)
             chapter_ids=[int(x) for x in request.form.getlist('chapter_ids') if x.isdigit()]
-            count=max(1,min(20,int(request.form.get('count','5')))); difficulty=max(1,min(5,int(request.form.get('difficulty','3'))))
+            count=max(1,int(request.form.get('count','5'))); difficulty=max(1,min(5,int(request.form.get('difficulty','3'))))
             qtypes=request.form.getlist('q_types') or ['單選']
             generation_mode=request.form.get('generation_mode','hybrid')
             if generation_mode not in ('hybrid','novel'):
@@ -300,8 +300,6 @@ def wrong_tutor(question_id):
     try:
         if request.method=='POST':
             followup=(request.form.get('followup') or '').strip()
-            if len(followup)>1500:
-                raise ValueError('追問內容不可超過 1500 字。')
             job_id=submit(current_app._get_current_object(),g.user['id'],'wrong_tutor',dict(question_id=question_id,followup=followup))
             return redirect(url_for('personal_ai.job_page',job_id=job_id))
         else:
@@ -520,7 +518,7 @@ def job_status(job_id):
     if job['kind']=='import':
         from .import_checkpoints import snapshot
         progress=snapshot(current_app,job_id,g.user['id'])
-        payload['progress']={k:v for k,v in progress.items() if k!='questions'}
+        payload['progress']={k:v for k,v in progress.items() if k not in ('questions','parsed_questions')}
     from .data_safety import sanitize
     return jsonify(sanitize(payload))
 
@@ -573,7 +571,10 @@ def job_resume(job_id):
     job=read_job(current_app,job_id,g.user['id'])
     if not job or job['kind']!='import': abort(404)
     try:
-        if job['status'] not in ('failed','cancelled'): raise ValueError('只能接續已失敗或取消的工作。')
+        from .import_checkpoints import snapshot
+        partial=job['status']=='completed' and bool(snapshot(current_app,job_id,g.user['id'])['answer_failures'])
+        if job['status'] not in ('failed','cancelled') and not partial:
+            raise ValueError('只能接續中斷或仍有待補題目的工作。')
         payload=json.loads(job['payload'])
         path=Path(payload['path']).resolve()
         folder=(Path(current_app.instance_path)/'job_uploads').resolve()

@@ -10,6 +10,13 @@ from .embedding_provider import get_embedder
 from .llm_provider import LLMError, get_classifier_llm, model_usage_label
 
 
+def _compact_questions(items):
+    """Keep full source context, transmitting shared material once per batch."""
+    from .question_answering import compact_answer_payload
+    payload=compact_answer_payload([dict(item,_question_no=i,q_type=item.get('q_type','')) for i,item in enumerate(items)])
+    return [dict(question=row['content'],**{k:row[k] for k in ('passage','passage_id') if k in row}) for row in payload]
+
+
 def _cosine(a, b):
     if not a or not b or len(a) != len(b):
         return 0.0
@@ -134,12 +141,14 @@ def classify_question_batch(items, subject_id, config):
             proposals = [classify(item, concepts, _heuristic(item)[0]) for item in batch]
             for item,proposal in zip(batch,proposals):
                 proposal['specialist_heads']=specialist_heads(item,subject_id)
-            payload = [dict(index=i, question=item.get('content',''),
+            compact=_compact_questions(batch)
+            payload = [dict(index=i, **compact[i],
                             answer=item.get('answer_key'), chapter=item.get('chapter_name'),
                             proposal=proposal) for i,(item,proposal) in enumerate(zip(batch,proposals))]
             data = final.complete_json(
                 '你是考題分類的最終裁決者。CPU 分數未校準，不代表正確率。檢查候選概念，'
                 '低信心時用簡短穩定的概念名稱。只能選提供的 concept id 或 null。'
+                '相同 passage_id 共用本批首次出現的 passage 原文，不代表後續子題沒有材料。'
                 '每題回傳 index、existing_concept_id、concept_name、skill、cognitive_level、confidence。只回 JSON。',
                 json.dumps(payload,ensure_ascii=False)+'\n格式：{"classifications":[{"index":0,"concept_name":"...","existing_concept_id":null,"skill":"...","cognitive_level":"understand","confidence":0.5}]}')
             mapped = {r.get('index'):r for r in data.get('classifications',[]) if isinstance(r,dict)} if isinstance(data,dict) else {}
@@ -183,11 +192,12 @@ def classify_question_batch(items, subject_id, config):
         return out, 'DEV 概念分類器'
 
     payload = []
+    compact=_compact_questions(items)
     for i, item in enumerate(items):
         payload.append({
             'index': i,
             'q_type': item.get('q_type'),
-            'question': item.get('content'),
+            **compact[i],
             'options': {k: item.get('option_' + k, '') for k in 'ABCD' if item.get('option_' + k)},
             'answer': item.get('answer_key'),
             'chapter': item.get('chapter_name'),
@@ -206,6 +216,7 @@ def classify_question_batch(items, subject_id, config):
 5. skill 描述更細的能力，例如「文字題建模」「消去法」「判讀 INNER JOIN」。\n
 6. cognitive_level 只能是 remember / understand / apply / analyze。\n
 7. 只回 JSON。'''
+    system+='\n相同 passage_id 的子題共用本批首次出現的 passage 原文，必須連同文章判斷，不需重複文章。'
     user = '請分類以下題目：\n' + json.dumps(payload, ensure_ascii=False) + '''\n\n回傳格式：
 {"classifications":[{"index":0,"existing_concept_id":null,"concept_name":"...","concept_description":"...","skill":"...","cognitive_level":"apply","difficulty":2,"confidence":0.92,"reason":"..."}]}'''
     data = classifier.complete_json(system, user)

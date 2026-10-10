@@ -36,6 +36,197 @@ class LayoutModel:
 
 
 class QuestionLayoutTests(unittest.TestCase):
+    def test_unknown_passage_scope_is_resolved_after_later_questions(self):
+        class Deferred:
+            max_input_bytes=16000
+            field='content'
+            scope_calls=0
+            def complete_json(self,system,user):
+                data=json.JSONDecoder().raw_decode(user)[0]
+                if 'questions' in data:
+                    self.scope_calls+=1
+                    assert '後面的子題' in system
+                    assert [q['number'] for q in data['questions']]==[2,3]
+                    return {'question_numbers':[2]}
+                parts=[]
+                for index,text in data['fragments'].items():
+                    new=False
+                    if text.startswith('Reading passage'):
+                        self.field='passage'
+                        new=True
+                    elif re.match(r'^[123]\.',text): self.field='content'; new=True
+                    elif re.match(r'^[AB]\.',text): self.field=text[0]
+                    elif text.startswith('答案：'): self.field='answer'
+                    parts.append(dict(s=int(index),e=int(index),field=self.field,new=new,type='單選',question_from=None,question_to=None))
+                return {'parts':parts}
+        text='1. Previous?\nA. one\nB. two\n答案：A\nReading passage about a farm.\n2. What does the farm provide?\nA. food\nB. traffic\n答案：A\n3. Independent arithmetic question?\nA. one\nB. two\n答案：B'
+        model=Deferred()
+        rows=extract_layout(text,model,'測試')
+        self.assertEqual(len(rows),3)
+        self.assertEqual(model.scope_calls,1)
+        self.assertIn('Reading passage',rows[1]['content'])
+        self.assertNotIn('Reading passage',rows[0]['content'])
+        self.assertNotIn('Reading passage',rows[2]['content'])
+        self.assertEqual(rows[1]['_passage_range'],[2,2])
+
+    def test_unconfirmed_passage_is_preserved_without_aborting_other_questions(self):
+        from personal_ai.question_layout import _resolve_passage_scopes
+        class Uncertain:
+            max_input_bytes=16000
+            def complete_json(self,s,u): return {'question_numbers':[]}
+        items=[dict(_question_no=1,content='獨立題'),dict(_question_no=2,content='閱讀子題')]
+        passages=[dict(position=1,question_from=None,question_to=None,text='完整原文')]
+        _resolve_passage_scopes(passages,items,Uncertain())
+        self.assertNotIn('_layout_needs_review',items[0])
+        self.assertIn('_layout_needs_review',items[1])
+        self.assertEqual(passages[0]['text'],'完整原文')
+
+    def test_groq_json_400_shrinks_layout_and_preserves_source(self):
+        class JsonFailure(LayoutModel):
+            sizes=[]
+            def complete_json(self,system,user):
+                data=json.loads(user.split('\n回傳 ')[0])
+                self.sizes.append(len(data['fragments']))
+                if len(data['fragments'])>2:
+                    raise LLMError('JSON rejected',status_code=400,error_code='json_validate_failed')
+                assert '鍵與字串用雙引號' in user
+                return super().complete_json(system,user)
+        model=JsonFailure()
+        rows=extract_layout('1. Choose.\nA. apple\nB. book\n答案：B\n解析：理由',model,'測試')
+        self.assertGreater(model.sizes[0],2)
+        self.assertEqual(rows[0]['option_A'],'apple')
+        self.assertEqual(rows[0]['option_B'],'book')
+        self.assertEqual(rows[0]['answer_key'],'B')
+
+    def test_groq_json_400_persistent_failure_is_bounded(self):
+        class Broken:
+            max_input_bytes=16000
+            calls=0
+            def complete_json(self,system,user):
+                self.calls+=1
+                raise LLMError('bad JSON',status_code=400,error_code='json_validate_failed')
+        model=Broken()
+        with self.assertRaisesRegex(LLMError,'有限重試'):
+            extract_layout('1. Question',model,'測試')
+        self.assertEqual(model.calls,2)
+
+    def test_unrelated_http_400_is_not_retried_as_json_failure(self):
+        class WrongRequest:
+            max_input_bytes=16000
+            calls=0
+            def complete_json(self,system,user):
+                self.calls+=1
+                raise LLMError('bad model',status_code=400,error_code='model_not_found')
+        model=WrongRequest()
+        with self.assertRaises(LLMError): extract_layout('1. Q\nA. x\nB. y',model,'測試')
+        self.assertEqual(model.calls,1)
+
+    def test_semantic_layout_attaches_shared_passage_without_special_heading(self):
+        class ReadingModel:
+            max_input_bytes=16000
+            field='content'
+            calls=0
+            def complete_json(self,system,user):
+                self.calls+=1
+                assert '最後選項不是吸收' in system
+                assert 'passage' in system and '克漏字' in system
+                data=json.loads(user.split('\n回傳 ')[0])
+                parts=[]
+                for index,text in data['fragments'].items():
+                    new=False
+                    if text.startswith('材料'):
+                        self.field='passage'
+                    elif re.match(r'^(?:1|12|13)\.',text):
+                        self.field='content'
+                        new=True
+                    elif re.match(r'^[AB]\.',text):
+                        self.field=text[0]
+                    elif text.startswith('答案：'):
+                        self.field='answer'
+                    part=dict(s=int(index),e=int(index),field=self.field,new=new,type='單選')
+                    if self.field=='passage': part.update(question_from=12,question_to=13)
+                    parts.append(part)
+                return {'parts':parts}
+        passage='材料：'+('The city farm provides food and community activities. '*85)+'\n'
+        text='1. Prior question\nA. prior A\nB. prior B\n答案：A\n'+passage+'12. What is provided?\nA. food\nB. traffic\n答案：A\n13. What else is provided?\nA. traffic\nB. community activities\n答案：B'
+        model=ReadingModel()
+        rows=extract_layout(text,model,'閱讀')
+        self.assertGreater(model.calls,1)
+        self.assertEqual([x['_question_no'] for x in rows],[1,12,13])
+        self.assertNotIn('city farm',rows[0]['content'])
+        self.assertEqual(rows[0]['option_B'],'prior B')
+        for row in rows[1:]:
+            self.assertIn(passage.strip(),row['content'])
+            self.assertTrue(row['_shared_passage'])
+            self.assertEqual(row['_passage_range'],[12,13])
+
+    def test_auto_uses_valid_local_structure_but_explicit_ai_checks_layout(self):
+        from unittest.mock import patch
+        sections=[{'text':'1. Question\n(A)one(B)two\n答案：A'}]
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'fixture.txt'
+            path.write_text(sections[0]['text'],encoding='utf-8')
+            parsed=extract_by_rules(sections,'測試')
+            for mode in ('auto','llm'):
+                with patch('personal_ai.question_importer.extract_with_llm',return_value=parsed) as layout:
+                    result,_=extract_questions(path,'測試',{},mode)
+                    self.assertEqual(result,parsed)
+                    self.assertEqual(layout.call_count,0 if mode=='auto' else 1)
+
+    def test_pdf_reading_early_number_includes_preceding_source_page(self):
+        import fitz
+        from unittest.mock import patch
+        from personal_ai.question_answering import infer_missing_answers
+        class Vision:
+            enabled=True
+            provider='test'
+            model='vision'
+            images=[]
+            def complete_json_with_images(self,system,user,images):
+                self.images=images
+                assert '比較題必須讀到所有比較材料' in system
+                assert '附圖來源頁碼（依順序）：1,2' in user
+                return {'answers':[dict(number=3,status='answered',answer='B',explanation='原文支持',context='')]}
+        vision=Vision()
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'reading.pdf'
+            with fitz.open() as doc:
+                doc.new_page().insert_text((40,60),'Shared reading passage on preceding page.')
+                doc.new_page().insert_text((40,60),'3. Read and choose.\n(A) one\n(B) two')
+                doc.save(path)
+            item=dict(_question_no=3,content='Read and choose.',q_type='單選',answer_key='',option_A='one',option_B='two',_shared_passage=True,_passage_range=[3,4])
+            with patch('personal_ai.question_answering.get_parser_llm',return_value=vision),patch('personal_ai.question_answering.get_vision_llm',return_value=vision):
+                result=infer_missing_answers([item],[],path,{})
+            self.assertEqual(result[0]['answer_key'],'B')
+            self.assertEqual(len(vision.images),2)
+
+    def test_inline_next_passage_does_not_become_option_d(self):
+        text='''25. 兩首詩的共同點？
+(A)描寫食物 (B)用典 (C)顏色對比 (D)以食材入詩，強調美好事物稍縱即逝 請閱讀以下資料，並回答26～29題：【甲】城市農場的文章。
+【乙】海上牧場的文章。
+26. 甲文的主旨？
+(A)城市農場 (B)海上牧場 (C)交通 (D)能源
+27. 乙文的主旨？
+(A)城市農場 (B)海上牧場 (C)交通 (D)能源
+30. 另一題？
+(A)甲 (B)乙 (C)丙 (D)丁'''
+        rows=extract_by_rules([{'text':text}],'國文',allow_missing_answers=True)
+        self.assertEqual([x['_question_no'] for x in rows],[25,26,27,30])
+        self.assertEqual(rows[0]['option_D'],'以食材入詩，強調美好事物稍縱即逝')
+        self.assertNotIn('農場',rows[0]['content'])
+        for row in rows[1:3]:
+            self.assertIn('【甲】城市農場的文章',row['content'])
+            self.assertIn('【乙】海上牧場的文章',row['content'])
+            self.assertNotIn('文章',row['option_D'])
+        self.assertNotIn('農場',rows[3]['content'])
+
+    def test_passage_heading_on_own_line_and_fullwidth_range(self):
+        text='1. 題幹\n(A)甲(B)乙(C)丙(D)閱讀是好習慣\n請閱讀下文，回答第２～３題：共享文章\n2. 第一問\n(A)甲(B)乙\n3. 第二問\n(A)丙(B)丁'
+        rows=extract_by_rules([{'text':text}],'測試',allow_missing_answers=True)
+        self.assertEqual(rows[0]['option_D'],'閱讀是好習慣')
+        self.assertIn('共享文章',rows[1]['content'])
+        self.assertIn('共享文章',rows[2]['content'])
+
     def test_layout_shrinks_on_truncation_without_losing_source(self):
         class Limited(LayoutModel):
             def complete_json(self,system,user):
@@ -112,14 +303,14 @@ class QuestionLayoutTests(unittest.TestCase):
         self.assertIs(result[0],official)
         self.assertEqual(result[1]['answer_key'],'B')
 
-    def test_rate_limit_retry_is_bounded(self):
+    def test_rate_limit_retry_honors_provider_cooldown(self):
         from unittest.mock import patch,Mock
         from personal_ai.question_answering import _limited_request
         call=Mock(side_effect=[LLMError('rate limit',status_code=429,retry_after='2'),{'ok':True}])
         with patch('personal_ai.question_answering.time.sleep') as sleep:
             self.assertEqual(_limited_request(call),{'ok':True})
         self.assertEqual(call.call_count,2)
-        self.assertEqual(sleep.call_count,2)
+        self.assertEqual(sleep.call_count,3)
 
     def test_ocr_step_numbers_do_not_become_question_numbers(self):
         sections=[{'text':'（ ）20. Choose.\n(A)tea\n(B)water',
@@ -245,13 +436,13 @@ class QuestionLayoutTests(unittest.TestCase):
             rows, _ = extract_questions(path,'測試',{},mode='rules')
             self.assertEqual(rows, [])
 
-    def test_long_question_validation_and_database_size_guard(self):
+    def test_long_question_validation_has_no_application_size_guard(self):
         from personal_ai.question_validation import validate
         row = dict(q_type='單選',content='長'*12000,answer_key='A',explanation='解析')
         validated, pairs = validate(row, {'A':'甲','B':'乙'})
         self.assertEqual(validated['content'], row['content'])
-        with self.assertRaises(ValueError):
-            validate(dict(row,content='😀'*16000), {'A':'甲','B':'乙'})
+        long_row,_=validate(dict(row,content='😀'*16000), {'A':'甲','B':'乙'})
+        self.assertEqual(long_row['content'],'😀'*16000)
 
     def test_long_classification_sees_tail_and_preserves_original(self):
         from personal_ai.classification_context import prepare
@@ -287,7 +478,7 @@ class QuestionLayoutTests(unittest.TestCase):
                 g.user = {'id':1}
                 content='長文'*6000+'TAIL_SENTINEL'
                 upload=FileStorage(stream=io.BytesIO(('1. '+content+'\n(A) 甲\n(B) 乙\n答案：B').encode('utf-8')),filename='long.txt')
-                batch=process_import_file(app,{'subject_id':'1','import_strategy':'question_bank','parse_mode':'auto'},upload)
+                batch=process_import_file(app,{'subject_id':'1','import_strategy':'question_bank','parse_mode':'rules'},upload)
                 row=db().execute('SELECT parsed_json FROM import_items WHERE import_id=?',(batch,)).fetchone()
                 self.assertEqual(json.loads(row[0])['content'], content)
 

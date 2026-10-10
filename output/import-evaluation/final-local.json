@@ -1,0 +1,213 @@
+{
+  "corpus": [
+    {
+      "name": "chinese",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-00-C.pdf",
+      "expected": 50,
+      "parsed": 50,
+      "source_numbers": 50,
+      "repair_units": [],
+      "error": null
+    },
+    {
+      "name": "english",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-00-E.pdf",
+      "expected": 50,
+      "parsed": 50,
+      "source_numbers": 50,
+      "repair_units": [],
+      "error": null
+    },
+    {
+      "name": "math",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-08-1.pdf",
+      "expected": 20,
+      "parsed": 20,
+      "source_numbers": 20,
+      "repair_units": [
+        [
+          1
+        ],
+        [
+          2
+        ],
+        [
+          3
+        ],
+        [
+          4
+        ],
+        [
+          5
+        ],
+        [
+          6
+        ],
+        [
+          7
+        ],
+        [
+          8
+        ],
+        [
+          9
+        ],
+        [
+          10
+        ],
+        [
+          11
+        ],
+        [
+          12
+        ],
+        [
+          13
+        ],
+        [
+          14
+        ],
+        [
+          15
+        ],
+        [
+          16
+        ],
+        [
+          17
+        ],
+        [
+          18
+        ],
+        [
+          19
+        ],
+        [
+          20
+        ]
+      ],
+      "error": null
+    }
+  ],
+  "live": [],
+  "calls": 0,
+  "input_tokens": 0,
+  "output_tokens": 0,
+  "limitations": "Structural smoke tests, not a calibrated accuracy estimate; no production data modified.",
+  "local_image_regions": [
+    {
+      "bbox": [
+        189.35000610351562,
+        632.2000122070312,
+        352.6500244140625,
+        698.6500244140625
+      ],
+      "range": [
+        4,
+        4
+      ],
+      "candidates": [
+        4
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        535.9000244140625,
+        794.8499755859375,
+        694.75,
+        829.8499755859375
+      ],
+      "range": [
+        10,
+        10
+      ],
+      "candidates": [
+        10
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        550.2999877929688,
+        718.7000122070312,
+        694.25,
+        791.75
+      ],
+      "range": [
+        10,
+        10
+      ],
+      "candidates": [
+        10
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        33.95000076293945,
+        42.500022888183594,
+        693.9500122070312,
+        110.6500244140625
+      ],
+      "range": null,
+      "candidates": [],
+      "status": "unresolved",
+      "reason": "cross_column_region"
+    },
+    {
+      "bbox": [
+        87.0,
+        438.0999755859375,
+        349.54998779296875,
+        497.04998779296875
+      ],
+      "range": [
+        3,
+        3
+      ],
+      "candidates": [
+        3
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        89.1500015258789,
+        537.1000366210938,
+        361.4499816894531,
+        628.9000244140625
+      ],
+      "range": [
+        3,
+        3
+      ],
+      "candidates": [
+        3
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        429.3500061035156,
+        342.85003662109375,
+        691.7000122070312,
+        416.6500244140625
+      ],
+      "range": [
+        8,
+        8
+      ],
+      "candidates": [
+        8
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    }
+  ]
+}

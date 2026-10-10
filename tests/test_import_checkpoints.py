@@ -10,9 +10,43 @@ from storage import db
 from personal_ai import jobs,import_checkpoints as checkpoints
 from personal_ai.llm_provider import GroqLLM,OpenAICompatibleLLM,LLMError
 from personal_ai.question_answering import infer_missing_answers
+from personal_ai.question_importer import extract_by_rules
 
 
 class CheckpointTests(unittest.TestCase):
+    def test_optional_image_ocr_failure_does_not_erase_native_drafts(self):
+        from personal_ai.question_importer import extract_questions
+        native=[{'text':'1. First?\nA. one\nB. two'}]
+        with patch('personal_ai.question_importer.parse_file',side_effect=[native,RuntimeError('CPU image OCR failed')]):
+            with self.assertRaisesRegex(RuntimeError,'CPU image OCR failed'):
+                extract_questions(Path(self.directory.name)/'source.pdf','測試',{},'auto')
+        progress=checkpoints.snapshot(self.app,'old',1)
+        self.assertEqual(progress['parsed_count'],1)
+        self.assertEqual(progress['parsed_questions'][0]['content'],'First?')
+
+    def test_successful_local_repair_is_reused_on_resume(self):
+        from personal_ai.import_routing import repair_local_questions
+        sections=[{'text':'1. Good?\nA. one\nB. two\n答案：A\n2. Broken?\n3. Good?\nA. one\nB. two\n答案：B'}]
+        local=extract_by_rules(sections,'測試',True)
+        fixed=dict(local[1],q_type='單選',option_A='one',option_B='two',answer_key='')
+        with patch('personal_ai.question_importer.extract_with_llm',return_value=[fixed]) as api:
+            first=repair_local_questions(sections,local,'測試',{})
+            second=repair_local_questions(sections,local,'測試',{})
+        self.assertEqual(first,second)
+        self.assertEqual(api.call_count,1)
+
+    def test_local_drafts_remain_visible_if_ai_layout_is_rate_limited(self):
+        from personal_ai.question_importer import extract_questions
+        path=Path(self.directory.name)/'source.txt'
+        path.write_text('1. First?\nA. one\nB. two\n2. Missing choices?',encoding='utf-8')
+        with patch('personal_ai.question_importer.extract_with_llm',side_effect=LLMError('TPM',status_code=429)):
+            with self.assertRaises(LLMError): extract_questions(path,'測試',{},'llm')
+        progress=checkpoints.snapshot(self.app,'old',1)
+        self.assertEqual(progress['parsed_count'],2)
+        self.assertEqual(progress['total'],2)
+        self.assertEqual(progress['completed'],0)
+        self.assertEqual(progress['parsed_questions'][0]['content'],'First?')
+
     def setUp(self):
         self.directory=tempfile.TemporaryDirectory()
         self.app=create_app({'TESTING':True,'SECRET_KEY':'checkpoint-only',
@@ -126,7 +160,7 @@ class CheckpointTests(unittest.TestCase):
                 data=json.loads(u.split('\n回傳 ')[0])
                 return {'answers':[dict(number=x['number'],status='answered',answer='B',explanation='理由',context='') for x in data]}
         solver=Solver()
-        with patch('personal_ai.question_answering.get_parser_llm',return_value=solver):
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=solver),patch('personal_ai.question_importer.extract_with_llm',side_effect=lambda sections,chapter,config,**kw:extract_by_rules(sections,chapter,allow_missing_answers=True)):
             jobs.run(self.app,'old',1)
         self.assertEqual(jobs.read(self.app,'old',1)['status'],'failed')
         self.assertTrue(source.is_file())
@@ -134,7 +168,7 @@ class CheckpointTests(unittest.TestCase):
         with patch.object(jobs._executor,'submit'):
             resumed=jobs.submit(self.app,1,'import',dict(payload,resume_from='old'))
         solver.calls=0
-        with patch('personal_ai.question_answering.get_parser_llm',return_value=solver):
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=solver),patch('personal_ai.question_importer.extract_with_llm',side_effect=lambda sections,chapter,config,**kw:extract_by_rules(sections,chapter,allow_missing_answers=True)):
             jobs.run(self.app,resumed,1)
         completed=jobs.read(self.app,resumed,1)
         self.assertEqual(completed['status'],'completed',completed['error'])
@@ -230,6 +264,64 @@ class CheckpointTests(unittest.TestCase):
             model.complete_json('JSON','retry')
             self.assertEqual(model.complete_json('JSON','retry')['answers'][0]['answer'],'B')
         self.assertEqual(remote.call_count,2)
+
+    def test_partial_preview_retains_source_and_resume_reuses_answers_and_classifications(self):
+        folder=Path(self.app.instance_path)/'job_uploads'
+        folder.mkdir()
+        source=folder/'partial-resume.txt'
+        source.write_text('fixture',encoding='utf-8')
+        db().execute("INSERT INTO subjects(id,subject_name,created_by) VALUES(1,'測試',1)")
+        db().commit()
+        items=[dict(_question_no=i,chapter_name='測試',content='題目'+str(i),q_type='單選',
+                    answer_key='',option_A='甲',option_B='乙',difficulty=2) for i in range(1,6)]
+        class Solver:
+            enabled=True
+            provider='test'
+            model='text'
+            incomplete=True
+            seen=[]
+            def complete_json(self,system,user):
+                rows=json.loads(user.split('\n回傳 ')[0])
+                self.seen.extend(row['number'] for row in rows)
+                return {'answers':[dict(number=row['number'],status='insufficient' if self.incomplete and row['number']==2 else 'answered',
+                    answer='' if self.incomplete and row['number']==2 else 'A',explanation='來源支持',context='') for row in rows]}
+        solver=Solver()
+        def extract(*args):
+            return infer_missing_answers(items,[],Path('fixture.txt'),{}),'fixture'
+        classified=[]
+        def classify(rows,*args):
+            classified.append([row['_question_no'] for row in rows])
+            return [dict(concept_id=None,concept_name='概念',concept_description='',skill='理解',
+                cognitive_level='understand',difficulty=2,confidence=.8,reason='fixture') for row in rows],'fixture'
+        payload=dict(path=str(source),filename='partial-resume.txt',form=[('subject_id','1'),('import_strategy','concept')])
+        jobs.update(self.app,'old',payload=json.dumps(payload))
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=solver),patch('personal_ai.question_importer.extract_questions',side_effect=extract),patch('personal_ai.concept_classifier.classify_question_batch',side_effect=classify):
+            jobs.run(self.app,'old',1)
+            self.assertEqual(jobs.read(self.app,'old',1)['status'],'completed')
+            self.assertTrue(source.is_file())
+            with patch.object(jobs._executor,'submit'):
+                resumed=jobs.submit(self.app,1,'import',dict(payload,resume_from='old'))
+            solver.incomplete=False
+            solver.seen=[]
+            jobs.run(self.app,resumed,1)
+        self.assertEqual(jobs.read(self.app,resumed,1)['status'],'completed')
+        self.assertEqual(solver.seen,[2])
+        self.assertEqual(classified,[[1,3,4,5],[2]])
+        self.assertEqual(checkpoints.snapshot(self.app,resumed,1)['remaining'],0)
+        self.assertFalse(source.exists())
+
+    def test_unresolved_reading_item_is_deferred_without_model_guess(self):
+        good=dict(_question_no=1,content='完整題目',q_type='單選',answer_key='A',option_A='甲',option_B='乙')
+        reading=dict(_question_no=2,content='閱讀子題',q_type='單選',answer_key='',option_A='甲',option_B='乙',_layout_needs_review='題組關聯尚未確認')
+        class Model:
+            enabled=True
+            provider='test'
+            model='test'
+            def complete_json(self,s,u): raise AssertionError('不得猜未確認的閱讀題')
+        with patch('personal_ai.question_answering.get_parser_llm',return_value=Model()):
+            result=infer_missing_answers([good,reading],[],Path('book.txt'),{})
+        self.assertEqual(result,[good])
+        self.assertEqual(checkpoints.snapshot(self.app,'old',1)['answer_failures'][0]['number'],2)
 
     def test_download_and_preview_owner_only(self):
         checkpoints.put('questions',[dict(content='完成題',answer_key='B',q_type='單選',explanation='AI 推定')])

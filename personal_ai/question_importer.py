@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .llm_provider import LLMError, get_parser_llm
 from .parsers import parse_file
-from .question_layout import ANSWER_HEADING, ANSWER_LABEL, OPTION, answer_text, split_fields, extract_layout
+from .question_layout import ANSWER_HEADING, ANSWER_LABEL, OPTION, answer_text, split_fields, extract_layout, LAYOUT_BOUNDARY_RULES
 
 QUESTION_TYPES = {'單選', '多選', '是非', '填空'}
 
@@ -32,6 +32,9 @@ def _number(value: str):
 def _question_start(line: str):
     s = re.sub(r'^\s*(?:#{1,6}\s*)?', '', line).strip().translate(str.maketrans('０１２３４５６７８９．', '0123456789.'))
     patterns = [
+        # PDF may put the opening answer box on the previous line: "(\n)1.".
+        # Require a numbered punctuation prefix, not any closing parenthesis.
+        r'^[）)]\s*(\d{1,4})\s*[.、:：]',
         r'^(?:（\s*[A-D]?\s*）|\(\s+[A-D]?\s*\))\s*(\d{1,4})(?!\d)\s*[.、:：]?',
         r'^(?:題目|問題|Question)\s*(\d{1,4})\s*[:：.、)]?',
         r'^[（(]\s*(\d{1,4})\s*[）)]',
@@ -49,6 +52,7 @@ def _question_start(line: str):
 def _strip_question_prefix(line: str):
     s = re.sub(r'^\s*#{1,6}\s*', '', line).strip()
     for p in [
+        r'^[）)]\s*[0-9０-９]{1,4}\s*[.．、:：]\s*',
         r'^(?:（\s*[A-D]?\s*）|\(\s+[A-D]?\s*\))\s*[0-9０-９]{1,4}(?![0-9０-９])\s*[.．、:：]?\s*',
         r'^(?:題目|問題|Question)\s*[0-9０-９]{1,4}\s*[:：.．、)]?\s*',
         r'^[（(]\s*[0-9０-９]{1,4}\s*[）)]\s*',
@@ -139,28 +143,53 @@ def _guess_type(header_and_body: str, answer: str, options: dict):
     return '填空'
 
 
+# A passage instruction can be extracted by PDF as the tail of option D.
+# Require an explicit question range: ordinary prose mentioning reading is not
+# a boundary. Keep the complete heading and passage for its own questions.
+from .question_ranges import READING_RANGE as PASSAGE_INSTRUCTION, reading_ranges
+
+
 def extract_by_rules(sections, default_chapter: str, allow_missing_answers=False):
+    from .parsers import exam_sections
+    sections=exam_sections(sections)
     image_passages={}
     for section in sections:
         for context in section.get('image_context',[]):
+            if context.get('status')=='unresolved': continue
+            if context.get('kind')=='choices': continue
             limits=context.get('range')
-            if limits and 0<limits[0]<=limits[1]<=500:
+            if limits and 0<limits[0]<=limits[1]:
                 for number in range(limits[0],limits[1]+1):
                     image_passages.setdefault(number,[]).append(context['text'])
     text = '\n'.join(sec.get('text', '') for sec in sections)
     answers, explanations = _answer_key(text)
     question_text = re.split(ANSWER_HEADING, text, maxsplit=1)[0]
+    # A line-wrapped empty answer box belongs to the next numbered question,
+    # not the previous question's final option.
+    question_text=re.sub(r'(?m)^[ \t]*[（(][ \t]*\r?\n(?=[ \t]*[）)]\s*\d+[.．、:：])','',question_text)
     # Unnumbered question/answer blocks are common in pasted worksheets.
     if not any(_question_start(line) is not None for line in question_text.splitlines()):
         candidates = re.split(r'\n\s*\n+', question_text.strip())
         if candidates and all(re.search(ANSWER_LABEL+r'\s*[:：]|【'+ANSWER_LABEL+r'】', c, re.I) for c in candidates):
             question_text = '\n'.join(f'{i}. {c}' for i,c in enumerate(candidates,1))
+    question_text=PASSAGE_INSTRUCTION.sub(lambda m:'\n'+m.group(0),question_text)
     lines = question_text.splitlines()
     blocks = []
     current = None
     passage = []
     passage_range = None
     for line in lines:
+        instruction=PASSAGE_INSTRUCTION.match(line.strip())
+        if instruction:
+            limits=[x for x in instruction.groups() if x is not None]
+            start,end=(int(x.translate(str.maketrans('０１２３４５６７８９','0123456789'))) for x in limits)
+            if 0<start<=end:
+                if current:
+                    blocks.append(current)
+                    current=None
+                passage_range=(start,end)
+                passage=[line]
+                continue
         group = re.match(r'^\s*[（(【]?\s*(\d+)\s*[-–~～至]\s*(\d+)\s*[)）】]?\s*(?:題.*)?$', line)
         if group:
             if current:
@@ -229,6 +258,23 @@ def extract_by_rules(sections, default_chapter: str, allow_missing_answers=False
             '_question_no': qn,
             '_parser': 'rules',
         }
+        ranges=reading_ranges(shared)
+        if ranges:
+            item['_shared_passage']=True
+            item['_passage_range']=[ranges[0]['question_from'],ranges[0]['question_to']]
+        if shared:
+            item['_shared_text']=shared
+            item['_question_stem']=stem[len(shared):].lstrip() if stem.startswith(shared) else stem
+        # Source references, not PDF extension or question-number thresholds,
+        # determine whether an answer needs the original image.
+        visual_reference=re.search(r'下圖|右圖|左圖|圖中|圖示|漫畫|照片|地圖|右列資料|左列資料|\b(?:picture|comic|diagram|graph|map|photograph|figure)\b',stem,re.I)
+        if visual_reference: item['_requires_vision']=True
+        if ranges:
+            material=shared
+            for anchor in reversed(reading_ranges(material)):
+                material=material[:anchor['start']]+material[anchor['end']:]
+            if not material.strip(' ：:，,\n\r\t'):
+                item['_requires_vision']=True
         parsed.append(item)
     return parsed
 
@@ -263,6 +309,9 @@ def extract_with_llm(sections, default_chapter: str, config, allow_missing_answe
     if not llm.enabled or getattr(llm, 'provider', '') == 'mock':
         raise LLMError('目前沒有可用的真實 LLM 題庫解析器；DEV Mock 只測流程，不拿來判讀題庫。')
     source='\n'.join(section.get('text','') for section in sections)
+    # Answer-key rows are not question boundaries. Reattach official answers
+    # by number after semantic layout, without asking the model to guess them.
+    source=re.split(ANSWER_HEADING,source,maxsplit=1)[0]
     # Copy wording from source via bounded layout windows instead of asking the
     # model to reproduce long questions under an 800-token output ceiling.
     return extract_layout(source, llm, default_chapter, allow_missing_answers=allow_missing_answers)
@@ -282,9 +331,6 @@ def extract_pdf_with_vision(path: Path, default_chapter: str, config):
     except ImportError as exc:
         raise RuntimeError('PDF Vision 解析需要 PyMuPDF。') from exc
     doc = fitz.open(path)
-    if len(doc) > 8:
-        doc.close()
-        raise LLMError('這份 PDF 超過 8 頁且文字層無法可靠解析；請先拆分檔案。')
     images = []
     try:
         matrix = fitz.Matrix(1.35, 1.35)
@@ -294,7 +340,8 @@ def extract_pdf_with_vision(path: Path, default_chapter: str, config):
     finally:
         doc.close()
     system = ('你是題庫文件視覺解析器。直接閱讀 PDF 頁面圖片，忠實擷取既有考題；'
-              '不得創作新題或改寫答案。答案區必須依題號對回題目。只回 JSON。')
+              '不得創作新題或改寫答案。答案區必須依題號對回題目。只回 JSON。'+LAYOUT_BOUNDARY_RULES+
+              '此處回傳 questions，不回 parts：將適用的共用文章原文完整放入各子題 content，不放 options。')
     user = ('請擷取所有完整考題。預設章節：' + default_chapter + '\n'
             '支援單選、多選、是非、填空。\n'
             'JSON 格式：{"questions":[{"chapter_name":"...","q_type":"單選|多選|是非|填空",'
@@ -312,11 +359,22 @@ def extract_pdf_with_vision(path: Path, default_chapter: str, config):
 def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
     from . import import_checkpoints as checkpoints
     sections=checkpoints.get('source_sections')
-    if sections is None:
+    if sections is None or (path.suffix.lower()=='.pdf' and mode!='rules'
+                            and checkpoints.get('source_range_version')!=7):
+        if path.suffix.lower()=='.pdf' and mode!='rules':
+            # Preserve text-layer drafts BEFORE optional image OCR can fail.
+            native=parse_file(path,include_pdf_images=False)
+            drafts=extract_by_rules(native,default_chapter,allow_missing_answers=True)
+            checkpoints.put('parsed_questions',drafts)
+            checkpoints.put('total',len(drafts))
+            checkpoints.put('stage',f'本機文字層已保存 {len(drafts)} 題草稿；CPU 圖片 OCR 中')
         sections = parse_file(path, include_pdf_images=path.suffix.lower()=='.pdf' and mode!='rules')
         checkpoints.put('source_sections',sections)
+        checkpoints.put('source_range_version',7)
     checkpoints.put('stage','文件文字／OCR 已完成')
-    by_rules = extract_by_rules(sections, default_chapter)
+    from .parsers import exam_sections
+    sections=exam_sections(sections)
+    by_rules = extract_by_rules(sections, default_chapter,allow_missing_answers=mode!='rules')
     is_pdf = path.suffix.lower() == '.pdf'
 
     # Never accept a partial parse just because it passed a percentage threshold.
@@ -330,16 +388,50 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
     main = re.split(ANSWER_HEADING, joined, maxsplit=1)[0]
     numbered = {_question_start(line) for line in main.splitlines()} - {None}
     expected = max(answer_count, len(numbered))
+    checkpoints.put('parsed_questions',by_rules)
+    checkpoints.put('total',max(expected,len(by_rules)))
+    checkpoints.put('stage',f'本機解析已保存 {len(by_rules)} 題草稿；核對題目結構')
     explicit_answer = (answer_count or
                        re.search(ANSWER_LABEL+r'\s*[:：=]|【'+ANSWER_LABEL+r'】', joined, re.I) or
                        re.search(r'(?m)^\s*[（(]\s*[A-D]\s*[）)]\s*\d', main))
-    if numbered and not by_rules and not explicit_answer:
-        if mode != 'rules':
+    if mode!='rules':
+        if mode=='llm':
+            # Full-file AI review is opt-in, never an automatic fallback.
+            items=extract_with_llm(sections,default_chapter,config,allow_missing_answers=True)
+            parser_name='AI 全文版面核對（使用者指定）'
+        else:
+            from .import_routing import repair_local_questions
+            items=repair_local_questions(sections,by_rules,default_chapter,config,path=path)
+            parser_name='本機優先解析；AI 僅補修異常題／題組'
+        if not items:
+            return [],'AI 版面解析（未辨識完整題目）'
+        if expected and len(items)!=expected:
+            raise LLMError('AI 版面題數與原文題號不一致，請核對題組與子題；尚未推定答案。')
+        official_answers,official_notes=_answer_key(joined)
+        for item in items:
+            number=item['_question_no']
+            if number in official_answers:
+                item['answer_key']=answer_text(official_answers[number])
+                if number in official_notes: item['explanation']=official_notes[number]
+            if item.get('_layout_needs_review'):
+                item['_provided_answer']=item.get('answer_key','')
+                item['answer_key']=''
+        # Preserve OCR image passages for their range even if not in the text layer.
+        for item in items:
+            for section in sections:
+                for context in section.get('image_context',[]):
+                    if context.get('status')=='unresolved': continue
+                    if context.get('kind')=='choices': continue
+                    bounds=context.get('range')
+                    if bounds and bounds[0]<=item['_question_no']<=bounds[1] and context['text'] not in item['content']:
+                        item['content']=context['text']+'\n\n'+item['content']
+                        item['_shared_passage']=True
+                        item['_passage_range']=list(bounds)
+        if any(not x.get('answer_key') for x in items):
             from .question_answering import infer_missing_answers
-            candidates = extract_by_rules(sections, default_chapter, allow_missing_answers=True)
-            if len(candidates) != len(numbered):
-                raise ValueError('已辨識題號但題幹／選項不完整，請確認文字與題組圖片；尚未生成答案。')
-            return infer_missing_answers(candidates, sections, path, config), 'AI 推定答案（非官方，需人工確認）'
+            items=infer_missing_answers(items,sections,path,config)
+        return items,parser_name
+    if numbered and not by_rules and not explicit_answer:
         raise ValueError(
             f'已辨識到 {len(numbered)} 個題號，但文件未找到明確的標準答案。'
             '題本不等於附答案的題庫，系統不會由 AI 猜答案。'
@@ -348,39 +440,7 @@ def extract_questions(path: Path, default_chapter: str, config, mode='auto'):
     if expected:
         rule_reliable = len(by_rules) == expected
 
-    if mode!='rules' and not rule_reliable and explicit_answer:
-        candidates=extract_by_rules(sections,default_chapter,allow_missing_answers=True)
-        if len(candidates)==expected and any(not x.get('answer_key') for x in candidates):
-            from .question_answering import infer_missing_answers
-            return infer_missing_answers(candidates,sections,path,config), '原文答案＋AI 推定缺答（需人工確認）'
-
-    if mode == 'rules':
-        if not rule_reliable:
-            return [], '快速規則解析（完整度不足）'
-        return by_rules, '快速規則解析'
-
-    if mode == 'llm' and rule_reliable:
-        return by_rules, 'AI 強化：原文格式完整，使用無損規則解析'
-    if mode == 'llm':
-        items = extract_with_llm(sections, default_chapter, config, allow_missing_answers=True)
-        if items:
-            if any(not x.get('answer_key') for x in items):
-                from .question_answering import infer_missing_answers
-                items = infer_missing_answers(items, sections, path, config)
-            return items, 'LLM 文字強化解析'
-
-        return [], 'LLM 文字強化解析'
-
-    if rule_reliable:
-        return by_rules, '自動：快速規則解析'
-    try:
-        items = extract_with_llm(sections, default_chapter, config, allow_missing_answers=True)
-        if items:
-            if any(not x.get('answer_key') for x in items):
-                from .question_answering import infer_missing_answers
-                items = infer_missing_answers(items, sections, path, config)
-            return items, '自動：LLM 文字強化解析'
-    except LLMError:
-        raise
-    return [], '自動：解析完整度不足'
+    if not rule_reliable:
+        return [], '快速規則解析（完整度不足）'
+    return by_rules, '快速規則解析'
 

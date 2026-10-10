@@ -51,9 +51,14 @@ def _read(process, responses):
 
 def cpu(op, **payload):
     global _process, _responses
-    if not _lock.acquire(timeout=60):
-        raise ExamModuleError('CPU 判斷模組忙碌，請稍後再試。')
+    from .jobs import active_job,read
+    job=active_job.get()
+    def cancelled():
+        return bool(job and read(job['app'],job['id'],job['user_id'])['cancel'])
+    while not _lock.acquire(timeout=1):
+        if cancelled(): raise RuntimeError('工作已取消。')
     try:
+        if cancelled(): raise RuntimeError('工作已取消。')
         if not _process or _process.poll() is not None:
             python = Path(os.getenv('EXAM_CPU_PYTHON') or (ROOT / '.venv-exam-ai' / ('Scripts/python.exe' if os.name=='nt' else 'bin/python')))
             if not python.is_file():
@@ -67,11 +72,15 @@ def cpu(op, **payload):
             threading.Thread(target=_read, args=(_process, _responses), daemon=True).start()
         _process.stdin.write(json.dumps(dict(op=op, **payload), ensure_ascii=False) + '\n')
         _process.stdin.flush()
-        try:
-            line = _responses.get(timeout=60)
-        except queue.Empty:
-            stop_worker()
-            raise ExamModuleError('CPU 判斷超過 60 秒，已停止此 CPU 工作。請減少單批題數。') from None
+        while True:
+            if cancelled():
+                stop_worker()
+                raise RuntimeError('工作已取消。')
+            try:
+                line=_responses.get(timeout=1)
+                break
+            except queue.Empty:
+                continue
         if line is None:
             stop_worker()
             raise ExamModuleError('CPU 判斷模組意外結束，請確認模型已完整下載。')

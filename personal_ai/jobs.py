@@ -68,8 +68,12 @@ def submit(app,user_id,kind,payload):
         con.execute('INSERT INTO jobs(id,user_id,kind,payload,status,created,updated) VALUES (?,?,?,?,?,?,?)',
                     (job_id,user_id,kind,json.dumps(payload,ensure_ascii=False),'queued',now,now))
         if payload.get('resume_from') and kind=='import':
-            source=con.execute("SELECT id FROM jobs WHERE id=? AND user_id=? AND kind='import' AND status IN ('failed','cancelled')",(payload['resume_from'],user_id)).fetchone()
+            source=con.execute("SELECT id,status FROM jobs WHERE id=? AND user_id=? AND kind='import' AND status IN ('failed','cancelled','completed')",(payload['resume_from'],user_id)).fetchone()
             if not source: raise ValueError('只能接續您自己的已中斷匯入工作。')
+            if source['status']=='completed':
+                pending=con.execute("SELECT value FROM import_checkpoints WHERE job_id=? AND user_id=? AND key='answer_failures'",(source['id'],user_id)).fetchone()
+                if not pending or not json.loads(pending['value']):
+                    raise ValueError('此工作已全部完成，無需接續。')
             con.execute('INSERT INTO import_checkpoints(job_id,user_id,key,value) '
                         'SELECT ?,user_id,key,value FROM import_checkpoints WHERE job_id=? AND user_id=?',
                         (job_id,payload['resume_from'],user_id))
@@ -174,15 +178,15 @@ def dispatch(app,user_id,kind,p):
         path=Path(p['path'])
         from .import_checkpoints import get
         previous=get('final_batch_id')
-        if previous:
+        if previous and not get('answer_failures',[]):
             saved=db().execute('SELECT id FROM exam_imports WHERE id=? AND user_id=?',(previous,user_id)).fetchone()
             if saved:
                 path.unlink(missing_ok=True)
                 return dict(message='已有完整預覽，不重複建立',url=f'/imports/{previous}')
         with path.open('rb') as f:
             batch=process_import_file(app,MultiDict(p['form']),FileStorage(f,filename=p['filename']))
-        path.unlink(missing_ok=True)
         missing=get('answer_failures',[])
+        if not missing: path.unlink(missing_ok=True)
         message=f'可用題目分析已完成（{len(missing)} 題待補資料），請確認' if missing else '解析已完成，請確認'
         return dict(message=message,url=f'/imports/{batch}')
     if kind=='classify_fixed':

@@ -63,7 +63,6 @@
     const action = form.elements.namedItem('action').value;
     const rows = cards().filter(card => event.submitter?.value === 'all' || checked(card));
     if (!rows.length) return message('請先勾選草稿。', true);
-    if (rows.length > 200) return message('每次最多處理 200 題，請勾選後分批處理。', true);
     const verbs = {approve: '核准加入題庫', reject: '退回草稿', save: '儲存修正'};
     if (action !== 'save' && !window.confirm(`確定${verbs[action]}這 ${rows.length} 題？`)) return;
     const payload = new FormData();

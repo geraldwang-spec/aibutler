@@ -6,12 +6,26 @@ import os
 import re
 import time
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 import urllib.error
 import urllib.request
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 OLLAMA_BASE_URL = "http://127.0.0.1:11434/v1"
 _OLLAMA_GATE = threading.Lock()
+_OUTPUT_BUDGET = ContextVar('llm_output_budget', default=None)
+_DEFER_RATE_LIMITS = ContextVar('llm_defer_rate_limits', default=False)
+
+
+@contextmanager
+def defer_rate_limits():
+    """Import items may be postponed so one provider cannot stall other items."""
+    token = _DEFER_RATE_LIMITS.set(True)
+    try:
+        yield
+    finally:
+        _DEFER_RATE_LIMITS.reset(token)
 
 
 class LLMError(RuntimeError):
@@ -46,7 +60,7 @@ class MockLLM(BaseLLM):
 
     def complete_json(self, system: str, user: str):
         match = re.search(r"請產生\s*(\d+)\s*題", user)
-        count = max(1, min(20, int(match.group(1)) if match else 3))
+        count = max(1, int(match.group(1)) if match else 3)
         return {
             "questions": [
                 {
@@ -111,6 +125,13 @@ class OpenAICompatibleLLM(BaseLLM):
                 api_error=body.get('error') or body
                 error_code=api_error.get('code') or api_error.get('error_code') or api_error.get('type')
                 retry_after=retry_after or body.get('retry_after')
+                if exc.code==429:
+                    hint=re.search(r'try again in\s+((?:\d+(?:\.\d+)?[hms]\s*)+)',str(api_error.get('message','')),re.I)
+                    if hint:
+                        try:
+                            seconds=sum(float(value)*{'h':3600,'m':60,'s':1}[unit.lower()] for value,unit in re.findall(r'(\d+(?:\.\d+)?)([hms])',hint[1],re.I))
+                            retry_after=max(float(retry_after or 0),seconds)
+                        except (ValueError,TypeError): retry_after=seconds
             except (ValueError,AttributeError):
                 error_code=None
             raise LLMError(f"LLM API HTTP {exc.code}{suffix}",status_code=exc.code,
@@ -138,7 +159,7 @@ class OpenAICompatibleLLM(BaseLLM):
                     return json.loads(text[start : end + 1])
                 except json.JSONDecodeError:
                     pass
-        raise LLMError("LLM 未回傳有效 JSON。請重試或改用較強模型。")
+        raise LLMError("LLM 未回傳有效 JSON。請重試或改用較強模型。",error_code='invalid_json')
 
     def complete_json(self, system, user):
         from .data_safety import POLICY, safe_prompt, sanitize
@@ -185,13 +206,15 @@ class OllamaLLM(OpenAICompatibleLLM):
         super().__init__(base_url, model, api_key, timeout=timeout)
 
     def _native_chat(self, messages, temperature=0.2, images=None, num_predict=4096):
-        deadline=time.monotonic()+(self.timeout or 60)
-        if not _OLLAMA_GATE.acquire(timeout=self.timeout or 60):
-            raise LLMError('本機模型忙碌超過 60 秒，請稍後再試。')
+        from .jobs import active_job,read
+        job=active_job.get()
+        while not _OLLAMA_GATE.acquire(timeout=1):
+            if job and read(job['app'],job['id'],job['user_id'])['cancel']:
+                raise RuntimeError('工作已取消。')
         try:
-            if time.monotonic() >= deadline:
-                raise LLMError('本機模型等待超過 60 秒，尚未開始生成。')
-            return self._native_chat_impl(messages,temperature,images,num_predict,deadline)
+            if job and read(job['app'],job['id'],job['user_id'])['cancel']:
+                raise RuntimeError('工作已取消。')
+            return self._native_chat_impl(messages,temperature,images,num_predict)
         finally:
             _OLLAMA_GATE.release()
 
@@ -215,19 +238,15 @@ class OllamaLLM(OpenAICompatibleLLM):
         }, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(root + "/api/chat", data=payload, method="POST")
         req.add_header("Content-Type", "application/json")
-        deadline=deadline or time.monotonic()+(self.timeout or 60)
         try:
-            with urllib.request.urlopen(req, timeout=max(.1,deadline-time.monotonic())) as response:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 pieces=[]
                 data={}
                 for line in response:
-                    remaining=deadline-time.monotonic()
-                    if remaining <= 0:
-                        raise LLMError('本機模型生成超過 60 秒，已關閉串流，不再執行後續模型任務。')
-                    try:
-                        response.fp.raw._sock.settimeout(remaining)
-                    except AttributeError:
-                        pass
+                    from .jobs import active_job,read
+                    job=active_job.get()
+                    if job and read(job['app'],job['id'],job['user_id'])['cancel']:
+                        raise RuntimeError('工作已取消。')
                     if not line.strip():
                         continue
                     data=json.loads(line.decode('utf-8'))
@@ -255,15 +274,23 @@ class OllamaLLM(OpenAICompatibleLLM):
                              "finish_reason":"length" if data.get('done_reason')=='length' else 'stop'}], "_ollama": data}
 
     def _request(self, messages, temperature=0.2):
-        return self._native_chat(messages, temperature=temperature, num_predict=4096)
+        return self._bounded_native_request(messages, temperature)
+
+    def _bounded_native_request(self, messages, temperature=0.2, images=None):
+        budget=4096
+        while True:
+            data=self._native_chat(messages,temperature=temperature,images=images,num_predict=budget)
+            if data['choices'][0].get('finish_reason')!='length': return data
+            # Grow only when required; no total question/work limit or truncation.
+            budget*=2
 
     def complete_json_with_images(self, system, user, images):
         from .data_safety import POLICY, safe_prompt, sanitize
         system=safe_prompt(system)+'\n'+POLICY
         user=safe_prompt(user)
-        data = self._native_chat(
+        data = self._bounded_native_request(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            temperature=0.15, images=images, num_predict=4096,
+            temperature=0.15, images=images,
         )
         try:
             text = data["choices"][0]["message"]["content"]
@@ -277,12 +304,13 @@ class GroqLLM(OpenAICompatibleLLM):
 
     def __init__(self, model, api_key="", base_url=GROQ_BASE_URL, timeout=60):
         super().__init__(base_url, model, api_key, timeout=timeout)
-        self.max_output_tokens = max(128, min(800, int(os.getenv('GROQ_MAX_OUTPUT_TOKENS', '800'))))
-        self.max_input_bytes = max(2000, min(24000, int(os.getenv('GROQ_MAX_INPUT_BYTES', '16000'))))
+        # Efficiency targets, not total quotas or input rejection thresholds.
+        self.max_output_tokens = 2048
+        self.max_input_bytes = 16000
 
     def _request_options(self):
         # A per-request cap; this does not replace Groq's per-minute quota.
-        options = {"max_completion_tokens": self.max_output_tokens}
+        options = {'max_completion_tokens': _OUTPUT_BUDGET.get() or self.max_output_tokens}
         if self.model.startswith('openai/gpt-oss-'):
             options.update(reasoning_effort='low', include_reasoning=False,
                            response_format={'type': 'json_object'})
@@ -297,11 +325,11 @@ class GroqLLM(OpenAICompatibleLLM):
             delay=max(60,float(retry_after or 60))
         except (TypeError,ValueError):
             delay=60
-        if not math.isfinite(delay) or delay>60:
+        if not math.isfinite(delay) or delay<=0:
             return False
         job=active_job.get()
         # Short interruptible waits, never one blocking minute-long sleep.
-        for _ in range(60):
+        for _ in range(math.ceil(delay)):
             if job:
                 if read(job['app'],job['id'],job['user_id'])['cancel']:
                     raise RuntimeError('工作已取消。')
@@ -321,7 +349,35 @@ class GroqLLM(OpenAICompatibleLLM):
                     all(isinstance(a,dict) and a.get('status')=='answered' and a.get('answer') for a in answers))
         return True
 
+    def _wait_for_rate_limit(self, exc, attempt):
+        """Honor provider cooldowns, even daily quotas; cancellation remains live."""
+        if exc.error_code in ('insufficient_quota','billing_hard_limit_reached'):
+            return False
+        sizes=re.search(r'Limit\s+(\d+).*Requested\s+(\d+)',str(exc),re.I)
+        if sizes and int(sizes[2])>int(sizes[1]):
+            return False  # Waiting cannot fit a request larger than provider quota.
+        try: delay=float(exc.retry_after or 60)
+        except (ValueError,TypeError): return False
+        if not math.isfinite(delay) or delay<=0: return False
+        delay=math.ceil(delay)+1
+        from .jobs import active_job,read,update
+        job=active_job.get()
+        if job:
+            update(job['app'],job['id'],error=f'Groq 額度／速率暫時不足；等待 {delay} 秒後自動接續（第 {attempt} 次等待），已有成果保留。')
+        for _ in range(delay):
+            if job and read(job['app'],job['id'],job['user_id'])['cancel']:
+                raise RuntimeError('工作已取消。')
+            time.sleep(1)
+        return True
+
     def _request(self, messages, temperature=0.2):
+        token=_OUTPUT_BUDGET.set(self.max_output_tokens)
+        try:
+            return self._request_with_budget(messages,temperature)
+        finally:
+            _OUTPUT_BUDGET.reset(token)
+
+    def _request_with_budget(self, messages, temperature=0.2):
         # UTF-8 bytes are a conservative bound, not an exact tokenizer count.
         from . import import_checkpoints as checkpoints
         cache_key='llm:'+checkpoints.fingerprint([self.base_url,self.model,self._request_options(),messages,temperature])
@@ -333,6 +389,14 @@ class GroqLLM(OpenAICompatibleLLM):
             if job and read(job['app'],job['id'],job['user_id'])['cancel']:
                 raise RuntimeError('工作已取消。')
             return cached
+        cooldown_key=checkpoints.fingerprint([self.base_url,self.model])
+        if _DEFER_RATE_LIMITS.get():
+            cooldown=checkpoints.get('provider_cooldowns',{}).get(cooldown_key,0)
+            if cooldown>time.time():
+                failure=LLMError('此模型仍在服務商冷卻期間，本題待重試。',status_code=429,
+                                 retry_after=math.ceil(cooldown-time.time()))
+                failure.retry_exhausted=True
+                raise failure
         counted = []
         images = 0
         for message in messages:
@@ -343,32 +407,51 @@ class GroqLLM(OpenAICompatibleLLM):
                     if part.get('type') == 'image_url':
                         images += 1
                         url = part.get('image_url', {}).get('url','')
-                        if not url.startswith('data:image/') or len(url)>8*1024*1024:
-                            raise LLMError('圖片輸入必須是本機圖像，且每張編碼後不超過 8 MB。')
+                        if not url.startswith('data:image/'):
+                            raise LLMError('圖片輸入必須是本機圖像。')
                         content.append({'type':'text','text':'[本機頁面圖片]'})
                     else:
                         content.append(part)
                 copy['content'] = content
             counted.append(copy)
-        if images>3 or len(json.dumps(messages).encode())>20*1024*1024:
-            raise LLMError('每次最多 3 張圖片，總請求不可超過 20 MB。')
         size = len(json.dumps(counted, ensure_ascii=False).encode('utf-8'))
-        if size > self.max_input_bytes:
-            raise LLMError(f'送入模型的內容超過 {self.max_input_bytes} bytes 上限，請縮短內容或分批匯入。尚未呼叫 API。')
         from .jobs import guard, usage
         started=time.monotonic()
         try:
-            for attempt in range(2):
+            rate_retries=0
+            transient_retries=0
+            while True:
                 # Each physical attempt counts against request/job limits.
-                guard(size+self.max_output_tokens+512+images*2048)
+                guard(size+(_OUTPUT_BUDGET.get() or self.max_output_tokens)+512+images*2048)
                 try:
                     data=super()._request(messages, temperature)
+                    if data.get('choices',[{}])[0].get('finish_reason')=='length':
+                        try: usage(data,self.model,time.monotonic()-started)
+                        except OSError: pass
+                        _OUTPUT_BUDGET.set((_OUTPUT_BUDGET.get() or self.max_output_tokens)*2)
+                        continue
                     break
                 except LLMError as exc:
-                    if (attempt==0 and exc.status_code in (502,503,504,520)
+                    if exc.status_code==429:
+                        if _DEFER_RATE_LIMITS.get():
+                            try: delay=float(exc.retry_after or 60)
+                            except (TypeError,ValueError): delay=60
+                            if not math.isfinite(delay) or delay<=0: delay=60
+                            cooldowns=checkpoints.get('provider_cooldowns',{})
+                            cooldowns[cooldown_key]=time.time()+delay+1
+                            checkpoints.put('provider_cooldowns',cooldowns)
+                            raise
+                        if self._wait_for_rate_limit(exc,rate_retries+1):
+                            rate_retries+=1
+                            continue
+                    if (exc.status_code in (502,503,504,520)
                             and self._wait_for_retry(exc.retry_after)):
+                        transient_retries+=1
                         continue
                     raise
+            from .jobs import active_job,update
+            job=active_job.get()
+            if job: update(job['app'],job['id'],error=None)
             try:
                 usage(data,self.model,time.monotonic()-started)
             except OSError:
@@ -379,13 +462,17 @@ class GroqLLM(OpenAICompatibleLLM):
         except LLMError as exc:
             if exc.status_code in (502,503,504,520):
                 raise LLMError(f'Groq 服務暫時無法正常回應（HTTP {exc.status_code}）。'
-                    '已依服務商等待建議決定是否重試（最多一次）；目前仍無法完成。'
+                    '已依服務商等待建議決定是否接續；目前仍無法完成。'
                     '請至少等待 60 秒後再試；此錯誤不代表教材、API Key 或 GPU 有問題。',
                     status_code=exc.status_code,error_code=exc.error_code,retry_after=exc.retry_after or 60) from exc
             if exc.status_code==429:
                 retry=f' 建議等待 {exc.retry_after} 秒後再試。' if exc.retry_after and str(exc.retry_after).replace('.','',1).isdigit() else ''
-                raise LLMError('Groq 速率或 token 額度限制（HTTP 429）。'+retry+' 已停止後續呼叫；'+str(exc),
-                               status_code=429,error_code=exc.error_code,retry_after=exc.retry_after) from exc
+                reason=('此部分列為待補，先處理其他可用題目，已有成果保留。' if _DEFER_RATE_LIMITS.get() else
+                        '無可用恢復時間、帳務問題或單次請求超過服務商容量，已有成果保留。')
+                failure=LLMError('Groq 速率或 token 額度限制（HTTP 429）。'+retry+' '+reason+str(exc),
+                               status_code=429,error_code=exc.error_code,retry_after=exc.retry_after)
+                failure.retry_exhausted=True
+                raise failure from exc
             if exc.status_code in (401,403):
                 raise LLMError('Groq 金鑰或存取權限有誤，請檢查 API Key。'+str(exc),
                                status_code=exc.status_code,error_code=exc.error_code) from exc
@@ -568,8 +655,6 @@ def get_vision_llm(config):
     model=config.get('VISION_MODEL') or os.getenv('VISION_MODEL') or 'qwen/qwen3.8-27b'
     base=config.get('VISION_BASE_URL') or os.getenv('VISION_BASE_URL') or (GROQ_BASE_URL if provider=='groq' else OLLAMA_BASE_URL)
     instance=_provider_instance(provider,base,model,_api_key_for(config,'VISION',provider,'PARSER'))
-    if isinstance(instance,GroqLLM):
-        instance.max_output_tokens=1600
     return instance
 
 

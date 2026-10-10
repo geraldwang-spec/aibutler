@@ -1,4 +1,4 @@
-"""Bound long classification inputs without silently discarding the source tail."""
+"""Process long classification sources in segments without a total size cap."""
 import json
 from .llm_provider import LLMError
 
@@ -17,18 +17,16 @@ def prepare(item, model):
         fragment = source[start:start+1500]
         data = model.complete_json(
             '這是長考題的原文片段，可能跨欄位、句子或選項。只描述片段明確呈現的知識與技能，'
-            '不要作答、不要推測省略內容。不要建立正式概念。每個 hint 最多 100 字，只回 JSON。',
+            '不要作答、不要推測省略內容。不要建立正式概念。每個 hint 清楚描述知識與技能，只回 JSON。',
             '原文片段：\n'+fragment+'\n回傳 {"hint":"原文明確呈現的知識／技能，若僅排版則填空字串"}')
         hint = data.get('hint') if isinstance(data,dict) else None
-        if not isinstance(hint,str) or len(hint)>100:
+        if not isinstance(hint,str):
             raise LLMError('長題概念脈絡整理格式不完整，已保留原文，請重試。')
         if hint.strip():
             hints.append(hint.strip())
     if not hints:
         raise LLMError('長題原文無法取得分類脈絡，請人工確認題目後重試。')
     text = '\n'.join(hints)
-    if len(text.encode('utf-8'))>8000:
-        raise LLMError('長題分類脈絡仍超過單次額度，請拆成題組；原文未截短。')
     prepared = dict(item, content='以下是完整原文逐段整理的分類脈絡，仍需人工複核：\n'+text,
                     explanation='', **{'option_'+k:'' for k in 'ABCD'})
     prepared['_long_classification_context'] = True

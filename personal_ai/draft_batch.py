@@ -22,8 +22,8 @@ def bulk_questions():
         raw_ids = request.form.getlist('draft_ids')
         if request.form.get('scope') == 'all':
             raw_ids = request.form.getlist('all_draft_ids')
-        if not raw_ids or len(raw_ids) > 200:
-            raise ValueError('請選擇 1–200 題；更多草稿請分批處理。')
+        if not raw_ids:
+            raise ValueError('請至少選擇一題。')
         ids = sorted(set(int(value) for value in raw_ids))
         if any(value <= 0 for value in ids):
             raise ValueError('草稿編號不正確。')

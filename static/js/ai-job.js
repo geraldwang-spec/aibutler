@@ -34,9 +34,10 @@
       const pending = ['queued', 'running'].includes(job.status);
       if (cancel) cancel.hidden = !pending;
       const resume = document.getElementById('job-resume-form');
-      if (resume) resume.hidden = !['failed', 'cancelled'].includes(job.status);
+        if (resume) resume.hidden = !(['failed', 'cancelled'].includes(job.status) ||
+          (job.status === 'completed' && (job.progress?.answer_failures?.length || 0) > 0));
       const progress = document.getElementById('job-progress');
-      if (progress && job.progress) progress.textContent = `已保存 ${job.progress.completed} / ${job.progress.total} 題 · ${job.progress.stage}`;
+      if (progress && job.progress) progress.textContent = `本機解析 ${job.progress.parsed_count || 0} 題草稿 · 答案完成 ${job.progress.completed} / ${job.progress.total} 題 · ${job.progress.stage}`;
       if (job.result?.url) {
         const destination = new URL(job.result.url, location.href);
         if (destination.origin !== location.origin) throw new Error('成果連結格式不正確。');

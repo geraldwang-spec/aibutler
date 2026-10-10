@@ -34,5 +34,8 @@ def snapshot(app,job_id,user_id):
     questions=read(app,job_id,user_id,'questions',[])
     total=read(app,job_id,user_id,'total',len(questions))
     return dict(questions=questions,completed=len(questions),total=total,
+                parsed_questions=read(app,job_id,user_id,'parsed_questions',[]),
+                parsed_count=len(read(app,job_id,user_id,'parsed_questions',[])),
                 answer_failures=read(app,job_id,user_id,'answer_failures',[]),
+                layout_passages=read(app,job_id,user_id,'layout_passages',[]),
                 remaining=max(0,total-len(questions)),stage=read(app,job_id,user_id,'stage','尚未完成一批'))

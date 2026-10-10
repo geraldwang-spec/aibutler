@@ -1,0 +1,177 @@
+{
+  "corpus": [
+    {
+      "name": "chinese",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-00-C.pdf",
+      "expected": 50,
+      "parsed": 50,
+      "source_numbers": 50,
+      "repair_units": [],
+      "error": null
+    },
+    {
+      "name": "english",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-00-E.pdf",
+      "expected": 50,
+      "parsed": 50,
+      "source_numbers": 50,
+      "repair_units": [],
+      "error": null
+    },
+    {
+      "name": "math",
+      "url": "https://pic.tcte.edu.tw/SELF/114Self/114Self_6-08-1.pdf",
+      "expected": 20,
+      "parsed": 26,
+      "source_numbers": 20,
+      "repair_units": [],
+      "error": "原文題號重複，無法安全隔離補修範圍；請在文字工作區確認，不會自動重跑全文。"
+    }
+  ],
+  "live": [
+    {
+      "name": "english-reading",
+      "number": 36,
+      "content": "Many people believe that success is only for the lucky few, but this idea is far from the truth. When challenges arise, we must learn to _36_ them with courage rather than escape.",
+      "options": {
+        "A": "abandon",
+        "B": "confront",
+        "C": "dismiss",
+        "D": "ignore"
+      },
+      "structural_pass": true
+    },
+    {
+      "name": "math",
+      "number": 1,
+      "content": "下列何者為微分方程式 dy/dx = 1/(1+x²) 的通解？",
+      "options": {
+        "A": "y(x) = arctan(x) + C",
+        "B": "y(x) = arcsin(x) + C",
+        "C": "y(x) = tan(x) + C",
+        "D": "y(x) = sin(x) + C"
+      },
+      "structural_pass": true
+    }
+  ],
+  "calls": 3,
+  "input_tokens": 5238,
+  "output_tokens": 230,
+  "limitations": "Structural smoke tests, not a calibrated accuracy estimate; no production data modified.",
+  "local_image_regions": [
+    {
+      "bbox": [
+        189.35000610351562,
+        632.2000122070312,
+        352.6500244140625,
+        698.6500244140625
+      ],
+      "range": [
+        4,
+        4
+      ],
+      "candidates": [
+        4
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        535.9000244140625,
+        794.8499755859375,
+        694.75,
+        829.8499755859375
+      ],
+      "range": [
+        10,
+        10
+      ],
+      "candidates": [
+        10
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        550.2999877929688,
+        718.7000122070312,
+        694.25,
+        791.75
+      ],
+      "range": [
+        10,
+        10
+      ],
+      "candidates": [
+        10
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        33.95000076293945,
+        42.500022888183594,
+        693.9500122070312,
+        110.6500244140625
+      ],
+      "range": null,
+      "candidates": [],
+      "status": "unresolved",
+      "reason": "cross_column_region"
+    },
+    {
+      "bbox": [
+        87.0,
+        438.0999755859375,
+        349.54998779296875,
+        497.04998779296875
+      ],
+      "range": [
+        3,
+        3
+      ],
+      "candidates": [
+        3
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        89.1500015258789,
+        537.1000366210938,
+        361.4499816894531,
+        628.9000244140625
+      ],
+      "range": [
+        3,
+        3
+      ],
+      "candidates": [
+        3
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    },
+    {
+      "bbox": [
+        429.3500061035156,
+        342.85003662109375,
+        691.7000122070312,
+        416.6500244140625
+      ],
+      "range": [
+        8,
+        8
+      ],
+      "candidates": [
+        8
+      ],
+      "status": "assigned",
+      "reason": "question_region_and_line_band"
+    }
+  ]
+}

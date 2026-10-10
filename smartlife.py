@@ -99,7 +99,9 @@ def create_app(test_config=None):
         TTS_MODEL=os.getenv('TTS_MODEL','hexgrad/Kokoro-82M-v1.1-zh'),
         TTS_LANGUAGE=os.getenv('TTS_LANGUAGE','z'),
         SECRET_KEY=os.getenv('SECRET_KEY',''),
-        MAX_CONTENT_LENGTH=5*1024*1024,
+        MAX_CONTENT_LENGTH=None,
+        MAX_FORM_MEMORY_SIZE=None,
+        MAX_FORM_PARTS=None,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE')=='true',
@@ -186,7 +188,7 @@ def create_app(test_config=None):
     @app.errorhandler(413)
     @app.errorhandler(503)
     def error_page(error):
-        message = '檔案不可超過 5 MB。' if error.code==413 else ('找不到此資料，或您沒有存取權限。' if error.code==404 else str(error.description))
+        message = '請求被伺服器或外部代理拒絕；系統沒有設定檔案大小上限。' if error.code==413 else ('找不到此資料，或您沒有存取權限。' if error.code==404 else str(error.description))
         return render_template('error.html',title='無法完成操作',message=message), error.code
 
     @app.get('/')
@@ -593,7 +595,7 @@ def register_learning(app):
                 else:
                     if not upload or not upload.filename: raise ValueError('請選擇檔案。')
                     raw=upload.read(); filename=Path(upload.filename).name
-                if not raw or len(raw)>5*1024*1024: raise ValueError('檔案需為 1 byte–5 MB。')
+                if not raw: raise ValueError('檔案內容不可為空。')
                 folder=Path(app.instance_path)/'job_uploads'; folder.mkdir(parents=True,exist_ok=True)
                 path=folder/(secrets.token_hex(16)+Path(filename).suffix.lower()); path.write_bytes(raw)
                 try:
@@ -730,8 +732,6 @@ def process_import_file(app,form,upload):
     raw=upload.read()
     if not raw:
         raise ValueError('檔案內容為空。')
-    if len(raw)>5*1024*1024:
-        raise ValueError('題庫檔案上限 5 MB。')
 
     folder=Path(app.instance_path)/'imports'
     folder.mkdir(parents=True,exist_ok=True)
@@ -753,9 +753,6 @@ def process_import_file(app,form,upload):
             rows=None
     elif suffix in ('.xlsx','.xlsm'):
         from openpyxl import load_workbook
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            if sum(z.file_size for z in archive.infolist())>50*1024*1024:
-                raise ValueError('Excel 解壓後過大，請拆分檔案。')
         book=load_workbook(io.BytesIO(raw),read_only=True,data_only=True)
         try:
             iterator=book.active.iter_rows(values_only=True)
@@ -791,8 +788,6 @@ def process_import_file(app,form,upload):
             item['chapter_name']=default_chapter
         if not item.get('content') or not item.get('answer_key'):
             raise ValueError(f'第 {i} 題缺少題目或答案。')
-        if len(item['chapter_name'])>120 or len(item['content'])>20000 or len(item['answer_key'])>50 or len(item.get('explanation',''))>20000:
-            raise ValueError(f'第 {i} 題文字過長。')
         if item.get('q_type') not in ('單選','多選','是非','填空'):
             raise ValueError(f'第 {i} 題題型無效：{item.get("q_type") or "未辨識"}。')
         try:
@@ -807,6 +802,11 @@ def process_import_file(app,form,upload):
         if row.get('_answer_source')=='ai_inferred':
             item['_answer_source']='ai_inferred'
             item['_answer_model']=str(row.get('_answer_model') or '')[:120]
+            if row.get('_answer_input_fingerprint'):
+                item['_answer_input_fingerprint']=row['_answer_input_fingerprint']
+        if row.get('_parser') in ('rules','llm-layout','local-vision-repair'):
+            for key in ('_shared_text','_question_stem','_shared_passage','_passage_range','_requires_vision','_source_material'):
+                if key in row: item[key]=row[key]
         clean.append(item)
 
     import_strategy=(form.get('import_strategy') or 'concept').strip().lower()
@@ -819,7 +819,20 @@ def process_import_file(app,form,upload):
     checkpoints.put('stage','題目與答案已完成，準備概念分類' if import_strategy=='concept' else '準備建立匯入預覽')
     if import_strategy=='concept':
         from personal_ai.concept_classifier import classify_question_batch, attach_classifications
-        classifications,classifier_name=classify_question_batch(clean,subject_id,app.config)
+        cached=checkpoints.get('classification_results',{})
+        def classification_key(item):
+            return checkpoints.fingerprint([subject_id,item.get('content'),item.get('q_type'),item.get('answer_key'),
+                *[item.get('option_'+k,'') for k in 'ABCD']])
+        keys=[classification_key(item) for item in clean]
+        pending=[item for item,key in zip(clean,keys) if key not in cached]
+        classifier_name=checkpoints.get('classification_model','已保存的概念分類')
+        if pending:
+            fresh,classifier_name=classify_question_batch(pending,subject_id,app.config)
+            if len(fresh)!=len(pending): raise ValueError('概念分類結果不完整，既有成果保留。')
+            cached.update({classification_key(item):result for item,result in zip(pending,fresh)})
+            checkpoints.put('classification_results',cached)
+            checkpoints.put('classification_model',classifier_name)
+        classifications=[cached[key] for key in keys]
         clean=attach_classifications(clean,classifications,'concept')
     else:
         for item in clean:

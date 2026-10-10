@@ -80,8 +80,8 @@ def _review_grounding(model, response, payload):
 
 def validate_question(user_id,question,subject_id=None):
     question=(question or '').strip()
-    if not question or len(question)>1500:
-        raise ValueError('提問需為 1–1500 字。')
+    if not question:
+        raise ValueError('提問不可為空。')
     from .data_safety import validate_user_text, redact_text
     validate_user_text(question)
     question=redact_text(question)
