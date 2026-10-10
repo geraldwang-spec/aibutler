@@ -5,12 +5,14 @@
   <a class="exercise-back" href="{{url_for('records',table='exercises')}}">← 返回運動動作庫</a>
   <header class="exercise-demo-heading"><div><p class="eyebrow">MOVEMENT LIBRARY</p><h2>{{exercise.exercise_name}}</h2></div><div class="exercise-demo-tags"><span class="pill">{{exercise.muscle_group}}</span><span class="pill">{{exercise.equipment or '徒手'}}</span></div></header>
   {% if media %}
-  <p class="note">姿勢示範圖 · 兩張靜態圖片供對照，不是完整動作影片。</p>
+  <p class="note">起始與結束姿勢交替播放，近似動作示範；不是完整動作影片。</p>
   {% if media.note %}<p class="notice info">{{media.note}}</p>{% endif %}
+  {# 兩張圖疊在一起，第二張用 CSS 週期性顯示/隱藏，模擬 GIF；系統設定減少動態時停在第一張 #}
+  <figure class="exercise-anim-figure"><div class="exercise-photo-frame exercise-anim">{% for photo in media.images %}<img src="{{url_for('static',filename=photo)}}" alt="{% if loop.first %}{{exercise.exercise_name}}：動作示範（兩個姿勢交替）{% endif %}" width="600" height="600"{% if not loop.first %} aria-hidden="true"{% endif %}>{% endfor %}</div><figcaption>動作示範 · 交替播放</figcaption></figure>
   <div class="exercise-demo-grid">{% for photo in media.images %}
     <figure><div class="exercise-photo-frame"><img src="{{url_for('static',filename=photo)}}" alt="{{exercise.exercise_name}}：姿勢示範 {{loop.index}}" width="600" height="600"></div><figcaption><span>{{'%02d'|format(loop.index)}}</span> 姿勢示範 {{loop.index}}</figcaption></figure>
   {% endfor %}</div>
-  <p class="exercise-credit">圖片來源：<a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener noreferrer">Free Exercise DB</a> · 統一以原始靜態圖呈現</p>
+  <p class="exercise-credit">圖片來源：<a href="https://github.com/yuhonas/free-exercise-db" target="_blank" rel="noopener noreferrer">Free Exercise DB</a>（Unlicense，公有領域）</p>
   {% else %}<div class="exercise-no-media"><h3>這個動作尚無對應示範</h3><p>保留你的動作與訓練紀錄，不以其他動作的圖片替代。</p></div>{% endif %}
   <p class="note">示範僅供辨識動作與器材；實際姿勢、活動範圍及負重請依個人狀況與專業指導調整。</p>
 </section>
