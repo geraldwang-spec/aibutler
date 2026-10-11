@@ -1,0 +1,12 @@
+{% extends 'live_base.html' %}
+{% import 'financial/_parts.html' as fin with context %}
+{% block content %}
+{{ fin.assets() }}
+{{ fin.period_cards(summary, 'expense') }}
+<div class="fin-columns">
+  {{ fin.entry_form(tx_key, tx_type, form, categories, labels, current_date) }}
+  {{ fin.breakdown_card(breakdown, labels) }}
+</div>
+<p class="notice info">未選分類時，AI 只會看「紀錄名稱」判斷屬於食、衣、住、行、育、樂哪一類；判斷失敗會標為「未分類」，紀錄照常儲存。金額加總一律由程式計算。</p>
+{{ fin.records_table(records, labels, '支出紀錄', url_for('financial.expense'), show_type=false) }}
+{% endblock %}

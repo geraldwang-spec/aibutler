@@ -1,0 +1,52 @@
+/* 財務小幫手（templates/financial/*）。顏色沿用 workspace-theme 的變數，三種配色都能正常顯示。
+   CSP 為 style-src 'self'：所有樣式放在這裡，不在 HTML 寫 style 屬性。 */
+
+.fin-actions{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px;margin:0 0 18px}
+.fin-actions .action,.fin-actions .outline-button{display:inline-flex;align-items:center;gap:6px;margin:0;padding:9px 16px;text-decoration:none}
+
+/* 今日／本週／本月／今年 */
+.fin-periods{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:0 0 22px}
+.fin-period{background:var(--theme-surface,#fff);border:1px solid var(--theme-blue-border,#e7e8ef);border-radius:10px;padding:16px 18px}
+.fin-period h2{font-size:12px;font-weight:600;color:var(--theme-muted,#9399a8);margin:0 0 10px;letter-spacing:.04em}
+.fin-period dl{margin:0 0 10px}
+.fin-period dl div{display:flex;justify-content:space-between;font-size:13px;line-height:1.9}
+.fin-period dt{font-weight:400;color:var(--theme-ink,#5c6070)}
+.fin-period dd{margin:0;font-variant-numeric:tabular-nums}
+.fin-balance{display:flex;justify-content:space-between;align-items:baseline;border-top:1px dashed var(--theme-blue-border,#e7e8ef);padding-top:8px;margin:0;font-size:22px;font-weight:600;color:var(--theme-green-text,#407f60);font-variant-numeric:tabular-nums}
+.fin-balance span{font-size:12px;font-weight:400;color:var(--theme-muted,#9399a8)}
+.fin-balance.is-negative{color:var(--theme-red-text,#ae514d)}
+.fin-total{margin:0;font-size:26px;font-weight:600;font-variant-numeric:tabular-nums}
+.fin-total small{font-size:12px;font-weight:400;color:var(--theme-muted,#9399a8)}
+.fin-period .fin-income{color:var(--theme-green-text,#407f60)}
+.fin-period .fin-expense{color:var(--theme-red-text,#ae514d)}
+
+/* 兩欄：表單／分類圖 或 分類圖／紀錄表 */
+.fin-columns{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:18px;align-items:start}
+.fin-columns > .panel-card{margin-top:0}
+
+/* 本月支出分類長條 */
+.fin-breakdown ul{list-style:none;margin:0;padding:0}
+.fin-breakdown li{display:grid;grid-template-columns:6.5em 1fr;gap:4px 10px;align-items:center;margin:0 0 12px;font-size:13px}
+.fin-cat-amount{grid-column:2;font-size:11px;color:var(--theme-muted,#9399a8);font-variant-numeric:tabular-nums}
+.fin-bar{height:10px;border-radius:5px;background:var(--theme-blue-soft,#f2f3f7);overflow:hidden}
+.fin-bar-fill{display:block;height:100%;width:0;border-radius:5px;background:var(--theme-accent-strong,#8b80ce);transition:width .4s ease}
+.fin-cat-食{background:var(--theme-amber-strong,#d79a3c)}
+.fin-cat-衣{background:var(--theme-accent-strong,#8b80ce)}
+.fin-cat-住{background:var(--theme-blue-strong,#5b7bd5)}
+.fin-cat-行{background:var(--theme-green-strong,#4c9a73)}
+.fin-cat-育{background:var(--theme-study-text,#3f8a9a)}
+.fin-cat-樂{background:var(--theme-red-strong,#d0675f)}
+.fin-cat-未分類{background:var(--theme-muted,#9399a8)}
+
+/* 表格與表單 */
+.fin-table .fin-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.fin-type{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;border:1px solid transparent}
+.fin-type.is-income{background:var(--theme-green-soft,#eff9f4);border-color:var(--theme-green-border,#d2ecdf);color:var(--theme-green-text,#407f60)}
+.fin-type.is-expense{background:var(--theme-red-soft,#fff4f3);border-color:var(--theme-red-border,#f3d9d6);color:var(--theme-red-text,#ae514d)}
+.fin-form .action{margin-top:12px}
+.fin-form .action[disabled]{opacity:.65;cursor:progress}
+
+@media (max-width:900px){
+  .fin-periods{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .fin-columns{grid-template-columns:1fr}
+}
