@@ -37,21 +37,46 @@ _DDL = {
 _SQLITE_INDEX = 'CREATE INDEX IF NOT EXISTS ix_transactions_user_date ON transactions(user_id, record_date)'
 
 
-def ensure_schema(app):
-    """啟動時建立 transactions 表；唯讀備援或連不上資料庫時只記錄警告，不阻擋網站啟動。"""
-    if app.config.get('DB_READ_ONLY'):
-        return
-    kind = backend(app)
+def ddl(kind=None):
+    """建表 SQL（給管理員手動執行時顯示用）。"""
+    return _DDL.get(kind or backend(), _DDL['mariadb']).strip() + ';'
+
+
+def create_table():
+    """在目前的連線建立 transactions 表；成功回 True，失敗（例如沒有 CREATE 權限）回 False。"""
+    kind = backend()
     if kind not in _DDL:
+        return False
+    connection = db()
+    try:
+        connection.rollback()
+        connection.execute(_DDL[kind])
+        if kind == 'sqlite':
+            connection.execute(_SQLITE_INDEX)
+        connection.commit()
+        return True
+    except Exception as exc:
+        connection.rollback()
+        from flask import current_app
+        current_app.logger.warning('[financial] 無法建立 transactions 資料表：%s', exc)
+        return False
+
+
+def is_missing_table(exc):
+    """判斷是否為「transactions 表不存在」：SQLite 'no such table'、MariaDB 錯誤碼 1146。"""
+    text = str(exc)
+    return TABLE in text and ('no such table' in text or '1146' in text or "doesn't exist" in text)
+
+
+def ensure_schema(app):
+    """啟動時建立 transactions 表；唯讀備援或連不上資料庫時只記錄警告，不阻擋網站啟動。
+    建表失敗時，進入財務頁面會再試一次，仍失敗就顯示說明頁（routes.py 的 missing_table）。"""
+    if app.config.get('DB_READ_ONLY') or backend(app) not in _DDL:
         return
     with app.app_context():
         try:
-            connection = db()
-            connection.execute(_DDL[kind])
-            if kind == 'sqlite':
-                connection.execute(_SQLITE_INDEX)
-            connection.commit()
-        except Exception as exc:  # 例如 MariaDB 帳號沒有 CREATE 權限
+            create_table()
+        except Exception as exc:  # 例如啟動時資料庫連不上
             app.logger.warning('[financial] 無法建立 transactions 資料表：%s', exc)
 
 

@@ -50,3 +50,6 @@
   .fin-periods{grid-template-columns:repeat(2,minmax(0,1fr))}
   .fin-columns{grid-template-columns:1fr}
 }
+
+/* 資料表未建立時的說明頁 */
+.fin-ddl{white-space:pre-wrap;font-size:12px;background:var(--theme-blue-soft,#f2f3f7);border:1px solid var(--theme-blue-border,#e7e8ef);border-radius:8px;padding:12px 14px;overflow-x:auto}

@@ -1,7 +1,7 @@
 {# 財務小幫手共用片段。所有使用者輸入（名稱等）都由 Jinja 自動跳脫，不使用 |safe。 #}
 
 {% macro assets() %}
-<link rel="stylesheet" href="{{ url_for('static', filename='financial/financial.css', v='1') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='financial/financial.css', v='2') }}">
 <script src="{{ url_for('static', filename='financial/financial.js', v='1') }}" defer></script>
 {% endmacro %}
 

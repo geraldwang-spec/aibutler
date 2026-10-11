@@ -21,6 +21,34 @@ from .service import (CATEGORY_LABELS, EXPENSE, EXPENSE_CATEGORIES, INCOME, Form
 financial = Blueprint('financial', __name__, url_prefix='/financial')
 
 
+def _db_errors():
+    """SQLite 與 MariaDB「資料表不存在」時丟出的例外類別。"""
+    import sqlite3
+    errors = [sqlite3.OperationalError]
+    try:
+        import pymysql
+        errors.append(pymysql.err.ProgrammingError)
+    except ImportError:
+        pass
+    return errors
+
+
+def missing_table(exc):
+    """transactions 表不存在（例如 MariaDB 帳號沒有 CREATE 權限、或正在使用唯讀備援）：
+    先補建一次，成功就重新載入；仍失敗就顯示說明頁，不再出現 Internal Server Error。"""
+    if not sql.is_missing_table(exc):
+        raise exc
+    from storage import read_only
+    if not read_only() and sql.create_table():
+        return redirect(request.url if request.method == 'GET' else url_for('financial.overview'))
+    return render_template('financial/setup_needed.html', title='財務小幫手尚未完成設定',
+                           read_only=read_only(), ddl=sql.ddl()), 503
+
+
+for _error in _db_errors():
+    financial.register_error_handler(_error, missing_table)
+
+
 @financial.app_template_filter('money')
 def money(value):
     """金額千分位：1234 → 1,234。"""
@@ -38,7 +66,7 @@ def overview():
     today = date.today()
     rows, summary = _stats(today)
     month_start, month_end = periods(today)['month']
-    return render_template('financial/overview.html', title='收支紀錄', summary=summary,
+    return render_template('financial/overview.html', title='財務小幫手：收支紀錄', summary=summary,
                            breakdown=category_breakdown(rows, month_start, month_end),
                            labels=CATEGORY_LABELS, records=sql.recent(g.user['id'], limit=10))
 
