@@ -1,0 +1,14 @@
+.exercise-demo {max-width:1060px;margin-inline:auto}
+.exercise-back {display:inline-block;margin-bottom:24px;text-decoration:none;font-weight:600}
+.exercise-demo-heading {display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}
+.exercise-demo-heading h2 {margin:6px 0 18px;font-size:clamp(24px,4vw,34px)}
+.exercise-demo-tags {display:flex;gap:8px;flex-wrap:wrap}
+.exercise-demo-grid {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin:24px 0}
+.exercise-demo-grid figure {margin:0;border:1px solid #ddd9e6;border-radius:18px;overflow:hidden}
+.exercise-photo-frame {aspect-ratio:1;background:#fff;padding:16px;display:flex;align-items:center;justify-content:center}
+.exercise-photo-frame img {display:block;width:100%;height:100%;object-fit:contain}
+.exercise-demo-grid figcaption {padding:16px;font-weight:600}
+.exercise-demo-grid figcaption span {margin-right:10px;opacity:.55;font-variant-numeric:tabular-nums}
+.exercise-credit {font-size:12px;opacity:.8}
+.exercise-no-media {padding:40px 20px;margin-block:20px;border:1px dashed #aaa;border-radius:16px;text-align:center}
+@media(max-width:600px) {.exercise-demo-grid{grid-template-columns:1fr;gap:14px}}

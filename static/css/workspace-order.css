@@ -1,0 +1,51 @@
+/* Semantic workspace palette; legacy/BODY sheets remain unchanged. */
+/* Shared hierarchy for learning pages. BODY keeps its own document and styles. */
+.product-ui #ai-job [hidden]{display:none!important}
+.product-ui .workspace-content{max-width:1280px;margin-inline:auto;padding:28px 30px 36px}
+.product-ui .page-heading{min-height:88px;margin-bottom:26px;padding:19px 120px 19px 24px;background:var(--theme-accent-soft, #f2eafa);border-color:var(--theme-accent-border, #ded0ec)}
+.product-ui .page-heading h1{font-size:26px;line-height:1.4;margin:3px 0 0}
+.product-ui .page-heading::after{width:95px;height:82px;top:2px}
+.product-ui :is(.panel-card,.panel){padding:26px;margin-bottom:26px;border-radius:18px;background:var(--theme-surface, #fff);border-color:var(--theme-accent-border, #e2d9ec);box-shadow:0 4px 16px color-mix(in srgb, var(--theme-accent-strong, #7b618b) 2.75%, transparent)}
+.product-ui :is(.panel-card,.panel)>h2{margin-bottom:18px;font-size:21px;color:var(--theme-accent-text, #665077);line-height:1.6}
+.product-ui :is(.section-heading,.record-head){gap:18px;flex-wrap:wrap}
+.product-ui .section-heading{margin-bottom:20px}
+.product-ui .section-heading p{margin-bottom:0;font-size:13px}
+.product-ui :is(.panel-card,.panel) .note{color:var(--theme-accent-text, #8d7c9c);line-height:1.9;font-size:12px}
+.product-ui .notice.info{background:var(--theme-accent-soft, #f5f0fb);border:1px solid var(--theme-accent-border, #e7dcf1);border-left:1px solid var(--theme-accent-border, #e7dcf1);color:var(--theme-accent-text, #877193);line-height:1.9;padding:13px 16px;font-size:12px}
+.product-ui .exam-workspace-nav{display:flex;flex-wrap:wrap;gap:10px;padding:13px;background:var(--theme-accent-soft, #f2ebfa);border:1px solid var(--theme-accent-border, #e0d2ee);border-radius:16px;margin-bottom:26px}
+.product-ui .exam-workspace-nav a{padding:10px 16px;border:1px solid var(--theme-accent-border, #e1d5ee);border-radius:10px;background:var(--theme-surface, #fff);color:var(--theme-accent-text, #8968a2);font-size:13px;text-decoration:none;line-height:1.5}
+.product-ui .exam-workspace-nav a.active{background:var(--theme-accent-strong, #8657b7);color:var(--theme-on-accent, #fff);border-color:var(--theme-accent-border, #8657b7);font-weight:700;box-shadow:0 3px 9px color-mix(in srgb, var(--theme-accent-strong, #8657b7) 13.33%, transparent)}
+.product-ui .exam-workspace-nav a:not(.active):hover{background:var(--theme-accent-soft, #e8dcf6);border-color:var(--theme-accent-border, #bda2d7)}
+.product-ui .inline-form{padding:16px 18px;background:var(--theme-accent-soft, #f7f3fb);border:1px solid var(--theme-accent-border, #ebe2f2);border-radius:13px;gap:16px;margin-top:18px}
+.product-ui .inline-form label{min-width:180px;flex:1;max-width:360px;margin-bottom:0}
+.product-ui .form-grid{gap:20px 24px}
+.product-ui :is(.panel-card,.panel) .record-item{padding:20px;margin:14px 0;background:var(--theme-accent-soft, #fbf9fd);border:1px solid var(--theme-accent-border, #ebe3f2);border-radius:14px}
+.product-ui .table-scroll{border-radius:14px;border-color:var(--theme-accent-border, #e6deef);margin-top:16px}
+.product-ui th{padding:15px 16px;letter-spacing:0;white-space:nowrap;background:var(--theme-accent-soft, #f5f0fa)!important}
+.product-ui td{padding:17px 16px;line-height:1.8;border-bottom-color:var(--theme-accent-border, #eee8f4)}
+.product-ui tbody tr:nth-child(even){background:var(--theme-accent-soft, #fcfafe)}
+.product-ui tbody tr:hover{background:var(--theme-accent-soft, #f7f1fc)}
+.product-ui .resource-upload{padding:0;margin:0 0 24px;border:1px solid var(--theme-accent-border, #ded1ec);background:var(--theme-accent-soft, #f9f5fd);border-radius:15px;overflow:hidden}
+.product-ui .resource-upload>summary{padding:17px 20px;cursor:pointer;color:var(--theme-accent-text, #825b9d);font-weight:650;line-height:1.7}
+.product-ui .resource-upload>.panel-card{margin:0;border:0;border-top:1px solid var(--theme-accent-border, #e6dbee);border-radius:0;box-shadow:none;background:var(--theme-surface, #fff)}
+.product-ui .resource-upload>form{padding:20px;margin:0;border-top:1px solid var(--theme-accent-border, #e6dbee);background:var(--theme-surface, #fff)}
+.product-ui .ui-disclosure{margin:16px 0;border:1px solid var(--theme-accent-border, #e8def1);border-radius:13px;background:var(--theme-accent-soft, #faf7fd);overflow:hidden}
+.product-ui .ui-disclosure>summary{padding:14px 17px;color:var(--theme-accent-text, #8967a0);font-weight:600;font-size:13px;line-height:1.8;cursor:pointer}
+.product-ui .ui-disclosure-body{padding:0 18px 18px}
+.product-ui .ui-disclosure-body>p{font-size:12px;line-height:1.9;color:var(--theme-accent-text, #917da1)}
+.product-ui .ui-preview-card{margin:14px 0;border:1px solid var(--theme-accent-border, #e5daef);border-radius:15px;background:var(--theme-surface, #fff);overflow:hidden}
+.product-ui .ui-preview-card>summary{padding:19px 20px;cursor:pointer;line-height:1.8;color:var(--theme-accent-text, #795d8c)}
+.product-ui .ui-preview-card>summary strong{font-size:14px}
+.product-ui .ui-preview-meta{display:block;font-size:11px;color:var(--theme-accent-text, #a18bb1);margin-top:7px}
+.product-ui .ui-preview-text{display:block;margin-top:9px;font-size:13px;color:var(--theme-accent-text, #8c779b);overflow-wrap:anywhere}
+.product-ui .ui-preview-body{padding:0 20px 20px;border-top:1px solid var(--theme-accent-border, #f0e9f6)}
+.product-ui .ui-preview-body>p:first-child{margin-top:18px}
+.product-ui .ui-preview-body form{padding:18px;background:var(--theme-accent-soft, #faf7fd);border:1px solid var(--theme-accent-border, #ede4f5);border-radius:12px;margin-top:18px}
+.product-ui .ui-preview-body form button{margin:8px 8px 0 0}
+.product-ui .ui-section-count{display:inline-block;padding:4px 10px;margin-left:8px;font-size:12px;vertical-align:middle;background:var(--theme-accent-soft, #eee4f8);color:var(--theme-accent-text, #906eab);border-radius:20px;font-weight:500}
+.product-ui .resource-grid,.product-ui .course-library-grid{gap:20px}
+.product-ui .resource-card h3{line-height:1.7;font-size:17px}
+.product-ui .course-library-grid .course-step .record-head{align-items:flex-start}
+.product-ui :is(.resource-card,.course-step) .pill{white-space:nowrap}
+@media(max-width:800px){.product-ui .workspace-content{padding:22px 18px 30px}.product-ui :is(.panel-card,.panel){padding:21px;margin-bottom:22px}.product-ui .page-heading{padding:18px 100px 18px 20px}.product-ui .page-heading h1{font-size:23px}}
+@media(max-width:520px){.product-ui .workspace-content{padding:18px 12px 24px}.product-ui :is(.panel-card,.panel){padding:18px}.product-ui .exam-workspace-nav{gap:7px;padding:10px}.product-ui .exam-workspace-nav a{flex:1 1 40%;text-align:center;padding:10px 8px}.product-ui .inline-form label{max-width:none;min-width:0;width:100%;flex-basis:100%}.product-ui .ui-preview-card>summary{padding:16px}.product-ui .ui-preview-body{padding:0 16px 16px}}

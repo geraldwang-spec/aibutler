@@ -1,0 +1,27 @@
+AI Butler - Groq 單一 KEY 模式
+
+1. 開啟專案根目錄的 .env
+2. 最上方會看到：
+
+   GROQ_API_KEY=
+
+3. 直接把 Groq Key 貼在等號後面，例如：
+
+   GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxx
+
+4. 儲存後重新執行 RUN_REAL_AI.bat。
+
+這一把 GROQ_API_KEY 會共用於：
+- 通用 LLM
+- Concept / 題目知識點分類
+- 文件 / 題庫 LLM Parser
+- 自動出題 Generator
+- Reviewer
+- Course
+- Tutor
+
+不需要再填 LLM_API_KEY / CLASSIFIER_API_KEY / PARSER_API_KEY / GENERATOR_API_KEY 等欄位。
+這些欄位保持空白即可，程式會自動回退讀取 GROQ_API_KEY。
+
+為避免本機 GPU 再被 Qwen 壓滿，文字 LLM 的 Ollama fallback 已關閉。
+目前 bge-m3 Embedding/RAG 向量仍使用本機 Ollama；這是較輕量的向量計算，不是 4B 生成模型。

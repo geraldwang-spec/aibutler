@@ -1,0 +1,66 @@
+/* Semantic workspace palette; legacy/BODY sheets remain unchanged. */
+.product-ui .home-day .calendar-summary{display:block;width:100%;padding:11px 9px;min-height:120px;text-align:left;font-family:inherit;box-shadow:none;white-space:normal;border-radius:9px;margin:8px 0;overflow:visible}
+.product-ui .calendar-summary-head{display:flex;justify-content:space-between;align-items:center;gap:5px;flex-wrap:wrap;font-weight:600;font-size:11px;line-height:1.5}
+.product-ui .calendar-summary-time{color:inherit;font-size:11px;margin:10px 0 5px;line-height:1.5}
+.product-ui .calendar-summary-time small{display:block;font-size:10px;margin-top:3px}
+.product-ui .calendar-summary-progress{display:block;font-size:10px;opacity:.85}
+.product-ui .calendar-summary-open{display:flex;align-items:center;justify-content:space-between;gap:5px;width:100%;margin:10px 0 0;padding:6px 8px;border:1px solid var(--theme-accent-border, #c9b7e3);border-radius:6px;background:color-mix(in srgb, var(--theme-surface, #ffffff) 65.88%, transparent);color:var(--theme-accent-text, #73539d);font-size:11px;cursor:pointer}
+.product-ui .event-workout .calendar-summary-open{border-color:var(--theme-blue-border, #b4cfea);color:var(--theme-blue-text, #346aab)}
+.product-ui .event-rest .calendar-summary-open{border-color:var(--theme-green-border, #b6d9c0);color:var(--theme-green-text, #3a7c51)}
+.product-ui .calendar-summary-count{font-size:10px;white-space:nowrap;border:1px solid currentColor;border-radius:5px;padding:0 4px;opacity:.8}
+.product-ui .home-day .calendar-summary.event-study:hover{background:var(--theme-accent-soft, #e8dbfa)}
+.product-ui .calendar-detail-dialog{width:min(680px,calc(100% - 32px));max-height:80dvh;padding:28px;border:1px solid var(--theme-accent-border, #ddd1ee);border-radius:18px;background:var(--theme-accent-soft, #fdfbff);color:var(--theme-accent-text, #453956);box-shadow:0 20px 70px color-mix(in srgb, var(--theme-accent-strong, #342547) 18.82%, transparent);overflow:auto}
+.product-ui .calendar-detail-dialog::backdrop{background:color-mix(in srgb, var(--theme-accent-strong, #302944) 40%, transparent)}
+.product-ui .calendar-detail-close{position:absolute;right:16px;top:16px;margin:0;padding:2px 10px;font-size:22px;line-height:1.5}
+.product-ui .calendar-detail-content>h2{padding-right:35px;margin:8px 0 12px}
+.product-ui .calendar-detail-description{font-size:12px;margin-bottom:20px}
+.product-ui .calendar-detail-list{display:grid;gap:10px}
+.product-ui .calendar-detail-item{display:block;padding:16px;border:1px solid var(--theme-accent-border, #e4d8f1);border-left:3px solid var(--theme-accent-border, #9a7cd0);border-radius:10px;background:var(--theme-accent-soft, #f4edfc);color:var(--theme-accent-text, #73539d)}
+.product-ui .calendar-detail-item.detail-workout{background:var(--theme-blue-soft, #edf4fc);border-color:var(--theme-blue-border, #c9dcef);border-left-color:var(--theme-blue-border, #6095d1);color:var(--theme-blue-text, #346aab)}
+.product-ui .calendar-detail-item.detail-rest{background:var(--theme-green-soft, #edf7f0);border-color:var(--theme-green-border, #cce3d3);border-left-color:var(--theme-green-border, #69a880);color:var(--theme-green-text, #3a7c51)}
+.product-ui .calendar-detail-item strong{display:block;font-size:13px;overflow-wrap:anywhere}
+.product-ui .calendar-detail-item small{display:block;margin-top:4px;font-size:11px;color:var(--theme-ink, #747485)}
+.product-ui .calendar-detail-item:hover{text-decoration:none;box-shadow:0 3px 12px color-mix(in srgb, var(--theme-accent-strong, #77668d) 8.24%, transparent)}
+.product-ui .calendar-task-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;font-size:11px}
+.product-ui .calendar-task-category,.product-ui .calendar-task-status{padding:3px 8px;border:1px solid var(--theme-accent-border, #d9c7ed);border-radius:6px;background:color-mix(in srgb, var(--theme-surface, #ffffff) 50.2%, transparent)}
+.product-ui .detail-workout .calendar-task-category,.product-ui .detail-workout .calendar-task-status{border-color:var(--theme-green-border, #b9ddc5)}
+.product-ui .calendar-task-time{color:inherit;font-size:12px;margin:9px 0 5px}
+.product-ui .calendar-task-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:14px;padding-top:12px;border-top:1px solid var(--theme-accent-border, #ddd0eb)}
+.product-ui .detail-workout .calendar-task-actions{border-top-color:var(--theme-green-border, #c6e4d0)}
+.product-ui .calendar-task-actions form{margin:0}
+.product-ui .calendar-task-manage{font-size:12px;color:inherit;text-decoration:underline;text-underline-offset:3px}
+.product-ui .calendar-task-action{padding:8px 13px;margin:0;border:1px solid var(--theme-accent-border, #9678c4);border-radius:7px;background:var(--theme-accent-strong, #8b6abb);color:var(--theme-on-accent, white);font-size:12px;cursor:pointer}
+.product-ui .calendar-task-action:disabled{background:var(--theme-accent-soft, #e6e0ed);border-color:var(--theme-accent-border, #d8cfdf);color:var(--theme-muted, #8c8198);cursor:not-allowed}
+.product-ui .planner-calm-calendar .calendar-grid{grid-template-columns:repeat(7,minmax(110px,1fr));min-width:770px;border-color:var(--theme-accent-border, #e5dff0);background:var(--theme-surface, #fff)}
+.product-ui .calendar-scope-filter{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;padding:12px 26px;background:var(--theme-accent-soft, #faf7fd)}
+.product-ui .calendar-scope-filter label{min-width:230px;flex:1;max-width:430px}
+.product-ui .calendar-scope-filter select{margin-bottom:0}
+.product-ui .calendar-scope-note{font-size:12px;color:var(--theme-accent-text, #8a7c9a);margin:10px 0 16px;line-height:1.8}
+.product-ui .schedule-card>.calendar-scope-note{padding:0 26px}
+.product-ui .calendar-task-goal{margin:0 0 10px}
+.product-ui .planner-calm-calendar .calendar-weekday{padding:12px;background:var(--theme-accent-soft, #f8f5fc);border-color:var(--theme-accent-border, #e5dff0);color:var(--theme-accent-text, #8d7c9e);font-size:11px;font-weight:500}
+.product-ui .planner-calm-calendar .calendar-day{min-height:177px;padding:12px 9px;border-color:var(--theme-accent-border, #e5dff0);background:var(--theme-surface, #fff)}
+.product-ui .planner-calm-calendar .calendar-day.outside{background:var(--theme-accent-soft, #faf9fc);color:var(--theme-muted, #b3abbc)}
+.product-ui .planner-calm-calendar .calendar-day.today{background:var(--theme-accent-soft, #f6f0fe);box-shadow:inset 0 0 0 1px var(--theme-accent-medium, #cdbce6)}
+.product-ui .planner-calm-calendar .calendar-date{font-weight:500;font-size:12px;color:var(--theme-accent-text, #78678d);margin-bottom:12px}
+.product-ui .planner-calm-calendar .calendar-day.today .calendar-date{color:var(--theme-accent-text, #73529d);padding:0}
+.product-ui .planner-calm-calendar .calendar-day.today .calendar-date:before{content:none}
+.product-ui .planner-day-overview{padding:10px 9px;border:1px solid var(--theme-accent-border, #e5dcf0);border-radius:11px;background:linear-gradient(150deg,var(--theme-surface, #fff),var(--theme-accent-soft, #f6f1fc))}
+.product-ui .planner-day-label{display:block;font-size:10px;color:var(--theme-accent-text, #a08ab6)}
+.product-ui .planner-day-duration{display:block;font-size:22px;font-weight:550;color:var(--theme-accent-text, #76599d);line-height:1.5;margin:4px 0}
+.product-ui .planner-day-duration small{font-size:11px;font-weight:400}
+.product-ui .planner-day-count{display:block;font-size:10px;color:var(--theme-muted, #92869f);line-height:1.7}
+.product-ui .planner-day-open{display:flex;justify-content:space-between;align-items:center;width:100%;border:0;border-top:1px solid var(--theme-accent-border, #e5dcf0);background:transparent;color:var(--theme-accent-text, #80649e);padding:9px 0 0;margin:9px 0 0;font-size:11px;cursor:pointer}
+.product-ui .planner-day-free{display:block;color:var(--theme-accent-text, #bcb4c5);font-size:10px;margin:18px 0}
+.product-ui .planner-detail-items{display:grid;gap:14px}
+.product-ui .planner-detail-items .calendar-task{background:var(--theme-accent-soft, #fcf9ff);border:1px solid var(--theme-accent-border, #e3d7ef);border-left:3px solid var(--theme-accent-border, #b59bcf);border-radius:12px;padding:18px;margin:0;line-height:1.8}
+.product-ui .planner-detail-items .calendar-task-kind{display:inline-block;border:1px solid var(--theme-accent-border, #e2d5ed);background:var(--theme-accent-soft, #f1eaf9);color:var(--theme-accent-text, #967ba9);padding:2px 8px;border-radius:6px;font-size:11px;margin-bottom:9px}
+.product-ui .planner-detail-items .calendar-task-title{display:block;font-size:14px;margin-bottom:10px;color:var(--theme-accent-text, #645371)}
+.product-ui .planner-detail-items .calendar-task small{display:block;font-size:12px;color:var(--theme-ink, #8b7b95);margin-top:8px}
+.product-ui .planner-detail-items .calendar-task form{margin:12px 0}
+.product-ui .planner-detail-items .calendar-task button{background:var(--theme-accent-strong, #977bbe);border:1px solid var(--theme-accent-border, #977bbe);border-radius:8px;color:var(--theme-on-accent, #fff);padding:8px 13px;font-size:12px;cursor:pointer}
+.product-ui .planner-day-overview.planner-kind-rest,.product-ui .planner-detail-items .calendar-task.task-rest{background:var(--theme-green-soft, #eef7f0);border-color:var(--theme-green-border, #cce2d2);border-left-color:var(--theme-green-border, #69a880)}
+.product-ui .planner-kind-rest .planner-day-label,.product-ui .planner-kind-rest .planner-day-duration,.product-ui .planner-kind-rest .planner-day-open{color:var(--theme-green-text, #4e8460)}
+.product-ui .planner-day-overview.planner-kind-workout,.product-ui .planner-detail-items .calendar-task.task-workout{background:var(--theme-blue-soft, #eef4fc);border-color:var(--theme-blue-border, #ccdef0);border-left-color:var(--theme-blue-border, #6095d1)}
+.product-ui .planner-kind-workout .planner-day-label,.product-ui .planner-kind-workout .planner-day-duration,.product-ui .planner-kind-workout .planner-day-open{color:var(--theme-blue-text, #507ead)}
+@media(max-width:480px){.product-ui .calendar-detail-dialog{padding:22px 18px}}

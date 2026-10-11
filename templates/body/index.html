@@ -1,0 +1,79 @@
+{% extends 'live_base.html' %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='body/body.css') }}">
+{#
+  頁面外殼：畫面內容全部由 static/body/body.js 依 JSON 狀態繪製。
+  第一份狀態直接內嵌在 #bd-initial（不會被執行，只當資料讀取），之後透過 /body/api/* 以 JSON 收送。
+#}
+<div class="bd" id="bd"
+     data-api="{{ url_for('body.state')|replace('/state', '') }}"
+     data-csrf="{{ csrf_token }}"
+     data-user="{{ g.user['id'] }}"
+     data-tab="{{ tab }}"
+     data-records-weight="{{ url_for('records', table='body_metrics') }}"
+     data-records-exercises="{{ url_for('records', table='exercises') }}">
+  <script type="application/json" id="bd-initial">{{ state|tojson }}</script>
+  <noscript><p class="notice error">這個頁面需要啟用 JavaScript。</p></noscript>
+  <p class="notice" id="bd-message" role="status" hidden></p>
+
+  <div class="bd-toolbar">
+    <p class="bd-toolbar__date" id="bd-date"></p>
+  </div>
+
+  <nav class="bd-card bd-week" aria-label="選擇日期">
+    <button type="button" class="bd-week__nav" id="bd-prev-week" data-action="goto" aria-label="上一週"><i class="fa fa-chevron-left" aria-hidden="true"></i></button>
+    <ol class="bd-week__days" id="bd-week"></ol>
+    <button type="button" class="bd-week__nav" id="bd-next-week" data-action="goto" aria-label="下一週"><i class="fa fa-chevron-right" aria-hidden="true"></i></button>
+  </nav>
+
+  <section class="bd-card bd-tabs">
+    <div class="bd-tabs__bar">
+      <div class="bd-tabs__list" role="tablist" aria-label="今日紀錄">
+        <button type="button" class="bd-tab" role="tab" id="bd-tab-train" aria-controls="bd-panel-train" data-tab-target="train" aria-selected="true"><span id="bd-tab-train-label">訓練</span></button>
+        <button type="button" class="bd-tab bd-tab--warm" role="tab" id="bd-tab-weight" aria-controls="bd-panel-weight" data-tab-target="weight" aria-selected="false" tabindex="-1">體重</button>
+        <button type="button" class="bd-tab" role="tab" id="bd-tab-analysis" aria-controls="bd-panel-analysis" data-tab-target="analysis" aria-selected="false" tabindex="-1">分析</button>
+      </div>
+      <div class="bd-tabs__meta" id="bd-tabs-meta"></div>
+    </div>
+
+    <div class="bd-panel" role="tabpanel" id="bd-panel-train" aria-labelledby="bd-tab-train"></div>
+
+    <div class="bd-panel" role="tabpanel" id="bd-panel-weight" aria-labelledby="bd-tab-weight" hidden>
+      <div class="bd-weight">
+        <div class="bd-weight__now" id="bd-weight-now"></div>
+        <div class="bd-weight__chart" id="bd-weight-chart"></div>
+        <form class="bd-weight__form" id="bd-weight-form" novalidate>
+          <label>體重 kg<input type="number" name="weight_kg" step="any" min="1" max="600" inputmode="decimal" required></label>
+          <label>體脂 %<input type="number" name="body_fat_pct" step="any" min="0" max="100" inputmode="decimal" placeholder="選填"></label>
+          <button class="bd-btn bd-btn--primary" id="bd-weight-submit">儲存</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="bd-panel" role="tabpanel" id="bd-panel-analysis" aria-labelledby="bd-tab-analysis" hidden>
+      <div class="bd-report__bar">
+        <div class="bd-seg" role="group" aria-label="分析期間">
+          <button type="button" class="bd-seg__btn" data-action="report-period" data-period="week" aria-pressed="true">週</button>
+          <button type="button" class="bd-seg__btn" data-action="report-period" data-period="month" aria-pressed="false">月</button>
+        </div>
+        <p class="bd-muted" id="bd-report-range"></p>
+      </div>
+      <div id="bd-report" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <div id="bd-log-wrap"></div>
+
+  <div class="bd-rest" id="bd-rest" hidden>
+    <span class="bd-rest__label" id="bd-rest-label">休息中</span>
+    <span class="bd-rest__time bd-mono" id="bd-rest-time" role="timer">01:30</span>
+    <progress class="bd-rest__bar" id="bd-rest-bar" max="90" value="90"></progress>
+    <span class="bd-rest__actions">
+      <button type="button" class="bd-btn bd-btn--dark" data-rest-add="-10">−10 秒</button>
+      <button type="button" class="bd-btn bd-btn--dark" data-rest-add="10">＋10 秒</button>
+      <button type="button" class="bd-btn bd-btn--warm" data-rest-skip>跳過</button>
+    </span>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='body/body.js') }}" defer></script>
+{% endblock %}

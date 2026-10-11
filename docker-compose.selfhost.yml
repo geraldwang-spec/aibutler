@@ -1,0 +1,22 @@
+# Web uses the existing MariaDB from .env. Optional standby: docker-compose.standby.yml.
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_TYPE: mariadb
+      EXAM_CPU_PYTHON: /opt/exam-ai/bin/python
+      DB_STANDBY_PATH: /app/instance/backups/standby.sqlite
+    volumes:
+      - ./instance:/app/instance
+      - ./models:/app/models:ro
+    ports:
+      - "127.0.0.1:5000:5000"
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    depends_on:
+      - web

@@ -1,0 +1,37 @@
+AI Butler 整合版（body / TYE 分離）
+
+整合原則：
+1. body/ 完整保留「同學.zip」內容，不把 TYE 或 Personal AI 程式搬進 body。
+2. TYE/ 完整保留「我的.zip」內容，不把 body 程式搬進 TYE。
+3. 模組整合主要由 app.py 負責：建立共用 Flask app 後，再註冊 TYE 與 Personal AI；body 仍維持自己的 Blueprint/目錄結構。
+4. templates/body 與 static/body 保留同學版本，供 body 模組自行使用。
+5. 資料庫正式連線統一採用同學 .env 的 MariaDB 設定（DB_TYPE=mariadb、DB_HOST/PORT/USER/PASSWORD/NAME）。
+6. storage.py 使用 MariaDB adapter，既有 SQLite 風格 ? placeholder 會轉成 PyMySQL %s；SQLite 僅留給測試 fallback，不作正式資料來源。
+7. schema_mariadb.sql 已補上 Personal AI / adaptive planner / micro-course 所需資料表，讓新增功能也共用同一個 MariaDB。
+8. MariaDB 下 RAG 先使用文字檢索 fallback；原本 PostgreSQL pgvector 專用 SQL 不會執行。
+
+模組責任：
+- body/：同學維護
+- TYE/：筠翔維護
+- personal_ai/：筠翔個人 AI / RAG / 學習排程功能
+- app.py：模組組裝入口，後續整合優先在這裡註冊，不直接改 body/TYE 內部內容
+
+首次使用：
+- pip install -r requirements.txt
+- 若遠端 MariaDB 尚未建齊資料表，再執行 python init_db.py
+- 平常啟動 python app.py
+
+[2026-10-04 修正]
+- body/ 完整保持同學原檔；TYE/ 完整保持使用者原檔。
+- 恢復共用側邊欄「體重與訓練」入口（不修改 body 模組）。
+- app.py 在 MariaDB 模式啟動時自動以 CREATE TABLE IF NOT EXISTS 補齊整合版缺少的表（例如 ai_question_drafts / concepts / source_question_items / learning_*）。
+- 不 DROP、不清空、不覆寫同學既有 MariaDB 資料。
+
+
+[v3 DB 修正]
+- body/：不修改。
+- TYE/：不修改。
+- teamdb：仍使用同學 MariaDB。
+- app.py：啟動時固定確認 TYE / Personal AI 擴充表存在，不受 AUTO_INIT_DB=false 影響。
+- schema_tye_personal_mariadb.sql：只放你的擴充表，不含 body 擁有的資料表。
+- 目的：修正 concepts / ai_question_drafts 等 1146 Table doesn't exist。

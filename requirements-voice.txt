@@ -1,0 +1,5 @@
+huggingface_hub>=0.24
+faster-whisper>=1.1,<2
+kokoro>=0.9.4,<1
+misaki[zh]>=0.9.4
+soundfile>=0.12

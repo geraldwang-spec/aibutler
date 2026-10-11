@@ -1,0 +1,15 @@
+<section class="panel-card planner-goal-switcher" aria-labelledby="planner-goals-heading">
+  <header class="planner-goals-heading"><span class="planner-goals-icon"><i class="fa fa-folder-open-o" aria-hidden="true"></i></span><div><p class="eyebrow">CHOOSE YOUR LEARNING GOAL</p><h2 id="planner-goals-heading">我的學習目標 <span>{{goals|length}} 個</span></h2><p>點選一張目標卡，切換下方的進度、里程碑與月曆。</p></div></header>
+  {% if current %}<p class="planner-goal-current"><span>正在查看</span><strong>{{current.goal_name}}</strong><small>下方只顯示這個目標的安排</small></p>{% endif %}
+  <nav class="planner-goal-grid" aria-label="切換學習目標">
+  {% for goal in goals %}{% set active=current and current.id==goal.id %}
+    <a class="answer-choice planner-goal-card {{'selected' if active else ''}}" href="{{url_for('personal_ai.adaptive_planner',goal_id=goal.id,month=calendar_view.month)}}" {% if active %}aria-current="page"{% endif %}>
+      <span class="planner-goal-card-top"><span class="planner-goal-number">目標 {{'%02d'|format(loop.index)}}</span><span class="planner-goal-card-state">{{'目前查看' if active else '點選切換'}}</span></span>
+      <strong class="planner-goal-card-title">{{goal.goal_name}}</strong>
+      <span class="planner-goal-subject"><i class="fa fa-book" aria-hidden="true"></i> {{goal.subject_name}}</span>
+      <span class="planner-goal-card-meta"><span><i class="fa fa-calendar-o" aria-hidden="true"></i> 考試 {{goal.exam_date}}</span><span>{{{'active':'進行中','completed':'已完成','paused':'已暫停','abandoned':'已放棄'}.get(goal.status,'學習目標')}}</span></span>
+    </a>
+  {% endfor %}
+  </nav>
+  <p class="planner-goal-scope-hint"><i class="fa fa-info-circle" aria-hidden="true"></i> 主頁可合計多個目標；這裡一次查看一個目標，切換後即可對照各自的內容與時間。</p>
+</section>

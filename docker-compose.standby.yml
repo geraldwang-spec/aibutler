@@ -1,0 +1,15 @@
+services:
+  standby:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${STANDBY_ROOT_PASSWORD:?Set a separate standby password}
+      MARIADB_DATABASE: aibutler_restore
+      MARIADB_USER: aibutler_restore
+      MARIADB_PASSWORD: ${STANDBY_DB_PASSWORD:?Set a separate standby user password}
+    ports:
+      - "127.0.0.1:3307:3306"
+    volumes:
+      - standby_data:/var/lib/mysql
+volumes:
+  standby_data:
