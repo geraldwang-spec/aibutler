@@ -1,0 +1,13 @@
+{% extends 'live_base.html' %}
+{% block content %}
+<section class="panel-card">
+  <h2>找不到收支資料表（transactions）</h2>
+  {% if read_only %}
+  <p>目前使用唯讀備援資料庫，裡面沒有收支資料。請等待主資料庫恢復後再使用財務小幫手。</p>
+  {% else %}
+  <p>系統嘗試自動建立資料表，但資料庫帳號沒有建立資料表（CREATE）的權限。請有權限的組員在資料庫執行下列 SQL 後，重新整理此頁：</p>
+  <pre class="fin-ddl">{{ ddl }}</pre>
+  <p class="muted">也可以改為授予網站使用的資料庫帳號 CREATE 權限，但 MariaDB 的權限要等新連線才生效，授權後需重新啟動網站。伺服器紀錄中會有「[financial] 無法建立 transactions 資料表」的詳細原因。</p>
+  {% endif %}
+</section>
+{% endblock %}
