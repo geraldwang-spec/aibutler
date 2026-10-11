@@ -10,6 +10,7 @@ PAGE_ENDPOINTS = {
     'personal_ai.concept_weakness', 'personal_ai.adaptive_planner',
     'personal_ai.micro_courses', 'personal_ai.micro_course',
     'personal_ai.job_page', 'personal_ai.chat_index', 'personal_ai.chat_page',
+    'admission.placement',
 }
 
 

@@ -53,7 +53,7 @@ def submit(app,user_id,kind,payload):
         if not isinstance(data,dict): return data
         result=dict(data)
         for key,value in result.items():
-            if key in ('question','followup','focus') and isinstance(value,str):
+            if key in ('question','followup','focus','interest') and isinstance(value,str):
                 validate_user_text(value)
                 result[key]=redact_text(value)
             elif isinstance(value,dict): result[key]=protect_fields(value)
@@ -193,6 +193,17 @@ def dispatch(app,user_id,kind,p):
         from .concept_admin import classify_fixed
         count=classify_fixed(user_id,p['subject_id'],app.config)
         return dict(message=f'已補標 {count} 題概念',url='/ai/concepts?subject_id='+str(p['subject_id']))
+    if kind=='admission_advice':
+        from urllib.parse import urlencode
+        from admission.advice import generate_advice
+        advice=generate_advice(p)
+        return dict(message='落點解讀已完成',url='/admission?'+urlencode(dict(p,advice=active_job.get()['id'])),advice=advice)
+    if kind=='admission_interest':
+        from urllib.parse import urlencode
+        from admission.interest import generate_interest
+        interest=generate_interest(p)
+        back={k:v for k,v in p.items() if k!='interest'}
+        return dict(message='興趣科系推薦已完成',url='/admission?'+urlencode(dict(back,interest=active_job.get()['id'])),interest=interest)
     if kind=='chat':
         from .chat import generate_reply
         reply=generate_reply(user_id,**p)

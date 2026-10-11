@@ -5,7 +5,7 @@
   <title>{{ title }}｜考試智伴</title><script src="{{url_for('static',filename='js/workspace-theme.js',v='1')}}"></script>
   {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign','question-workspace','product'] %}<link rel="stylesheet" href="{{ url_for('static',filename='css/'+name+'.css',v='palette-4') }}">{% endfor %}
   <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='palette-4')}}">
-  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-order.css',v='status-5')}}">
+  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-order.css',v='status-6')}}">
 <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-legacy-palette.css',v='2')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/workspace-theme.css',v='2')}}">
 </head>
 <body class="product-ui {{'workspace-host' if workspace_shell else ''}}" data-page="{{ request.endpoint }}">
@@ -40,6 +40,7 @@
       {{nav_item('results','成績與錯題','bar-chart',endpoint=='results')}}
       {{nav_item('analysis','章節分析','pie-chart',endpoint=='analysis')}}
       {{nav_item('personal_ai.concept_weakness','概念弱項','line-chart',endpoint=='personal_ai.concept_weakness')}}
+      {{nav_item('admission.placement','學測落點分析','university',endpoint=='admission.placement')}}
       <details class="workspace-tools" {% if endpoint=='personal_ai.ai_status' %}open{% endif %}>
         <summary><i class="fa fa-sliders" aria-hidden="true"></i> 進階管理 <span>⌄</span></summary>
         {{nav_item('personal_ai.ai_status','AI 環境','cog',endpoint=='personal_ai.ai_status')}}
