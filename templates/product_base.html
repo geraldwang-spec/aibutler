@@ -5,7 +5,7 @@
   <title>{{ title }}｜考試智伴</title><script src="{{url_for('static',filename='js/workspace-theme.js',v='1')}}"></script>
   {% for name in ['bootstrap.min','font-awesome.min','templatemo-style','exam','live','redesign','question-workspace','product'] %}<link rel="stylesheet" href="{{ url_for('static',filename='css/'+name+'.css',v='palette-4') }}">{% endfor %}
   <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-decor.css',v='palette-4')}}">
-  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-order.css',v='status-5')}}">
+  <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-order.css',v='status-6')}}">
 <link rel="stylesheet" href="{{url_for('static',filename='css/workspace-legacy-palette.css',v='2')}}"><link rel="stylesheet" href="{{url_for('static',filename='css/workspace-theme.css',v='2')}}">
 </head>
 <body class="product-ui {{'workspace-host' if workspace_shell else ''}}" data-page="{{ request.endpoint }}">
@@ -26,6 +26,10 @@
       {{nav_item('records','考試準備設定','calendar',endpoint=='records' and table=='exam_plans','exam_plans')}}
       {{nav_item('records','每日讀書與運動計畫','calendar-check-o',endpoint=='records' and table=='study_plans','study_plans')}}
       {{nav_item('personal_ai.chat_index','AI 對話','comment-o',endpoint.startswith('personal_ai.chat'))}}
+      <span class="workspace-nav-label">財務小幫手</span>
+      {{nav_item('financial.overview','收支紀錄','line-chart',endpoint=='financial.overview')}}
+      {{nav_item('financial.income','收入','arrow-circle-up',endpoint=='financial.income')}}
+      {{nav_item('financial.expense','支出','arrow-circle-down',endpoint=='financial.expense')}}
       <span class="workspace-nav-label">學習資源</span>
       {{nav_item('personal_ai.knowledge','教材與講義','folder-open-o',endpoint=='personal_ai.knowledge')}}
       {{nav_item('personal_ai.micro_courses','我的課程','graduation-cap',endpoint.startswith('personal_ai.micro_course'))}}
@@ -40,6 +44,7 @@
       {{nav_item('results','成績與錯題','bar-chart',endpoint=='results')}}
       {{nav_item('analysis','章節分析','pie-chart',endpoint=='analysis')}}
       {{nav_item('personal_ai.concept_weakness','概念弱項','line-chart',endpoint=='personal_ai.concept_weakness')}}
+      {{nav_item('admission.placement','學測落點分析','university',endpoint=='admission.placement')}}
       <details class="workspace-tools" {% if endpoint=='personal_ai.ai_status' %}open{% endif %}>
         <summary><i class="fa fa-sliders" aria-hidden="true"></i> 進階管理 <span>⌄</span></summary>
         {{nav_item('personal_ai.ai_status','AI 環境','cog',endpoint=='personal_ai.ai_status')}}

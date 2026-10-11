@@ -1,0 +1,85 @@
+{% extends 'live_base.html' %}
+{% macro steps_text(steps) %}{% for st in steps %}{{ st.label }} ≥ {{ st.min_score }}{% if not loop.last %} → {% endif %}{% else %}未超額篩選（只看檢定）{% endfor %}{% endmacro %}
+{% block content %}
+<section class="panel-card">
+  <h2>學測落點分析</h2>
+  <p>依甄選會公布的歷年個人申請第一階段篩選結果，比對你的學測級分能否通過各校系的檢定與倍率篩選。目前收錄 {{ years|join('、') }} 學年度，共 {{ schools|length }} 校：{{ schools|join('、') }}。</p>
+  <form method="get" class="inline-form">
+    {% for s in subjects %}<label>{{ s }}<input type="number" name="{{ s }}" min="0" max="15" value="{{ form.get(s, '') }}" placeholder="未考"></label>{% endfor %}
+    <label>英聽<select name="英聽"><option value="">未考</option>{% for lv in ['A','B','C','F'] %}<option {% if form.get('英聽')==lv %}selected{% endif %}>{{ lv }}</option>{% endfor %}</select></label>
+    <label>性別<select name="gender"><option value="">不指定</option>{% for gd in ['男','女'] %}<option {% if form.get('gender')==gd %}selected{% endif %}>{{ gd }}</option>{% endfor %}</select></label>
+    <label><input type="checkbox" name="special" value="1" {% if form.get('special')=='1' %}checked{% endif %}> 包含弱勢／特定身分招生管道（希望組、政星、旭日、屯蒙等）</label>
+    {% if interest_id %}<input type="hidden" name="interest" value="{{ interest_id }}">{% endif %}
+    <button class="action">分析落點</button>
+  </form>
+  {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+  <p><small>僅判斷第一階段（檢定＋倍率篩選），不含第二階段書審、面試；最低級分相同時另有超額篩選。結果依往年資料推估，僅供參考。</small></p>
+</section>
+<section class="panel-card">
+  <h3>依興趣找科系</h3>
+  <p>描述你的興趣或未來想從事的職業，AI 會從 18 學群中挑出相關的，並列出學群內的科系；有輸入級分時，會一併標出各校的落點分級。</p>
+  <form method="post" action="{{ url_for('admission.request_interest') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <label>興趣或職業<textarea name="interest" rows="3" maxlength="{{ max_interest }}" required placeholder="例如：喜歡寫程式、想做遊戲設計；或想當心理師">{{ interest.interest if interest else '' }}</textarea></label>
+    <button class="secondary-button">請 AI 推薦科系</button>
+  </form>
+</section>
+{% if interest %}
+<section class="panel-card">
+  <h3>興趣推薦學群</h3>
+  <p><small>你的描述：{{ interest.interest }}</small></p>
+  <p>{{ interest.summary }}</p>
+  {% for grp in interest.groups %}
+  <details class="record-item" {% if loop.first %}open{% endif %}>
+    <summary><strong>{{ grp.group }}學群</strong>：{{ grp.why }}{% if grp.career %} <small>常見出路：{{ grp.career }}</small>{% endif %}</summary>
+    {% for m in grp.majors %}
+    <p><strong>{{ m.department }}</strong><br>{% for s in m.schools %}<span class="pill">{{ s.school }} {{ s.program }}{% if s.gender != '無' %}（{{ s.gender }}）{% endif %}{% if s.tier %}：{{ s.tier }}{% endif %}</span> {% endfor %}</p>
+    {% else %}<p><small>依目前級分，這個學群沒有安全、適中或夢幻的校系。</small></p>{% endfor %}
+    {% if result and grp.hidden %}<p><small>另有 {{ grp.hidden }} 個科系目前落點為不建議或未達檢定，未列出。</small></p>{% endif %}
+  </details>
+  {% endfor %}
+  {% if interest.explore %}<p><small>{{ interest.explore }}</small></p>{% endif %}
+  <p><small>學群由 AI 依興趣挑選；學群包含的科系依名稱規則對應，各校分級由程式依你的級分計算{% if not result %}，輸入級分並按「分析落點」即可看到分級{% endif %}。</small></p>
+</section>
+{% endif %}
+{% if result %}
+<section class="panel-card">
+  <h3>{{ result.year }} 學年度校系，共 {{ result.rows|length }} 個</h3>
+  <p>{% for t in tiers %}<span class="pill">{{ t }} {{ result.counts[t] }}</span> {% endfor %}</p>
+  {% if not advice %}<form method="post" action="{{ url_for('admission.request_advice') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% for k, v in fields.items() %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <button class="secondary-button">請 AI 解讀落點與加強方向</button>
+  </form>{% endif %}
+  <p><small>安全：今年與往年（至少兩年資料）都通過，且今年高於最低級分。適中：今年通過，但剛好壓線、往年曾未通過，或只有一年資料。夢幻：今年差 2 級分內，或往年曾通過。</small></p>
+</section>
+{% if advice %}
+<section class="panel-card">
+  <h3>AI 解讀</h3>
+  <p>{{ advice.summary }}</p>
+  {% if advice.picks %}<h4>值得考慮的校系</h4><ul>{% for p in advice.picks %}<li><strong>{{ p.program }}</strong>：{{ p.why }}</li>{% endfor %}</ul>{% endif %}
+  {% if advice.improve %}<h4>加強方向</h4><ul>{% for i in advice.improve %}<li><strong>{{ i.subject }}</strong>：{{ i.advice }}</li>{% endfor %}</ul>{% endif %}
+  {% if advice.caution %}<p><small>{{ advice.caution }}</small></p>{% endif %}
+  <p><small>AI 只根據上方程式算出的落點結果說明，不另外判斷錄取與否。</small></p>
+</section>
+{% endif %}
+{% for t in tiers %}{% set rows = result.rows|selectattr('tier','equalto',t)|list %}{% if rows %}
+<section class="panel-card">
+  <details {% if t in ['安全','適中','夢幻'] %}open{% endif %}>
+    <summary><strong>{{ t }}</strong>（{{ rows|length }}）</summary>
+    {% for r in rows %}
+    <article class="record-item">
+      <div class="record-head"><strong>{{ r.school }} {{ r.program }}{% if r.gender != '無' %}（{{ r.gender }}）{% endif %}</strong><span class="pill">招生 {{ r.quota }} 名</span></div>
+      <p>{{ result.year }} 年篩選：{{ steps_text(r.steps) }}</p>
+      <p>{% for y in r.results %}<span class="pill">{{ y.year }}：{% if y.status=='pass' %}通過{% if y.margin is not none %}（最卡的{{ y.weakest }}多 {{ y.margin }}）{% endif %}{% elif y.status=='edge' %}壓線（{{ y.weakest }}剛好等於最低級分）{% elif y.status=='fail' %}未通過（{% if y.margin is not none %}{{ y.weakest }}差 {{ -y.margin }}{% else %}{{ y.reason }}{% endif %}）{% else %}未達檢定（{{ y.reason }}）{% endif %}</span> {% endfor %}</p>
+      {% if r.results|length > 1 %}<details><summary><small>查看歷年篩選規則</small></summary>
+        <ul>{% for y in r.results %}<li>{{ y.year }} 年：{{ steps_text(y.steps) }}</li>{% endfor %}</ul>
+      </details>{% endif %}
+    </article>
+    {% endfor %}
+  </details>
+</section>
+{% endif %}{% endfor %}
+{% endif %}
+{% endblock %}

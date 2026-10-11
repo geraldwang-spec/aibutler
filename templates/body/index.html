@@ -1,6 +1,6 @@
 {% extends 'live_base.html' %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='body/body.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='body/body.css', v='theme-1') }}">
 {#
   頁面外殼：畫面內容全部由 static/body/body.js 依 JSON 狀態繪製。
   第一份狀態直接內嵌在 #bd-initial（不會被執行，只當資料讀取），之後透過 /body/api/* 以 JSON 收送。
@@ -11,7 +11,8 @@
      data-user="{{ g.user['id'] }}"
      data-tab="{{ tab }}"
      data-records-weight="{{ url_for('records', table='body_metrics') }}"
-     data-records-exercises="{{ url_for('records', table='exercises') }}">
+     data-records-exercises="{{ url_for('records', table='exercises') }}"
+     data-profile="{{ url_for('profile') }}">
   <script type="application/json" id="bd-initial">{{ state|tojson }}</script>
   <noscript><p class="notice error">這個頁面需要啟用 JavaScript。</p></noscript>
   <p class="notice" id="bd-message" role="status" hidden></p>
@@ -75,5 +76,5 @@
     </span>
   </div>
 </div>
-<script src="{{ url_for('static', filename='body/body.js') }}" defer></script>
+<script src="{{ url_for('static', filename='body/body.js', v='cardio-3') }}" defer></script>
 {% endblock %}

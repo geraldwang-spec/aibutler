@@ -19,6 +19,8 @@ EXERCISE_MEDIA = {
     '纜繩夾胸': 'Cable_Crossover',
     '伏地挺身': 'Pushups',
     '雙槓撐體': 'Dips_-_Chest_Version',
+    '槌式胸推': 'Leverage_Chest_Press',
+    '獨立式上斜胸推機': 'Leverage_Incline_Chest_Press',
     '硬舉': 'Barbell_Deadlift',
     '槓鈴划船': 'Bent_Over_Barbell_Row',
     'T 槓划船': 'T-Bar_Row_with_Handle',
@@ -42,6 +44,7 @@ EXERCISE_MEDIA = {
     '腿推舉': 'Leg_Press',
     '哈克深蹲': 'Hack_Squat',
     '腿伸屈': 'Leg_Extensions',
+    '單腿腿屈伸': 'Single-Leg_Leg_Extension',
     '腿彎舉': 'Lying_Leg_Curls',
     '站姿提踵': 'Standing_Calf_Raises',
     '徒手深蹲': 'Bodyweight_Squat',
@@ -55,6 +58,7 @@ EXERCISE_MEDIA = {
     '啞鈴反向飛鳥': 'Seated_Bent-Over_Rear_Delt_Raise',
     '啞鈴聳肩': 'Dumbbell_Shrug',
     '機械肩推': 'Leverage_Shoulder_Press',
+    '肩推機': 'Machine_Shoulder_Military_Press',
     '纜繩側平舉': 'Standing_Low-Pulley_Deltoid_Raise',
     '臉拉': 'Face_Pull',
     '槓鈴彎舉': 'Barbell_Curl',
@@ -74,6 +78,15 @@ EXERCISE_MEDIA = {
     '俄羅斯轉體': 'Russian_Twist',
     '健腹輪': 'Ab_Roller',
     '纜繩捲腹': 'Cable_Crunch',
+    # 有氧（騎腳踏車的圖只有戴安全帽，看不出動作，所以不放）
+    '跑步': 'Trail_Running_Walking',
+    '跑步機': 'Running_Treadmill',
+    '健走': 'Walking_Treadmill',
+    '飛輪': 'Bicycling_Stationary',
+    '橢圓機': 'Elliptical_Trainer',
+    '划船機': 'Rowing_Stationary',
+    '跳繩': 'Rope_Jumping',
+    '爬梯機': 'Step_Mill',
 }
 
 VARIANT_NOTES = {
@@ -82,6 +95,8 @@ VARIANT_NOTES = {
     '低位划船機': '圖中為槓片式划船機；實際器械的握把與軌跡可能不同。',
     '啞鈴反向飛鳥': '圖中為坐姿俯身版本。',
     '仰臥抬腿': '圖中為平板凳版本。',
+    '健走': '圖中為跑步機上健走；戶外健走的姿勢相同。',
+    '跑步': '圖中為戶外越野跑。',
 }
 
 

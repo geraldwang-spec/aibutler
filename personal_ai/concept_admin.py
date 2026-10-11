@@ -51,7 +51,7 @@ def move_source(user_id,source_id,name,skill):
 
 def classify_fixed(user_id,subject_id,config):
     if not db().execute('SELECT 1 FROM subjects WHERE id=? AND created_by=?',(subject_id,user_id)).fetchone(): raise ValueError('科目不存在。')
-    rows=db().execute('SELECT q.*,ch.chapter_name FROM questions q JOIN chapters ch ON ch.id=q.chapter_id WHERE ch.subject_id=? AND NOT EXISTS(SELECT 1 FROM question_concepts qc WHERE qc.question_id=q.id) ORDER BY q.id LIMIT 20',(subject_id,)).fetchall()
+    rows=db().execute('SELECT q.*,ch.chapter_name FROM questions q JOIN chapters ch ON ch.id=q.chapter_id WHERE ch.subject_id=? AND NOT EXISTS(SELECT 1 FROM question_concepts qc WHERE qc.question_id=q.id) ORDER BY q.id',(subject_id,)).fetchall()
     items=[dict(row) for row in rows]
     if not items: raise ValueError('沒有需要補標的題目。')
     for item in items:

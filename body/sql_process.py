@@ -78,14 +78,27 @@ class BodySqlProcess:
                               (self.user_id, day, weight_kg, body_fat_pct))
 
     # ------------------------------------------------------------ 分析用（一次查出整段期間，不在迴圈裡逐筆查）
+    # 重訓與有氧分開查：重訓的組數、部位、推拉比例、1RM 都不應該把跑步算進去
+    STRENGTH = 'COALESCE(e.is_cardio,0)=0'
+    CARDIO = 'COALESCE(e.is_cardio,0)<>0'
+
     def sets_between(self, start, end):
-        """期間內每一組，附上日期、動作名稱與部位。"""
+        """期間內每一組「重訓」，附上日期、動作名稱與部位（有氧用 cardio_between）。"""
         return [dict(r) for r in self.conn.execute(
             'SELECT w.workout_date AS workout_date, w.id AS workout_id, s.exercise_id AS exercise_id, '
             'e.exercise_name AS exercise_name, e.muscle_group AS muscle_group, s.set_no AS set_no, '
             's.weight_kg AS weight_kg, s.reps AS reps '
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
-            'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ? ORDER BY w.workout_date, w.id, s.id',
+            f'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ? AND {self.STRENGTH} ORDER BY w.workout_date, w.id, s.id',
+            (self.user_id, start, end))]
+
+    def cardio_between(self, start, end):
+        """期間內每一段有氧：時間（秒）與距離（km，沒填是 NULL）。"""
+        return [dict(r) for r in self.conn.execute(
+            'SELECT w.workout_date AS workout_date, w.id AS workout_id, s.exercise_id AS exercise_id, '
+            'e.exercise_name AS exercise_name, s.duration_sec AS duration_sec, s.distance_km AS distance_km '
+            'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
+            f'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ? AND {self.CARDIO} ORDER BY w.workout_date, w.id, s.id',
             (self.user_id, start, end))]
 
     def workouts_between(self, start, end):
@@ -99,11 +112,106 @@ class BodySqlProcess:
             'ORDER BY record_date', (self.user_id, start, end))]
 
     def last_trained_by_muscle(self, until):
-        """每個部位最後一次訓練的日期（到 until 為止），{部位: 日期}。"""
+        """每個部位最後一次「重訓」的日期（到 until 為止），{部位: 日期}；跑步不算練過腿。"""
         return {r['muscle_group']: r['last_date'] for r in self.conn.execute(
             'SELECT e.muscle_group AS muscle_group, MAX(w.workout_date) AS last_date '
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
-            'WHERE w.user_id=? AND w.workout_date<=? GROUP BY e.muscle_group', (self.user_id, until)) if r['muscle_group']}
+            f'WHERE w.user_id=? AND w.workout_date<=? AND {self.STRENGTH} GROUP BY e.muscle_group', (self.user_id, until))
+            if r['muscle_group']}
+
+    # ------------------------------------------------------------ 個人資料與 AI 說明（ai_suggestions）
+    def gender_and_birth(self):
+        """性別與生日（建議課表估起始重量用）；另外查，不放進 profile()，避免被送進 AI 說明的提示詞。"""
+        row = self.conn.execute('SELECT gender, birth_date FROM user_profiles WHERE user_id=?', (self.user_id,)).fetchone()
+        return dict(gender=row['gender'], birth_date=str(row['birth_date'])[:10] if row['birth_date'] else None) \
+            if row else dict(gender=None, birth_date=None)
+
+    def profile(self):
+        row = self.conn.execute('SELECT goal_type, activity_level, workout_days_per_week, minutes_per_session '
+                                'FROM user_profiles WHERE user_id=?', (self.user_id,)).fetchone()
+        return dict(row) if row else {}
+
+    def ai_suggestion(self, kind, sug_date):
+        """取出某一期已產生的 AI 說明（type 例如 body_week，sug_date 是期間的第一天）。"""
+        return self.conn.execute('SELECT id, content FROM ai_suggestions WHERE user_id=? AND type=? AND sug_date=? '
+                                 'ORDER BY id DESC LIMIT 1', (self.user_id, kind, sug_date)).fetchone()
+
+    def save_ai_suggestion(self, kind, sug_date, content):
+        """同一期只保留一筆：有就更新、沒有就新增（兩種資料庫都能用的寫法）。"""
+        row = self.ai_suggestion(kind, sug_date)
+        if row:
+            self.conn.execute('UPDATE ai_suggestions SET content=? WHERE id=?', (content, row['id']))
+        else:
+            self.conn.execute('INSERT INTO ai_suggestions (user_id, sug_date, type, content, accepted) VALUES (?,?,?,?,0)',
+                              (self.user_id, sug_date, kind, content))
+
+    # ------------------------------------------------------------ 教練文章（RAG）
+    # 沿用既有的 materials → rag_documents → rag_chunks（＋rag_chunk_meta），不改資料表：
+    #   materials.subject_id 留空、rag_documents.source_type = 'body'，跟其他模組的教材分開；
+    #   materials.file_path 記錄做 embedding 用的模型（'embedding:<模型>'），body 不在硬碟存原始檔案。
+    # 寫入用批次（executemany）＋最後一次 commit，經過 Tailscale 連遠端資料庫也只有少數幾次來回。
+    SOURCE = 'body'
+
+    def insert_document(self, title, file_type, embedding_model, chunks, vectors):
+        """新增一篇文章與所有段落；回傳 material_id。由呼叫端 commit（失敗時 rollback，不會留下一半）。"""
+        from .rag import VectorIndex
+        self.conn.execute(
+            'INSERT INTO materials (user_id, subject_id, title, file_path, file_type, page_count, parse_status) '
+            'VALUES (?, NULL, ?, ?, ?, ?, ?)',
+            (self.user_id, title, f'embedding:{embedding_model}', file_type, len(chunks), '完成'))
+        material_id = self.conn.execute(
+            'SELECT MAX(id) FROM materials WHERE user_id=? AND title=?', (self.user_id, title)).fetchone()[0]
+        self.conn.execute('INSERT INTO rag_documents (source_type, material_id, title) VALUES (?,?,?)',
+                          (self.SOURCE, material_id, title))
+        doc_id = self.conn.execute('SELECT MAX(id) FROM rag_documents WHERE material_id=?', (material_id,)).fetchone()[0]
+        self.conn.executemany(
+            'INSERT INTO rag_chunks (doc_id, chunk_index, content, token_count, embedding) VALUES (?,?,?,?,?)',
+            [(doc_id, c['index'], c['content'], len(c['content']), VectorIndex.to_blob(v)) for c, v in zip(chunks, vectors)])
+        ids = [r[0] for r in self.conn.execute(
+            'SELECT id FROM rag_chunks WHERE doc_id=? ORDER BY chunk_index', (doc_id,))]
+        self.conn.executemany(
+            'INSERT INTO rag_chunk_meta (chunk_id, source_locator, section_title) VALUES (?,?,?)',
+            [(chunk_id, c.get('locator') or f"第 {c['index'] + 1} 段", c['section'] or None)
+             for chunk_id, c in zip(ids, chunks)])
+        return material_id
+
+    def documents(self):
+        """自己的教練文章列表（不含其他模組的教材）。"""
+        return [dict(r) for r in self.conn.execute(
+            'SELECT m.id AS id, m.title AS title, m.file_type AS file_type, m.page_count AS chunks, '
+            'm.file_path AS file_path FROM materials m JOIN rag_documents d ON d.material_id=m.id '
+            'WHERE m.user_id=? AND d.source_type=? ORDER BY m.id DESC', (self.user_id, self.SOURCE))]
+
+    def document_count(self):
+        return self.conn.execute(
+            'SELECT COUNT(*) FROM materials m JOIN rag_documents d ON d.material_id=m.id '
+            'WHERE m.user_id=? AND d.source_type=?', (self.user_id, self.SOURCE)).fetchone()[0]
+
+    def delete_document(self, material_id):
+        """刪除自己的一篇文章（段落、出處資訊、文件、教材都刪）；不是自己的或不是 body 的文章回 False。"""
+        doc = self.conn.execute(
+            'SELECT d.id FROM rag_documents d JOIN materials m ON m.id=d.material_id '
+            'WHERE m.id=? AND m.user_id=? AND d.source_type=?', (material_id, self.user_id, self.SOURCE)).fetchone()
+        if not doc:
+            return False
+        chunk_ids = [r[0] for r in self.conn.execute('SELECT id FROM rag_chunks WHERE doc_id=?', (doc[0],))]
+        if chunk_ids:
+            marks = ','.join('?' * len(chunk_ids))
+            self.conn.execute(f'DELETE FROM rag_chunk_meta WHERE chunk_id IN ({marks})', chunk_ids)
+        self.conn.execute('DELETE FROM rag_chunks WHERE doc_id=?', (doc[0],))
+        self.conn.execute('DELETE FROM rag_documents WHERE id=?', (doc[0],))
+        self.conn.execute('DELETE FROM materials WHERE id=? AND user_id=?', (material_id, self.user_id))
+        return True
+
+    def chunks_for_search(self):
+        """自己所有教練文章的段落與向量（檢索用）；一定經過 materials.user_id 檢查。"""
+        return [dict(r) for r in self.conn.execute(
+            'SELECT c.id AS id, c.content AS content, c.embedding AS embedding, c.chunk_index AS chunk_index, '
+            'm.id AS material_id, m.title AS title, m.file_path AS file_path, meta.section_title AS section, '
+            'meta.source_locator AS locator '
+            'FROM rag_chunks c JOIN rag_documents d ON d.id=c.doc_id JOIN materials m ON m.id=d.material_id '
+            'LEFT JOIN rag_chunk_meta meta ON meta.chunk_id=c.id '
+            'WHERE m.user_id=? AND d.source_type=?', (self.user_id, self.SOURCE))]
 
     # ------------------------------------------------------------ 動作庫 exercises
 
@@ -113,7 +221,10 @@ class BodySqlProcess:
     def exercises(self):
         order = ' '.join(f"WHEN '{m}' THEN {i}" for i, m in enumerate(self.MUSCLE_ORDER))
         return self.conn.execute(
-            f'SELECT * FROM exercises WHERE created_by=? ORDER BY CASE muscle_group {order} ELSE 99 END, muscle_group, id',
+            # 重訓依部位排序；有氧排在最後，彼此照新增順序（不依部位，划船機才不會跑到跑步前面）
+            'SELECT * FROM exercises WHERE created_by=? ORDER BY COALESCE(is_cardio,0), '
+            f"CASE WHEN COALESCE(is_cardio,0)<>0 THEN 0 ELSE CASE muscle_group {order} ELSE 99 END END, "
+            "CASE WHEN COALESCE(is_cardio,0)<>0 THEN '' ELSE muscle_group END, id",
             (self.user_id,)).fetchall()
 
     def latest_sessions_before(self, day, since):
@@ -122,7 +233,7 @@ class BodySqlProcess:
         只看 since 之後的紀錄，避免資料多了以後整張表掃過一遍。
         """
         rows = self.conn.execute(
-            'SELECT s.exercise_id, s.set_no, s.weight_kg, s.reps, w.id AS workout_id '
+            'SELECT s.exercise_id, s.set_no, s.weight_kg, s.reps, s.duration_sec, s.distance_km, s.rpe, w.id AS workout_id '
             'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
             'WHERE w.user_id=? AND w.workout_date<? AND w.workout_date>=? '
             'ORDER BY w.workout_date DESC, w.id DESC, s.set_no, s.id', (self.user_id, day, since)).fetchall()
@@ -140,12 +251,13 @@ class BodySqlProcess:
         return self.conn.execute('SELECT MAX(id) FROM exercises WHERE created_by=? AND exercise_name=?',
                                  (self.user_id, name)).fetchone()[0]
 
-    def insert_default_exercises(self, exercises):
+    def insert_default_exercises(self, exercises, cardio=False):
         """動作庫是空的才一次寫入預設動作；已經有任何動作就什麼都不做。
 
         用單一 INSERT ... SELECT ... WHERE NOT EXISTS，同時開兩個分頁也不會重複寫入；
         預設動作用 UNION ALL 組成子查詢，SQLite 與 MariaDB 都能用。
         exercises: [(名稱, 部位, 器材, 是否有氧), ...]；回傳實際寫入的筆數。
+        cardio=True：改成「還沒有任何有氧動作」才寫入（讓已經有動作庫的舊帳號也能補到預設有氧動作）。
         """
         if not exercises:
             return 0
@@ -155,7 +267,7 @@ class BodySqlProcess:
         cursor = self.conn.execute(
             'INSERT INTO exercises (exercise_name, muscle_group, equipment, is_cardio, created_by) '
             f'SELECT d.exercise_name, d.muscle_group, d.equipment, d.is_cardio, ? FROM ({rows}) AS d '
-            'WHERE NOT EXISTS (SELECT 1 FROM exercises WHERE created_by=?)',
+            'WHERE NOT EXISTS (SELECT 1 FROM exercises WHERE created_by=?' + (' AND is_cardio<>0)' if cardio else ')'),
             (self.user_id, *params, self.user_id))
         return cursor.rowcount
 
@@ -164,6 +276,17 @@ class BodySqlProcess:
         return {r['exercise_id']: r['n'] for r in self.conn.execute(
             'SELECT s.exercise_id AS exercise_id, COUNT(*) AS n FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
             'WHERE w.user_id=? AND w.workout_date>=? GROUP BY s.exercise_id', (self.user_id, since))}
+
+    def exercise_dates(self, since, before):
+        """since 到 before（不含）之間每個動作做過的日期，{exercise_id: ['YYYY-MM-DD', ...]}；建議課表判斷恢復與輪換用。"""
+        dates = {}
+        for r in self.conn.execute(
+                'SELECT DISTINCT s.exercise_id AS exercise_id, w.workout_date AS workout_date '
+                'FROM workout_sets s JOIN workouts w ON w.id=s.workout_id '
+                'WHERE w.user_id=? AND w.workout_date>=? AND w.workout_date<? ORDER BY w.workout_date',
+                (self.user_id, since, before)):
+            dates.setdefault(r['exercise_id'], []).append(str(r['workout_date'])[:10])
+        return dates
 
     def exercise(self, exercise_id):
         return self.conn.execute(
@@ -178,7 +301,8 @@ class BodySqlProcess:
     def muscle_groups_by_date(self, start, end):
         groups = {}
         for r in self.conn.execute(
-                'SELECT DISTINCT w.workout_date, e.muscle_group FROM workout_sets s '
+                'SELECT DISTINCT w.workout_date, '
+                f"CASE WHEN {self.CARDIO} THEN '有氧' ELSE e.muscle_group END FROM workout_sets s "
                 'JOIN workouts w ON w.id=s.workout_id JOIN exercises e ON e.id=s.exercise_id '
                 'WHERE w.user_id=? AND w.workout_date BETWEEN ? AND ?', (self.user_id, start, end)):
             if r[1]:
@@ -231,10 +355,12 @@ class BodySqlProcess:
             'SELECT COALESCE(max(set_no),0)+1 FROM workout_sets WHERE workout_id=? AND exercise_id=?',
             (workout_id, exercise_id)).fetchone()[0]
 
-    def insert_set(self, workout_id, exercise_id, set_no, weight_kg, reps, rpe):
+    def insert_set(self, workout_id, exercise_id, set_no, weight_kg, reps, rpe, duration_sec=None, distance_km=None):
+        """重訓填 weight_kg/reps；有氧填 duration_sec，distance_km 選填（schema 原本就有這兩欄）。"""
         self.conn.execute(
-            'INSERT INTO workout_sets (workout_id,exercise_id,set_no,weight_kg,reps,rpe) VALUES (?,?,?,?,?,?)',
-            (workout_id, exercise_id, set_no, weight_kg, reps, rpe))
+            'INSERT INTO workout_sets (workout_id,exercise_id,set_no,weight_kg,reps,rpe,duration_sec,distance_km) '
+            'VALUES (?,?,?,?,?,?,?,?)',
+            (workout_id, exercise_id, set_no, weight_kg, reps, rpe, duration_sec, distance_km))
 
     def owned_set(self, set_id):
         """取得一組（含所屬訓練的日期），只限自己的資料。"""

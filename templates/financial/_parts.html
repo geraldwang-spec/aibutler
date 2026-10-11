@@ -1,0 +1,109 @@
+{# 財務小幫手共用片段。所有使用者輸入（名稱等）都由 Jinja 自動跳脫，不使用 |safe。 #}
+
+{% macro assets() %}
+<link rel="stylesheet" href="{{ url_for('static', filename='financial/financial.css', v='2') }}">
+<script src="{{ url_for('static', filename='financial/financial.js', v='1') }}" defer></script>
+{% endmacro %}
+
+{# 今日／本週／本月／今年：mode = 'all' 顯示收支結餘，'income' 或 'expense' 只顯示該項 #}
+{% macro period_cards(summary, mode='all') %}
+<section class="fin-periods" aria-label="收支統計">
+  {% for key, label in [('day','今日'),('week','本週'),('month','本月'),('year','今年')] %}
+  {% set s = summary[key] %}
+  <article class="fin-period">
+    <h2>{{ label }}</h2>
+    {% if mode == 'all' %}
+      <dl>
+        <div><dt>收入</dt><dd class="fin-income">{{ s.income|money }}</dd></div>
+        <div><dt>支出</dt><dd class="fin-expense">{{ s.expense|money }}</dd></div>
+      </dl>
+      <p class="fin-balance {{ 'is-negative' if s.balance < 0 else '' }}"><span>結餘</span>{{ s.balance|money }}</p>
+    {% else %}
+      <p class="fin-total fin-{{ mode }}">{{ s[mode]|money }}<small> 元</small></p>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endmacro %}
+
+{# 本月支出分類長條；百分比由後端計算，寬度由 financial.js 依 data-pct 設定（CSP 不允許 inline style） #}
+{% macro breakdown_card(breakdown, labels) %}
+<section class="panel-card fin-breakdown">
+  <h2>本月支出分類</h2>
+  {% if breakdown %}
+  <ul>
+    {% for category, amount, pct in breakdown %}
+    <li>
+      <span class="fin-cat-name">{{ labels.get(category, category) }}</span>
+      <span class="fin-bar" aria-hidden="true"><span class="fin-bar-fill fin-cat-{{ category }}" data-pct="{{ pct }}"></span></span>
+      <span class="fin-cat-amount">{{ amount|money }} 元 · {{ pct }}%</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">本月尚無支出紀錄。</p>
+  {% endif %}
+</section>
+{% endmacro %}
+
+{% macro records_table(records, labels, heading, back, show_type=true) %}
+<section class="panel-card">
+  <h2>{{ heading }}（{{ records|length }}）</h2>
+  <div class="table-scroll">
+    <table class="fin-table">
+      <thead><tr><th>日期</th>{% if show_type %}<th>類型</th>{% endif %}<th>名稱</th><th class="fin-num">金額</th><th>分類</th><th>操作</th></tr></thead>
+      <tbody>
+      {% for r in records %}
+        <tr>
+          <td>{{ r.record_date }}</td>
+          {% if show_type %}<td><span class="fin-type {{ 'is-income' if r.type == '收入' else 'is-expense' }}">{{ r.type }}</span></td>{% endif %}
+          <td>{{ r.title }}</td>
+          <td class="fin-num">{{ r.amount|money }}</td>
+          <td><span class="pill">{{ labels.get(r.category, r.category) }}</span></td>
+          <td class="row-actions">
+            <form method="post" action="{{ url_for('financial.delete', record_id=r.id) }}" data-confirm="確定刪除「{{ r.title }}」？">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <input type="hidden" name="next" value="{{ back }}">
+              <button class="danger-link">刪除</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty-cell">目前還沒有任何紀錄。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endmacro %}
+
+{# 新增收入／支出表單；支出可手動選分類，預設交給 AI #}
+{% macro entry_form(tx_key, tx_type, form, categories, labels, current_date) %}
+<section class="panel-card fin-form-card">
+  <h2>新增{{ tx_type }}</h2>
+  <form method="post" class="fin-form" data-fin-form="{{ tx_key }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="form-grid">
+      <label for="fin-date">日期
+        <input id="fin-date" type="date" name="record_date" value="{{ form.get('record_date') or current_date }}" required>
+      </label>
+      <label for="fin-amount">金額（元）
+        <input id="fin-amount" type="number" name="amount" min="1" max="99999999" step="1" inputmode="numeric" value="{{ form.get('amount', '') }}" required>
+      </label>
+      <label for="fin-title">紀錄名稱
+        <input id="fin-title" type="text" name="title" maxlength="100" value="{{ form.get('title', '') }}"
+               placeholder="{{ '例如：薪水、家教、獎學金' if tx_key == 'income' else '例如：早餐、高鐵票、參考書' }}" required>
+      </label>
+      {% if tx_key == 'expense' %}
+      <label for="fin-category">分類
+        <select id="fin-category" name="category">
+          <option value="">AI 自動判斷</option>
+          {% for c in categories %}<option value="{{ c }}" {% if form.get('category') == c %}selected{% endif %}>{{ labels[c] }}</option>{% endfor %}
+        </select>
+      </label>
+      {% endif %}
+    </div>
+    <button class="action" data-busy-text="{{ 'AI 分類中…' if tx_key == 'expense' else '儲存中…' }}">儲存{{ tx_type }}</button>
+  </form>
+</section>
+{% endmacro %}

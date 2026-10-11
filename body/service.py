@@ -12,20 +12,27 @@
 - 結束時如果一組都沒做，這次訓練直接取消。
 - 打開頁面時，如果使用者的動作庫是空的，先寫入 DEFAULT_EXERCISES。
 """
+import json
 import math
 import re
 from datetime import date, datetime, time, timedelta
 
-from . import analysis, text_parser
+from modules.document_parser import DocumentParseError, DocumentParser
+
+from .ai_report import AiReport
+from .analysis import TrainingAnalysis
 from .errors import ApiError
 from .llm_client import LlmError
-from .prompts import parse_messages
+from .prompts import Prompts
+from .rag import TextChunker, VectorIndex
 from .sql_process import BodySqlProcess
+from .text_parser import ExerciseGuesser, WorkoutTextParser
+from .workout_plan import WorkoutPlan
 
 # 動作庫是空的時候預先放進去的常用動作：(名稱, 部位, 器材, 是否有氧)
 # 參考 BurnFit 的分類方式（依部位，再依器材：槓鈴／啞鈴／機械／纜繩／徒手…）整理。
 # 部位沿用 records.py「運動動作庫」的選項：胸、背、腿、肩、手臂、核心。
-# 這個頁面以「重量 × 次數」記錄，所以只放重訓動作；棒式、跑步等記時間／距離的動作沒有放。
+# 重訓以「重量 × 次數」記錄；有氧另外放在 DEFAULT_CARDIO，以「時間（必填）＋距離（選填）」記錄。
 DEFAULT_EXERCISES = [
     # 胸
     ('槓鈴臥推', '胸', '槓鈴', 0),
@@ -40,6 +47,8 @@ DEFAULT_EXERCISES = [
     ('纜繩夾胸', '胸', '纜繩', 0),
     ('伏地挺身', '胸', '徒手', 0),
     ('雙槓撐體', '胸', '徒手', 0),
+    ('槌式胸推', '胸', '機械', 0),
+    ('獨立式上斜胸推機', '胸', '機械', 0),
     # 背
     ('硬舉', '背', '槓鈴', 0),
     ('槓鈴划船', '背', '槓鈴', 0),
@@ -69,6 +78,7 @@ DEFAULT_EXERCISES = [
     ('站姿提踵', '腿', '機械', 0),
     ('徒手深蹲', '腿', '徒手', 0),
     ('登階', '腿', '徒手', 0),
+    ('單腿腿屈伸', '腿', '機械', 0),
     # 肩
     ('槓鈴肩推', '肩', '槓鈴', 0),
     ('直立划船', '肩', '槓鈴', 0),
@@ -81,6 +91,7 @@ DEFAULT_EXERCISES = [
     ('機械肩推', '肩', '機械', 0),
     ('纜繩側平舉', '肩', '纜繩', 0),
     ('臉拉', '肩', '纜繩', 0),
+    ('肩推機', '肩', '機械', 0),
     # 手臂
     ('槓鈴彎舉', '手臂', '槓鈴', 0),
     ('窄握臥推', '手臂', '槓鈴', 0),
@@ -102,8 +113,40 @@ DEFAULT_EXERCISES = [
     ('纜繩捲腹', '核心', '纜繩', 0),
 ]
 
+# 預設有氧動作（is_cardio=1）：時間必填；距離選填（不是每個人都有設備量距離），不計入「重量×次數」的訓練量。
+# 部位欄位沿用 6 個選項（主要用到的部位），只是讓「運動動作庫」頁面能編輯；
+# 分析、課表、週曆都依 is_cardio 判斷，跑步不會被算成練腿。
+# 分開成獨立清單：舊帳號的動作庫已經有重訓動作，也能補到這些（見 ensure_default_exercises）。
+DEFAULT_CARDIO = [
+    ('跑步', '腿', '徒手', 1),
+    ('跑步機', '腿', '跑步機', 1),
+    ('健走', '腿', '徒手', 1),
+    ('飛輪', '腿', '飛輪', 1),
+    ('騎腳踏車', '腿', '腳踏車', 1),
+    ('橢圓機', '腿', '橢圓機', 1),
+    ('划船機', '背', '划船機', 1),
+    ('跳繩', '腿', '跳繩', 1),
+    ('爬梯機', '腿', '爬梯機', 1),
+]
+
 # 每個使用者每小時最多呼叫幾次 AI 解析（規則解析不受限制）
 LLM_PARSE_PER_HOUR = 30
+# 每個使用者每小時最多產生幾次 AI 分析說明（同一期資料沒變時直接用存好的，不算次數）
+LLM_REPORT_PER_HOUR = 10
+# 每個使用者每小時最多產生幾次 AI 建議課表（沒設定 AI 時用程式選擇，不算次數）
+LLM_PLAN_PER_HOUR = 10
+
+
+class DocumentRules:
+    """教練文章（RAG）的限制：控制 embedding 費用與檢索品質。"""
+    FILE_TYPES = ('txt', 'md', 'pdf', 'docx', 'xlsx', 'csv')   # 轉換由共用的 modules.document_parser 負責
+    MAX_BYTES = 5 * 1024 * 1024   # 檔案大小上限，與 smartlife.py 的 MAX_CONTENT_LENGTH 相同
+    MAX_CHARS = 20000          # 一篇最多幾個字
+    MAX_DOCUMENTS = 10         # 每人最多幾篇
+    MAX_CHUNKS = 80            # 一篇最多切成幾段
+    UPLOADS_PER_HOUR = 20
+    REPORT_PASSAGES = 4        # AI 說明最多參考幾段
+    QUERIES = 3                # 從分析結果最多產生幾個查詢
 
 
 class Validator:
@@ -152,7 +195,7 @@ class Validator:
 class BodyService:
     WEEKDAYS = '一二三四五六日'
 
-    def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None):
+    def __init__(self, sql: BodySqlProcess, today=None, llm_parse=None, llm_report=None, embedder=None, embed_model=''):
         """llm_parse(messages) -> dict 或 (dict, 用量)：規則解析不了時呼叫的 LLM（回傳解析後的 JSON）。
 
         沒有傳入就只用規則解析；測試時可以傳入回傳固定 JSON 的假函式，不用真的呼叫 API。
@@ -160,12 +203,20 @@ class BodyService:
         self.sql = sql
         self.today = today or date.today()
         self.llm_parse = llm_parse
+        self.llm_report = llm_report          # llm_report(messages) -> (dict, 用量)：週／月分析的 AI 說明
+        self.embedder = embedder              # embedder(texts) -> [[float, ...], ...]：教練文章的 embedding
+        self.embed_model = embed_model        # 目前的 embedding 模型；換模型後舊文章要重新上傳
 
 
     # ============================================================ 預設動作
     def ensure_default_exercises(self):
-        """使用者的動作庫是空的時候，先寫入預設動作，「加入動作」才有東西可以選。回傳寫入筆數。"""
+        """使用者的動作庫是空的時候，先寫入預設動作，「加入動作」才有東西可以選。回傳寫入筆數。
+
+        有氧動作另外判斷：動作庫裡還沒有任何有氧動作時才補上（已有動作庫的舊帳號也會補到）。
+        取捨：使用者把有氧動作全部刪掉後，下次打開頁面會再補回來；要停用請保留至少一個有氧動作。
+        """
         added = self.sql.insert_default_exercises(DEFAULT_EXERCISES)
+        added += self.sql.insert_default_exercises(DEFAULT_CARDIO, cardio=True)
         if added:
             self.sql.commit()
         return added
@@ -212,12 +263,22 @@ class BodyService:
         since = (day - timedelta(days=180)).isoformat()
         sessions = self.sql.latest_sessions_before(day.isoformat(), since)
         return [dict(id=r['id'], name=r['exercise_name'], muscle_group=r['muscle_group'], equipment=r['equipment'],
-                     last=[dict(set_no=x['set_no'], weight_kg=x['weight_kg'], reps=x['reps']) for x in sessions.get(r['id'], [])])
+                     is_cardio=bool(r['is_cardio']),
+                     last=[dict(set_no=x['set_no'], **self._pair(x)) for x in sessions.get(r['id'], [])])
                 for r in self.sql.exercises()]
 
     @staticmethod
     def _pair(row):
-        return dict(weight_kg=row['weight_kg'], reps=row['reps']) if row else None
+        """一組的成績：重訓看 weight_kg/reps，有氧看 duration_sec/distance_km（另一邊是 None；距離沒填也是 None）。"""
+        if not row:
+            return None
+        return dict(weight_kg=row['weight_kg'], reps=row['reps'],
+                    duration_sec=row['duration_sec'], distance_km=row['distance_km'])
+
+    @staticmethod
+    def _group(info):
+        """畫面上顯示的部位：有氧動作顯示「有氧」，不顯示成腿或背。"""
+        return '有氧' if info.get('is_cardio') else info['muscle_group']
 
     @staticmethod
     def _volume(sets):
@@ -240,32 +301,41 @@ class BodyService:
 
         exercises, groups, current = [], [], None
         for ex_id in order:
-            info = lib.get(ex_id, dict(id=ex_id, name=f'動作 #{ex_id}', muscle_group=None, equipment=None))
+            info = lib.get(ex_id, dict(id=ex_id, name=f'動作 #{ex_id}', muscle_group=None, equipment=None, is_cardio=False))
             mine = [s for s in sets if s['exercise_id'] == ex_id]
-            if mine and info['muscle_group'] and info['muscle_group'] not in groups:
-                groups.append(info['muscle_group'])
-            exercises.append(dict({k: v for k, v in info.items() if k != 'last'}, done=len(mine), volume=self._volume(mine)))
+            if mine and self._group(info) and self._group(info) not in groups:
+                groups.append(self._group(info))
+            exercises.append(dict({k: v for k, v in info.items() if k != 'last'}, done=len(mine), volume=self._volume(mine),
+                                  cardio_sec=sum(s['duration_sec'] or 0 for s in mine)))
             if ex_id == current_id:
                 current = self._current(info, mine, row)
 
         workout = dict(id=row['id'], started_at=row['started_at'], ended_at=row['ended_at'],
                        in_progress=row['ended_at'] is None, duration_min=row['duration_min'] or 0,
-                       volume=self._volume(sets), set_count=len(sets), groups=groups, exercises=exercises)
+                       volume=self._volume(sets), set_count=len(sets), groups=groups, exercises=exercises,
+                       cardio_sec=sum(s['duration_sec'] or 0 for s in sets),
+                       cardio_km=round(sum(s['distance_km'] or 0 for s in sets), 2),
+                       # 沒填距離的有氧筆數：畫面要註明公里數只是部分加總
+                       cardio_no_km=sum(1 for s in sets if s['duration_sec'] and not s['distance_km']))
         return workout, current
 
     def _current(self, info, mine, workout_row):
         """目前正在記錄的動作：已完成的各組、上一次的成績、下一組預填值。"""
         prev = self.sql.previous_session_sets(info['id'], workout_row)
-        best = max(prev.values(), key=lambda r: ((r['weight_kg'] or 0), (r['reps'] or 0)), default=None)
+        cardio = bool(info.get('is_cardio'))
+        # 上次最佳：重訓比重量再比次數；有氧只比時間（距離不一定有填，用它比較不公平）
+        rank = (lambda r: (r['duration_sec'] or 0,)) if cardio else \
+            (lambda r: ((r['weight_kg'] or 0), (r['reps'] or 0)))
+        best = max(prev.values(), key=rank, default=None)
         next_no = (mine[-1]['set_no'] if mine else 0) + 1
         seed = mine[-1] if mine else prev.get(next_no)   # 下一組先填剛做的那組；第一組填上次同一組
         return dict(
-            exercise_id=info['id'], name=info['name'], muscle_group=info['muscle_group'], equipment=info['equipment'],
-            best=self._pair(best),
-            sets=[dict(id=s['id'], set_no=s['set_no'], weight_kg=s['weight_kg'], reps=s['reps'], rpe=s['rpe'],
-                       last=self._pair(prev.get(s['set_no']))) for s in mine],
+            exercise_id=info['id'], name=info['name'], muscle_group=self._group(info), equipment=info['equipment'],
+            is_cardio=cardio, best=self._pair(best),
+            sets=[dict(id=s['id'], set_no=s['set_no'], rpe=s['rpe'], last=self._pair(prev.get(s['set_no'])), **self._pair(s))
+                  for s in mine],
             next=dict(set_no=next_no, last=self._pair(prev.get(next_no)),
-                      weight_kg=seed['weight_kg'] if seed else None, reps=seed['reps'] if seed else None))
+                      **(self._pair(seed) or dict(weight_kg=None, reps=None, duration_sec=None, distance_km=None))))
 
     # ============================================================ 一句話輸入（只產生草稿，不寫資料庫）
     def parse_text(self, data):
@@ -276,14 +346,15 @@ class BodyService:
         text = data.get('text')
         if not isinstance(text, str) or not text.strip():
             raise ApiError('請輸入今天的訓練內容。')
-        if len(text) > text_parser.MAX_TEXT:
-            raise ApiError(f'內容太長，請在 {text_parser.MAX_TEXT} 字以內。')
-        library = [dict(id=r['id'], name=r['exercise_name']) for r in self.sql.exercises()]
+        if len(text) > WorkoutTextParser.MAX_TEXT:
+            raise ApiError(f'內容太長，請在 {WorkoutTextParser.MAX_TEXT} 字以內。')
+        library = [dict(id=r['id'], name=r['exercise_name'], is_cardio=bool(r['is_cardio'])) for r in self.sql.exercises()]
         if not library:
             raise ApiError('動作庫是空的，請先新增動作。')
         usage = self.sql.exercise_usage((self.today - timedelta(days=90)).isoformat())
 
-        result, source, note = text_parser.parse_rules(text, library, usage), 'rule', None
+        parser = WorkoutTextParser(library, usage)
+        result, source, note = parser.parse(text), 'rule', None
         # 需要 LLM 的情況：有含數字但看不懂的片段（unclear），或動作名稱完全對不到（可能是別名，例如 bench）
         unclear = any(re.search(r'\d', seg) for seg in result['unparsed'])
         needs_llm = unclear or any(item['exercise_id'] is None and not item['candidates'] for item in result['items'])
@@ -293,10 +364,10 @@ class BodyService:
                 note = f'AI 解析每小時最多 {LLM_PARSE_PER_HOUR} 次，已達上限；只顯示規則解析的結果。'
             else:
                 try:
-                    raw = self.llm_parse(parse_messages(text, [e['name'] for e in library]))
+                    raw = self.llm_parse(Prompts.parse_messages(text, [e['name'] for e in library]))
                     if isinstance(raw, tuple):                  # (資料, 用量)
                         raw, llm_usage = raw
-                    drafted = text_parser.validate_llm_draft(raw, library, usage)
+                    drafted = parser.validate_llm_draft(raw)
                     if drafted['items']:
                         result, source = drafted, 'llm'
                     else:
@@ -309,9 +380,16 @@ class BodyService:
             note = '有部分內容需要 AI 解析，目前尚未啟用；請改用「動作 重量 組數 次數」的寫法。'
 
         names = {e['id']: e['name'] for e in library}
+        cardio_ids = {e['id'] for e in library if e['is_cardio']}
         for item in result['items']:
+            is_cardio = item.get('kind') == 'cardio'
             if item['exercise_id'] is None:
-                item['suggest'] = text_parser.guess_exercise(item['input_text'])   # 新增動作時的預填值
+                item['suggest'] = ExerciseGuesser.guess(item['input_text'])   # 新增動作時的預填值
+                item['suggest']['is_cardio'] = item['suggest']['is_cardio'] or is_cardio   # 寫了時間就預設是有氧
+            elif (item['exercise_id'] in cardio_ids) != is_cardio and item['sets'] and not item['error']:
+                # 例如把「跳繩 3 組 100 下」對到有氧動作：記錄方式不同，數字不會套用，請使用者確認
+                item['warning'] = ('這是有氧動作，請改寫時間（例如 30 分鐘，距離可加可不加）' if not is_cardio
+                                   else '這是重訓動作，時間與距離不會套用，請改選有氧動作或改寫重量與次數')
             item['name'] = names.get(item['exercise_id'])
             item['candidates'] = [dict(id=c, name=names[c]) for c in item['candidates'] if c in names]
         return dict(items=result['items'], unparsed=result['unparsed'], source=source, note=note, usage=llm_usage)
@@ -321,14 +399,247 @@ class BodyService:
         """週／月分析：本期與上期比較、各部位組數、推拉比例、各動作進步、多久沒練、體重變化，以及規則產生的發現。"""
         if period not in ('week', 'month'):
             raise ApiError('period 只能是 week 或 month。')
-        start, end, prev_start, prev_end = analysis.period_range(period, anchor)
+        start, end, prev_start, prev_end = TrainingAnalysis.period_range(period, anchor)
         s, e, ps, pe = (x.isoformat() for x in (start, end, prev_start, prev_end))
         reference = min(end, self.today).isoformat()
-        return analysis.build_report(
+        return TrainingAnalysis(
             period, start, end, self.today,
             sets=self.sql.sets_between(s, e), prev_sets=self.sql.sets_between(ps, pe),
             workouts=self.sql.workouts_between(s, e), prev_workouts=self.sql.workouts_between(ps, pe),
-            metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference))
+            metrics=self.sql.metrics_between(s, e), last_trained=self.sql.last_trained_by_muscle(reference),
+            cardio=self.sql.cardio_between(s, e), prev_cardio=self.sql.cardio_between(ps, pe)).build()
+
+    # ============================================================ AI 分析說明（數字由程式算，LLM 只負責說明）
+    def _ai_report(self, period, anchor, with_passages=False):
+        report, profile = self.report(period, anchor), self.sql.profile()
+        passages = self._report_passages(report, profile) if with_passages else None
+        return AiReport(report, profile, passages)
+
+    def _report_passages(self, report, profile):
+        """用這期分析的重點當查詢，從自己的教練文章找出相關段落；沒有文章、沒設定或出錯就回空清單。"""
+        if self.embedder is None:
+            return []
+        queries = [f['text'] for f in report['findings'] if f['level'] in ('warn', 'info')][:DocumentRules.QUERIES]
+        if profile.get('goal_type'):
+            queries.append(f"{profile['goal_type']} 的訓練建議")
+        return self._passages(queries)
+
+    def _passages(self, queries):
+        """用幾個查詢從自己的教練文章找段落，合併後取分數最高的幾段；沒有文章或出錯就回空清單。"""
+        rows = self._searchable_chunks()
+        if self.embedder is None or not queries or not rows:
+            return []
+        try:
+            vectors = self.embedder(queries)
+        except LlmError:
+            return []
+        best = {}
+        for vector in vectors:
+            for row, score in VectorIndex.search(vector, rows, k=2):
+                if score > best.get(row['id'], (None, -1))[1]:
+                    best[row['id']] = (row, score)
+        ranked = sorted(best.values(), key=lambda x: -x[1])[:DocumentRules.REPORT_PASSAGES]
+        return [dict(n=i + 1, chunk_id=row['id'], title=row['title'], section=row.get('section') or '',
+                     locator=row.get('locator') or '', text=row['content'], score=score)
+                for i, (row, score) in enumerate(ranked)]
+
+    def _searchable_chunks(self):
+        """只用「目前的 embedding 模型」做的段落（換模型後的舊向量不能互相比較）。"""
+        tag = f'embedding:{self.embed_model}'
+        return [r for r in self.sql.chunks_for_search() if r['file_path'] == tag]
+
+    def ai_explanation(self, period, anchor):
+        """讀取這一期已產生的 AI 說明；資料有變動時標示 stale（不會自動重新呼叫 LLM）。"""
+        ai = self._ai_report(period, anchor)
+        row = self.sql.ai_suggestion(f'body_{period}', ai.report['start'])
+        saved = None
+        if row:
+            try:
+                saved = json.loads(row['content'])
+            except (TypeError, ValueError):
+                saved = None
+        if saved:
+            saved['stale'] = saved.get('input_hash') != ai.hash
+        return dict(enabled=self.llm_report is not None, saved=saved, has_data=ai.has_data)
+
+    def generate_ai_explanation(self, period, anchor):
+        """呼叫 LLM 產生（或重新產生）這一期的說明，檢查數字後存進 ai_suggestions。"""
+        if self.llm_report is None:
+            raise ApiError('尚未設定 AI（body/body.env），目前只能看程式算出的分析。')
+        ai = self._ai_report(period, anchor, with_passages=True)
+        if not ai.has_data:
+            raise ApiError('這段期間沒有訓練紀錄，沒有可以分析的內容。')
+        if self.sql.rate_limited(f'body-llm-report:{self.sql.user_id}', LLM_REPORT_PER_HOUR, 3600):
+            raise ApiError(f'AI 分析每小時最多 {LLM_REPORT_PER_HOUR} 次，請稍後再試。')
+        try:
+            raw = self.llm_report(Prompts.report_messages(ai.prompt_data))
+        except LlmError as exc:
+            raise ApiError(f'AI 分析暫時無法使用（{exc}）。') from None
+        raw, usage = raw if isinstance(raw, tuple) else (raw, None)
+        result = ai.check(raw)
+        if not (result['summary'] or result['strengths'] or result['weaknesses'] or result['suggestions']):
+            raise ApiError('AI 回傳的內容沒有通過檢查，請稍後再試。')
+        saved = dict(result, input_hash=ai.hash, period=period, start=ai.report['start'], end=ai.report['end'],
+                     generated_at=datetime.now().isoformat(timespec='seconds'),
+                     model=(usage or {}).get('model'), usage=usage, passages=len(ai.passages))
+        self.sql.save_ai_suggestion(f'body_{period}', ai.report['start'], json.dumps(saved, ensure_ascii=False))
+        self.sql.commit()
+        saved['stale'] = False
+        return dict(enabled=True, saved=saved, has_data=True)
+
+    # ============================================================ 建議課表（程式排骨架與重量，LLM 挑動作與說明）
+    def _plan(self, day, with_passages=False):
+        d = day.isoformat()
+        week_ago = (day - timedelta(days=7)).isoformat()
+        yesterday = (day - timedelta(days=1)).isoformat()
+        weekly = TrainingAnalysis.volume_by_muscle(self.sql.sets_between(week_ago, yesterday))
+        library = [dict(id=r['id'], name=r['exercise_name'], muscle_group=r['muscle_group'],
+                        equipment=r['equipment'], is_cardio=r['is_cardio']) for r in self.sql.exercises()]
+        plan = WorkoutPlan(
+            day, self.sql.profile(),
+            days_since=TrainingAnalysis.days_since_trained(self.sql.last_trained_by_muscle(yesterday), day),
+            weekly_sets={m: v['sets'] for m, v in weekly.items()},
+            library=library,
+            usage=self.sql.exercise_usage((day - timedelta(days=90)).isoformat()),
+            last_sessions=self.sql.latest_sessions_before(d, (day - timedelta(days=180)).isoformat()),
+            exercise_dates=self.sql.exercise_dates((day - timedelta(days=365)).isoformat(), d),
+            body=self._body(d))
+        if with_passages:
+            queries = [x['why'] for x in plan.skeleton['slots']][:DocumentRules.QUERIES]
+            if plan.skeleton['goal']:
+                queries.append(f"{plan.skeleton['goal']} 的訓練建議")
+            plan.passages = self._passages(queries)
+        return plan
+
+    def _body(self, day):
+        """估起始重量用的性別、生日與最近一次體重（到 day 為止）。"""
+        metric = self.sql.latest_metric(day)
+        return dict(self.sql.gender_and_birth(), weight_kg=metric['weight_kg'] if metric else None)
+
+    def suggested_plan(self, day):
+        """讀取這一天已產生的建議課表；資料有變動時標示 stale（不會自動重新產生）。"""
+        plan = self._plan(day)
+        row = self.sql.ai_suggestion('body_plan', day.isoformat())
+        saved = None
+        if row:
+            try:
+                saved = json.loads(row['content'])
+            except (TypeError, ValueError):
+                saved = None
+        if saved:
+            saved['stale'] = saved.get('input_hash') != plan.hash
+        return dict(enabled=self.llm_report is not None, saved=saved)
+
+    def generate_plan(self, day):
+        """產生（或重新產生）這一天的建議課表，存進 ai_suggestions（type=body_plan）。
+
+        有設定 AI：LLM 從候選挑動作，檢查後不合格的位置改用程式選擇。
+        沒有設定 AI：全部用程式選擇（常做的動作優先），功能仍可使用。
+        課表只是草稿：「套用到今天」只填進前端的預計組數，使用者逐組按 ✓ 才寫入 workout_sets。
+        """
+        if day < self.today:
+            raise ApiError('只能替今天或之後的日期建議課表。')
+        # 分化方式、動作數、次數都依個人資料決定，沒填就不排（後端檢查，不依賴前端）
+        missing = WorkoutPlan.missing_profile(self.sql.profile())
+        if missing:
+            raise ApiError(f"請先到「個人資料與目標」填寫：{'、'.join(missing)}，才能依你的目標排課。",
+                           need='profile', missing=missing)
+        use_ai = self.llm_report is not None
+        plan = self._plan(day, with_passages=use_ai)
+        if not plan.library:
+            raise ApiError('動作庫裡沒有可以安排的重訓動作，請先新增動作。')
+        raw, usage, note = None, None, None
+        if use_ai and not plan.skeleton['rest']:          # 建議休息時不用呼叫 LLM
+            if self.sql.rate_limited(f'body-llm-plan:{self.sql.user_id}', LLM_PLAN_PER_HOUR, 3600):
+                raise ApiError(f'AI 建議課表每小時最多 {LLM_PLAN_PER_HOUR} 次，請稍後再試。')
+            try:
+                raw = self.llm_report(Prompts.plan_messages(plan.prompt_data))
+                raw, usage = raw if isinstance(raw, tuple) else (raw, None)
+            except LlmError as exc:                        # AI 失敗時仍給程式選擇的課表
+                raw, note = None, f'AI 暫時無法使用（{exc}），以下是程式依紀錄選擇的動作。'
+        result = plan.check(raw)
+        saved = dict(result, input_hash=plan.hash, source='llm' if raw is not None else 'rule', note=note,
+                     generated_at=datetime.now().isoformat(timespec='seconds'),
+                     model=(usage or {}).get('model'), usage=usage)
+        self.sql.save_ai_suggestion('body_plan', day.isoformat(), json.dumps(saved, ensure_ascii=False))
+        self.sql.commit()
+        saved['stale'] = False
+        return dict(enabled=use_ai, saved=saved)
+
+    # ============================================================ 教練文章（RAG）
+    def documents(self):
+        """自己的教練文章；usable=False 代表是用別的 embedding 模型做的，要重新上傳才能檢索。"""
+        tag = f'embedding:{self.embed_model}'
+        docs = [dict(id=d['id'], title=d['title'], file_type=d['file_type'], chunks=d['chunks'],
+                     model=(d['file_path'] or '').replace('embedding:', '', 1), usable=d['file_path'] == tag)
+                for d in self.sql.documents()]
+        return dict(enabled=self.embedder is not None, documents=docs, limits=dict(
+            max_chars=DocumentRules.MAX_CHARS, max_documents=DocumentRules.MAX_DOCUMENTS, max_bytes=DocumentRules.MAX_BYTES,
+            file_types=list(DocumentRules.FILE_TYPES)))
+
+    def upload_document(self, filename, raw, title=''):
+        """上傳文章：轉成文字（modules.document_parser）→ 切段 → embedding → 一次寫入資料庫（原始檔案不存）。"""
+        if self.embedder is None:
+            raise ApiError('尚未設定 embedding（body/body.env 的 BODY_EMBED_MODEL），不能上傳文章。')
+        name = str(filename or '').strip()
+        ext = DocumentParser.extension(name)
+        if ext not in DocumentRules.FILE_TYPES:
+            raise ApiError(f"只能上傳 {'、'.join('.' + e for e in DocumentRules.FILE_TYPES)} 檔案。")
+        try:
+            sections = DocumentParser.parse(name, raw)
+        except DocumentParseError as exc:
+            raise ApiError(str(exc)) from None
+        total = sum(len(s['text']) for s in sections)
+        if total > DocumentRules.MAX_CHARS:
+            raise ApiError(f'文章太長（{total:,} 字），一篇最多 {DocumentRules.MAX_CHARS:,} 字，請分成幾篇上傳。')
+        if self.sql.document_count() >= DocumentRules.MAX_DOCUMENTS:
+            raise ApiError(f'最多上傳 {DocumentRules.MAX_DOCUMENTS} 篇，請先刪除不需要的文章。')
+        title = ' '.join(str(title or '').split())[:120] or name.rsplit('.', 1)[0][:120] or '教練文章'
+        chunks = TextChunker().split_sections(sections)
+        if not chunks:
+            raise ApiError('文章裡沒有可以使用的內容。')
+        if len(chunks) > DocumentRules.MAX_CHUNKS:
+            raise ApiError(f'文章切成 {len(chunks)} 段，超過上限 {DocumentRules.MAX_CHUNKS} 段，請分成幾篇上傳。')
+        if self.sql.rate_limited(f'body-doc:{self.sql.user_id}', DocumentRules.UPLOADS_PER_HOUR, 3600):
+            raise ApiError(f'每小時最多上傳 {DocumentRules.UPLOADS_PER_HOUR} 次，請稍後再試。')
+        try:
+            vectors = self.embedder([c['content'] for c in chunks])
+        except LlmError as exc:
+            raise ApiError(f'產生 embedding 失敗（{exc}）。') from None
+        if len(vectors) != len(chunks):
+            raise ApiError('embedding 回傳的數量不對。')
+        try:
+            material_id = self.sql.insert_document(title, ext, self.embed_model, chunks, vectors)
+            self.sql.commit()
+        except Exception:
+            self.sql.rollback()
+            raise ApiError('儲存文章時發生錯誤，請再試一次。') from None
+        return dict(self.documents(), uploaded=dict(id=material_id, title=title, chunks=len(chunks)))
+
+    def delete_document(self, material_id):
+        if not self.sql.delete_document(material_id):
+            raise ApiError.not_found('找不到這篇文章。')
+        self.sql.commit()
+        return self.documents()
+
+    def search_documents(self, query, k=None, min_score=None):
+        """直接查詢教練文章（給評估與除錯用）：回傳超過門檻的段落與分數。"""
+        if self.embedder is None:
+            raise ApiError('尚未設定 embedding（BODY_EMBED_MODEL）。')
+        query = ' '.join(str(query or '').split())[:300]
+        if not query:
+            raise ApiError('請輸入查詢內容。')
+        rows = self._searchable_chunks()
+        if not rows:
+            return dict(query=query, hits=[], min_score=min_score or VectorIndex.DEFAULT_MIN_SCORE)
+        try:
+            vector = self.embedder([query])[0]
+        except LlmError as exc:
+            raise ApiError(f'產生 embedding 失敗（{exc}）。') from None
+        hits = VectorIndex.search(vector, rows, k=k, min_score=min_score)
+        return dict(query=query, min_score=VectorIndex.DEFAULT_MIN_SCORE if min_score is None else min_score,
+                    hits=[dict(chunk_id=r['id'], title=r['title'], section=r.get('section') or '',
+                               locator=r.get('locator') or '', text=r['content'], score=score) for r, score in hits])
 
     # ============================================================ 新增動作（一句話輸入遇到動作庫沒有的動作）
     def create_exercise(self, data):
@@ -343,7 +654,7 @@ class BodyService:
             raise ApiError('請輸入動作名稱。')
         if len(name) > 80:
             raise ApiError('動作名稱最多 80 字。')
-        if muscle not in text_parser.MUSCLE_CHOICES:
+        if muscle not in ExerciseGuesser.MUSCLES:
             raise ApiError('請選擇部位。')
         if not equipment:
             raise ApiError('請輸入使用的器材。')
@@ -426,17 +737,28 @@ class BodyService:
         return self._result(day, message='訓練已結束並儲存。')
 
     def add_set(self, workout_id, data):
+        """完成一組。動作是不是有氧由資料庫的 is_cardio 決定（不信任前端送來的欄位）：
+        重訓必填重量與次數；有氧必填時間（分鐘），距離選填，存成 duration_sec／distance_km（沒填就是 NULL）。"""
         workout = self._owned_workout(workout_id)
         exercise = self._owned_exercise(Validator.identifier(data.get('exercise_id')))
-        weight = Validator.number(data, 'weight_kg', '重量', 0, 1000)
-        reps = Validator.number(data, 'reps', '次數', 1, 10000, integer=True)
         rpe = Validator.number(data, 'rpe', 'RPE', 1, 10, required=False, integer=True)
+        cardio = bool(exercise['is_cardio'])
+        if cardio:
+            duration_sec = round(Validator.number(data, 'duration_min', '時間（分鐘）', 1, 600) * 60)
+            distance = Validator.number(data, 'distance_km', '距離（公里）', 0, 300, required=False)
+            distance = round(distance, 2) if distance else None        # 0 或沒填 → NULL（「沒填」，不是跑了 0 公里）
+            weight = reps = None
+        else:
+            weight = Validator.number(data, 'weight_kg', '重量', 0, 1000)
+            reps = Validator.number(data, 'reps', '次數', 1, 10000, integer=True)
+            duration_sec = distance = None
         set_no = self.sql.next_set_no(workout_id, exercise['id'])
-        self.sql.insert_set(workout_id, exercise['id'], set_no, weight, reps, rpe)
+        self.sql.insert_set(workout_id, exercise['id'], set_no, weight, reps, rpe, duration_sec, distance)
         self.sql.refresh_stats()
         self.sql.commit()
+        # 有氧做完通常不需要組間休息計時
         return self._result(date.fromisoformat(workout['workout_date']), exercise['id'],
-                            rest=workout['ended_at'] is None)
+                            rest=workout['ended_at'] is None and not cardio)
 
     def delete_set(self, set_id):
         row = self.sql.owned_set(set_id)

@@ -49,7 +49,6 @@ def respond(question, history=None, context='所選科目教材', in_chat=True, 
     model=get_tutor_llm(current_app.config)
     model=getattr(model,'primary',model)
     if not model.enabled or model.provider!='groq': return fallback
-    model.max_output_tokens=min(model.max_output_tokens,320)
     references=[{'id':hit['id'],'guidance':hit['guidance'],'examples':hit['replies'][:2]} for hit in hits]
     payload={'question':question,'current_mode':'教材模式','context':context,
              'handoff':'輸入框下方科目選單 → 一般對話' if in_chat else 'AI 對話頁 → 一般對話',

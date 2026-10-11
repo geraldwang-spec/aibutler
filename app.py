@@ -13,6 +13,7 @@ from smartlife import create_app as create_base_app
 from body.body_route import body
 from TYE import register_tye_exam
 from personal_ai import register_personal_ai
+from financial import register_financial
 
 
 def create_app(test_config=None):
@@ -70,6 +71,9 @@ def create_app(test_config=None):
     flask_app.register_blueprint(body)
     register_tye_exam(flask_app)
     register_personal_ai(flask_app)
+    register_financial(flask_app)  # 財務小幫手（David）
+    from admission import register_admission
+    register_admission(flask_app)
     from workspace_ui import register_workspace_ui
     register_workspace_ui(flask_app)
     if not flask_app.config.get('TESTING') and not flask_app.config.get('DB_READ_ONLY') and str(flask_app.config.get('APP_MODE','dev')).lower() == 'dev' and flask_app.config.get('DB_TYPE') == 'sqlite':
@@ -97,6 +101,7 @@ def check_environment(app):
     print("Body 模組：已註冊")
     print("TYE 模組：已註冊")
     print("Personal AI 模組：已註冊")
+    print("Financial 模組：已註冊")
     print("APP_MODE：", app.config.get("APP_MODE"))
     print("GROQ_API_KEY：", "已設定（所有文字 AI 共用）" if app.config.get("GROQ_API_KEY") else "未設定 ← 請在 .env 最上方貼入 KEY")
     print("LLM_PROVIDER：", app.config.get("LLM_PROVIDER"))

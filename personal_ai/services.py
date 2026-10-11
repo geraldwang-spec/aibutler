@@ -126,7 +126,7 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
     modular = enabled(config)
     validate_user_text(focus)
     # 兩種來源都可驅動出題：Concept Bank（由匯入題目歸類而來）+ 教材 RAG。
-    concepts,samples=_concept_context(user_id,subject_id,chapter_ids,limit=max(12,count*2))
+    concepts,samples=_concept_context(user_id,subject_id,chapter_ids,limit=12)
     if focus.strip():
         from .rag import related
         concepts=[c for c in concepts if related(focus,' '.join([c['name'],c['description'] or ''] +
@@ -134,7 +134,7 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         concept_ids={c['id'] for c in concepts}
         samples=[sample for sample in samples if sample['concept_id'] in concept_ids]
     # No focus means sample owned material in the selected scope, not a relevance claim.
-    chunks=retrieve(user_id,subject_id,focus.strip(),chapter_ids,limit=max(6,count),require_relevance=bool(focus.strip()))
+    chunks=retrieve(user_id,subject_id,focus.strip(),chapter_ids,limit=6,require_relevance=bool(focus.strip()))
     if modular and chunks:
         chunks=chunks[:4]
     if not concepts and not chunks:
@@ -155,17 +155,12 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         for ex in sample_groups.get(cid,[])[:3]:
             concept_lines.append(f"  - [source:{ex['id']}] SOURCE EXAMPLE（只供理解考點，禁止改數字照抄）: {ex['raw_question'][:300]} | answer={ex['answer_key']} | explanation={ex['explanation'][:180]} | skill={ex['skill'] or ''}")
     concept_text='\n'.join(concept_lines)
-    if modular:
-        evidence=evidence[:1500]
-        concept_text=concept_text[:1500]
-        recent_text=recent_text[:500]
-
+    from .prompt_budget import source_blocks
+    evidence=source_blocks(evidence,'[chunk:',target=6000)
+    concept_text=source_blocks(concept_text,'[concept:',target=5000)
+    recent_text='\n'.join(recent_text.splitlines()[:5])
     generator=get_generator_llm(config)
     reviewer=get_reviewer_llm(config)
-    if getattr(getattr(generator,'primary',generator),'provider','')=='groq':
-        evidence=evidence[:1500]
-        concept_text=concept_text[:1500]
-        recent_text=recent_text[:500]
     # Only sources actually included in the bounded prompt may be cited or selected.
     sent_chunks={int(cid) for cid in re.findall(r'\[chunk:(\d+)\]',evidence)}
     sent_concepts={int(cid) for cid in re.findall(r'\[concept:(\d+)\]',concept_text)}
@@ -189,9 +184,9 @@ def generate_question_drafts(config,user_id,subject_id,chapter_ids,count,q_types
         '5. 每題回傳 concept_id、concept_name、skill、cognitive_level、答案與解析。\n'
         '6. 只回 JSON，不要 Markdown。'
     )
-    # Small Groq output quotas cannot fit a multi-question JSON response.
+    # Small processing batches reduce provider bursts; total count is uncapped.
     primary = getattr(generator, 'primary', generator)
-    batch_size = 1 if getattr(primary, 'provider', '') == 'groq' else min(4,count) if modular else count
+    batch_size = 1 if getattr(primary, 'provider', '') == 'groq' else min(4,count)
     user=(f'請產生 {{batch_count}} 題，題型限定 {q_types}，難度 {difficulty}/5。\n'
           f'使用者指定重點：{focus or "無"}\n\n'
           f'Concept Bank / 來源題樣本：\n{concept_text or "無"}\n\n'

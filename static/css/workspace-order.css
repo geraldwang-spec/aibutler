@@ -18,6 +18,8 @@
 .product-ui .exam-workspace-nav a:not(.active):hover{background:var(--theme-accent-soft, #e8dcf6);border-color:var(--theme-accent-border, #bda2d7)}
 .product-ui .inline-form{padding:16px 18px;background:var(--theme-accent-soft, #f7f3fb);border:1px solid var(--theme-accent-border, #ebe2f2);border-radius:13px;gap:16px;margin-top:18px}
 .product-ui .inline-form label{min-width:180px;flex:1;max-width:360px;margin-bottom:0}
+/* 原生 select 比同樣 padding 的 input 高一點，靠底對齊時標籤會錯位；統一高度 */
+.product-ui .inline-form :is(input:not([type=radio]):not([type=checkbox]):not([type=hidden]),select){box-sizing:border-box;height:42px;padding-top:0;padding-bottom:0}
 .product-ui .form-grid{gap:20px 24px}
 .product-ui :is(.panel-card,.panel) .record-item{padding:20px;margin:14px 0;background:var(--theme-accent-soft, #fbf9fd);border:1px solid var(--theme-accent-border, #ebe3f2);border-radius:14px}
 .product-ui .table-scroll{border-radius:14px;border-color:var(--theme-accent-border, #e6deef);margin-top:16px}

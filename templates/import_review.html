@@ -6,9 +6,11 @@
 <p class="notice info"><strong>傳統題庫匯入：</strong>確認後原題會直接加入正式題庫。</p>
 {% endif %}
 <p class="notice info">{{ batch.file_name }} · {{ batch.status }} · {{ items|length }} 題。請確認題目、答案與概念歸類。</p>
+{% if batch.error_log and '待補資料題號' in batch.error_log %}<p class="notice info">{{ batch.error_log }}。待補題目未加入本次預覽，不影響其餘題目的分析與確認匯入；補齊資料後可另外匯入。</p>{% endif %}
 {% for item in items %}
 <article class="panel-card">
   <h2>{{ loop.index }}. {{ item.chapter_name }} · {{ item.q_type }}</h2>
+  {% if item.get('_answer_source') == 'ai_inferred' %}<p class="notice info">AI 推定答案，非官方答案。請核對原卷、圖片內容與解析後再確認匯入。模型：{{ item.get('_answer_model') }}</p>{% endif %}
   {% if item.get('_concept_name') %}
   <div class="concept-box">
     <span class="pill">Concept：{{ item.get('_concept_name') }}</span>
@@ -22,7 +24,7 @@
   <p class="prewrap">{{ item.content }}</p>
   {% for label in 'ABCD' %}{% if item.get('option_'+label) %}<p>{{ label }}. {{ item.get('option_'+label) }}</p>{% endif %}{% endfor %}
   <p>答案：{{ item.answer_key }}</p><p>解析：{{ item.explanation or '未提供' }}</p>
-{% if batch.status=='待確認' %}<details><summary>修正／移除此題</summary><form method="post" action="{{url_for('revise_import',batch=batch.id,item_id=item._item_id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><label>章節<input name="chapter_name" value="{{item.chapter_name}}" required maxlength="120"></label><label>題型<select name="q_type">{% for t in ['單選','多選','是非','填空'] %}<option {% if t==item.q_type %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label><label>題目<textarea name="content" required maxlength="10000">{{item.content}}</textarea></label>{% for k in 'ABCD' %}<label>{{k}}<input name="option_{{k}}" value="{{item.get('option_'+k,'')}}" maxlength="2000"></label>{% endfor %}<label>答案<input name="answer_key" value="{{item.answer_key}}" maxlength="50" required></label><label>解析<textarea name="explanation">{{item.explanation or ''}}</textarea></label>{% if concept_mode %}<label>概念<input name="concept_name" value="{{item.get('_concept_name','')}}" maxlength="255" required></label><label>技能<input name="skill" value="{{item.get('_skill','')}}" maxlength="255"></label>{% endif %}<button name="action" value="save">儲存修正</button><button name="action" value="remove" formnovalidate>移除此題</button></form></details>{% endif %}</article>
+{% if batch.status=='待確認' %}<details><summary>修正／移除此題</summary><form method="post" action="{{url_for('revise_import',batch=batch.id,item_id=item._item_id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><label>章節<input name="chapter_name" value="{{item.chapter_name}}" required maxlength="120"></label><label>題型<select name="q_type">{% for t in ['單選','多選','是非','填空'] %}<option {% if t==item.q_type %}selected{% endif %}>{{t}}</option>{% endfor %}</select></label><label>題目<textarea name="content" required maxlength="20000">{{item.content}}</textarea></label>{% for k in 'ABCD' %}<label>{{k}}<input name="option_{{k}}" value="{{item.get('option_'+k,'')}}" maxlength="10000"></label>{% endfor %}<label>答案<input name="answer_key" value="{{item.answer_key}}" maxlength="50" required></label><label>解析<textarea name="explanation">{{item.explanation or ''}}</textarea></label>{% if concept_mode %}<label>概念<input name="concept_name" value="{{item.get('_concept_name','')}}" maxlength="255" required></label><label>技能<input name="skill" value="{{item.get('_skill','')}}" maxlength="255"></label>{% endif %}<button name="action" value="save">儲存修正</button><button name="action" value="remove" formnovalidate>移除此題</button></form></details>{% endif %}</article>
 {% endfor %}
 {% if batch.status=='待確認' %}<form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="action">確認並匯入 {{ items|length }} 題 →</button><a class="outline-button" href="{{ url_for('imports') }}">返回，暫不匯入</a></form>{% endif %}
 {% if batch.status=='待確認' %}<form method="post" action="{{url_for('cancel_import',batch=batch.id)}}"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><button>取消此批次</button></form>{% endif %}{% endblock %}

@@ -6,7 +6,12 @@ from contextlib import closing
 from datetime import date, timedelta
 from pathlib import Path
 
-from body import analysis
+from body.ai_report import AiReport
+from body.analysis import TrainingAnalysis
+
+
+def build_report(*args):
+    return TrainingAnalysis(*args).build()
 
 
 def row(day, workout_id, ex_id, name, muscle, weight, reps):
@@ -16,28 +21,28 @@ def row(day, workout_id, ex_id, name, muscle, weight, reps):
 
 class PureFunctionTests(unittest.TestCase):
     def test_period_range(self):
-        self.assertEqual(analysis.period_range('week', date(2026, 10, 2)),
+        self.assertEqual(TrainingAnalysis.period_range('week', date(2026, 10, 2)),
                          (date(2026, 9, 28), date(2026, 10, 4), date(2026, 9, 21), date(2026, 9, 27)))
-        self.assertEqual(analysis.period_range('month', date(2026, 3, 15)),
+        self.assertEqual(TrainingAnalysis.period_range('month', date(2026, 3, 15)),
                          (date(2026, 3, 1), date(2026, 3, 31), date(2026, 2, 1), date(2026, 2, 28)))
-        self.assertEqual(analysis.period_range('month', date(2026, 12, 31))[1], date(2026, 12, 31))
+        self.assertEqual(TrainingAnalysis.period_range('month', date(2026, 12, 31))[1], date(2026, 12, 31))
 
     def test_estimated_1rm(self):
-        self.assertEqual(analysis.estimated_1rm(100, 1), 100)
-        self.assertEqual(analysis.estimated_1rm(60, 10), 80.0)
-        self.assertEqual(analysis.estimated_1rm(0, 10), 0)          # 徒手
-        self.assertEqual(analysis.estimated_1rm(40, 20), 0)         # 次數太多不估
+        self.assertEqual(TrainingAnalysis.estimated_1rm(100, 1), 100)
+        self.assertEqual(TrainingAnalysis.estimated_1rm(60, 10), 80.0)
+        self.assertEqual(TrainingAnalysis.estimated_1rm(0, 10), 0)          # 徒手
+        self.assertEqual(TrainingAnalysis.estimated_1rm(40, 20), 0)         # 次數太多不估
 
     def test_volume_balance_and_progress(self):
         sets = [row('2026-09-29', 1, 1, '槓鈴臥推', '胸', 62.5, 8)] * 6 + \
                [row('2026-09-29', 1, 2, '纜繩下壓', '手臂', 25, 12)] * 3 + \
                [row('2026-10-01', 2, 3, '引體向上', '背', 0, 10)] * 3
         prev = [row('2026-09-22', 9, 1, '槓鈴臥推', '胸', 60, 8)] * 3 + [row('2026-09-23', 8, 3, '引體向上', '背', 0, 8)]
-        by_muscle = analysis.volume_by_muscle(sets)
+        by_muscle = TrainingAnalysis.volume_by_muscle(sets)
         self.assertEqual(by_muscle['胸'], dict(sets=6, volume=3000.0, exercises=1))
         self.assertEqual(by_muscle['腿']['sets'], 0)
-        self.assertEqual(analysis.balance(sets), dict(push=9, pull=3, upper=12, lower=0, push_pull=3.0, upper_lower=None))
-        progress = {p['name']: p for p in analysis.progress_by_exercise(sets, prev)}
+        self.assertEqual(TrainingAnalysis.balance(sets), dict(push=9, pull=3, upper=12, lower=0, push_pull=3.0, upper_lower=None))
+        progress = {p['name']: p for p in TrainingAnalysis.progress_by_exercise(sets, prev)}
         self.assertEqual((progress['槓鈴臥推']['value'], progress['槓鈴臥推']['prev_value'], progress['槓鈴臥推']['change_pct']),
                          (79.2, 76.0, 4.2))
         self.assertEqual((progress['引體向上']['metric'], progress['引體向上']['value'], progress['引體向上']['change_pct']),
@@ -45,12 +50,12 @@ class PureFunctionTests(unittest.TestCase):
 
     def test_findings_use_only_report_numbers(self):
         today = date(2026, 10, 12)
-        start, end, ps, pe = analysis.period_range('week', date(2026, 10, 2))
+        start, end, ps, pe = TrainingAnalysis.period_range('week', date(2026, 10, 2))
         sets = [row('2026-09-29', 1, 1, '槓鈴臥推', '胸', 62.5, 8)] * 6 + [row('2026-10-01', 2, 3, '引體向上', '背', 0, 10)] * 2
         prev = [row('2026-09-22', 9, 1, '槓鈴臥推', '胸', 60, 8)] * 3
         workouts = [dict(id=1, workout_date='2026-09-29', duration_min=50, ended_at='x'),
                     dict(id=2, workout_date='2026-10-01', duration_min=40, ended_at='x')]
-        report = analysis.build_report('week', start, end, today, sets, prev, workouts,
+        report = build_report('week', start, end, today, sets, prev, workouts,
                                        [dict(id=9, workout_date='2026-09-22', duration_min=45, ended_at='x')],
                                        [dict(record_date='2026-09-28', weight_kg=69.0), dict(record_date='2026-10-04', weight_kg=68.4)],
                                        {'胸': '2026-09-29', '背': '2026-10-01'})
@@ -61,12 +66,23 @@ class PureFunctionTests(unittest.TestCase):
         texts = ' '.join(f['text'] for f in report['findings'])
         self.assertIn('訓練次數 2 次，比上一期多 1 次', texts)
         self.assertIn('槓鈴臥推 估計 1RM從 76 提升到 79.2（+4.2%）', texts)
-        self.assertIn('推的組數（6）是拉的（2）3 倍', texts)
+        self.assertIn('推的動作做了 6 組，拉的只有 2 組', texts)
         self.assertIn('還沒有腿、肩的訓練紀錄', texts)
 
+    def test_balance_findings_text(self):
+        def texts(push, pull):
+            report = dict(summary=dict(sessions=1), previous=dict(sessions=0), progress=[], in_progress=False,
+                          balance=dict(push=push, pull=pull, push_pull=round(push / pull, 2) if pull else None),
+                          days_since={m: 0 for m in TrainingAnalysis.MUSCLES}, by_muscle={}, weeks=1)
+            return ' '.join(f['text'] for f in TrainingAnalysis.findings(report))
+        self.assertIn('拉的動作做了 15 組，推的只有 4 組，可以多安排臥推、肩推等推的動作。', texts(4, 15))
+        self.assertIn('推的動作做了 6 組，但沒有拉的動作', texts(6, 0))
+        self.assertIn('拉的動作做了 5 組，但沒有推的動作', texts(0, 5))
+        self.assertNotIn('動作做了', texts(5, 4))                      # 比例在 1.5 倍以內不提醒
+
     def test_empty_period(self):
-        start, end, *_ = analysis.period_range('week', date(2026, 10, 2))
-        report = analysis.build_report('week', start, end, date(2026, 10, 2), [], [], [], [], [], {})
+        start, end, *_ = TrainingAnalysis.period_range('week', date(2026, 10, 2))
+        report = build_report('week', start, end, date(2026, 10, 2), [], [], [], [], [], {})
         self.assertEqual(report['findings'], [dict(level='info', text='這段期間還沒有訓練紀錄。')])
         self.assertIsNone(report['weight'])
 
@@ -77,6 +93,7 @@ class ReportApiTests(unittest.TestCase):
         from app import create_app
         self.directory = tempfile.TemporaryDirectory()
         path = str(Path(self.directory.name) / 'test.db')
+        self._db_path = path
         self.app = create_app({'TESTING': True, 'SECRET_KEY': 'test-only', 'DB_TYPE': 'sqlite', 'DATABASE': path,
                                'SMTP_HOST': '', 'SMTP_PORT': '', 'SMTP_USERNAME': '', 'SMTP_PASSWORD': '', 'SMTP_FROM_EMAIL': ''})
         today = date.today()
@@ -102,6 +119,9 @@ class ReportApiTests(unittest.TestCase):
     def tearDown(self):
         self.directory.cleanup()
 
+    def db_path(self):
+        return self._db_path
+
     def test_report_only_counts_own_data(self):
         data = self.client.get('/body/api/report?period=week').get_json()
         self.assertTrue(data['ok'])
@@ -113,6 +133,113 @@ class ReportApiTests(unittest.TestCase):
 
     def test_bad_period(self):
         self.assertEqual(self.client.get('/body/api/report?period=year').status_code, 400)
+
+
+class AiReportPureTests(unittest.TestCase):
+    def data(self):
+        start, end, *_ = TrainingAnalysis.period_range('week', date(2026, 10, 2))
+        sets = [row('2026-09-29', 1, 1, '槓鈴臥推', '胸', 62.5, 8)] * 6
+        prev = [row('2026-09-22', 9, 1, '槓鈴臥推', '胸', 60, 8)] * 3
+        workouts = [dict(id=1, workout_date='2026-09-29', duration_min=50, ended_at='x')]
+        report = build_report('week', start, end, date(2026, 10, 12), sets, prev, workouts,
+                                       [dict(id=9, workout_date='2026-09-22', duration_min=45, ended_at='x')],
+                                       [dict(record_date='2026-09-28', weight_kg=69.0), dict(record_date='2026-10-04', weight_kg=68.4)],
+                                       {'胸': '2026-09-29'})
+        return AiReport(report, {'goal_type': '增肌', 'workout_days_per_week': 3, 'activity_level': None})
+
+    def test_input_is_compact(self):
+        data = self.data().data
+        self.assertEqual(data['profile'], {'goal_type': '增肌', 'workout_days_per_week': 3})   # 空值不送
+        self.assertEqual(data['progress'][0]['metric'], '估計1RM(kg)')
+        self.assertNotIn('sets', data['progress'][0].get('raw', {}))
+
+    def test_fabricated_numbers_are_removed(self):
+        ai = self.data()
+        raw = {'summary': '本週訓練 1 次，共 6 組，總訓練量 3,000 kg×次。',
+               'strengths': ['槓鈴臥推估計 1RM 從 76 提升到 79.2（+4.2%）。', '臥推進步了 15%。'],
+               'weaknesses': ['體重下降 0.6 公斤。', '背部沒有訓練。', 123],
+               'suggestions': ['下週增加 2 組划船。', '每週做 80 組背部。', '安排一天腿部訓練。', '多睡覺。']}
+        result = ai.check(raw)
+        self.assertEqual(result['summary'], raw['summary'])                       # 1、6、3000 都在資料裡
+        self.assertEqual(result['strengths'], ['槓鈴臥推估計 1RM 從 76 提升到 79.2（+4.2%）。'])   # 15% 是編造的
+        self.assertEqual(result['weaknesses'], ['體重下降 0.6 公斤。', '背部沒有訓練。'])        # 123 不在資料裡
+        self.assertEqual(result['suggestions'], ['下週增加 2 組划船。', '安排一天腿部訓練。', '多睡覺。'])   # 80 太大，而且不在資料裡
+        self.assertGreaterEqual(result['removed'], 2)
+        self.assertEqual(ai.check('不是 JSON')['strengths'], [])
+
+    def test_hash_changes_with_data(self):
+        ai = self.data()
+        same = ai.hash
+        ai.data['this_period']['sets'] += 1
+        self.assertNotEqual(same, ai.hash)
+
+
+class AiReportApiTests(ReportApiTests):
+    """從 body.env 設定 → API → 假的 LLM 伺服器；存檔、沿用、資料變動、次數限制。"""
+
+    def setUp(self):
+        from body import body_route
+        from tests.test_body_parser import FakeLlmServer
+        self.server = FakeLlmServer()
+        self.server.reply = ('{"summary": "本週完成 2 組。", "strengths": ["槓鈴臥推 2 組。", "訓練量提升 999%。"], '
+                             '"weaknesses": ["背部沒有訓練。"], "suggestions": ["下週加入划船 3 組。"]}')
+        self.config_dir = tempfile.TemporaryDirectory()
+        config = Path(self.config_dir.name) / 'body.env'
+        config.write_text(f'BODY_LLM_BASE_URL={self.server.url}\nBODY_LLM_MODEL=test-model\n', encoding='utf-8')
+        self.original = body_route.BodyApi.config_file
+        body_route.BodyApi.config_file, body_route.BodyApi._llm_loaded = config, False
+        super().setUp()
+
+    def tearDown(self):
+        from body import body_route
+        super().tearDown()
+        body_route.BodyApi.config_file, body_route.BodyApi._llm_loaded = self.original, False
+        self.config_dir.cleanup()
+        self.server.close()
+
+    def token(self):
+        self.client.get('/body/api/report?period=week')          # 任何請求都會在 session 建立 CSRF token
+        with self.client.session_transaction() as s:
+            return s['csrf_token']
+
+    def generate(self, period='week'):
+        response = self.client.post('/body/api/report/ai', json={'period': period}, headers={'X-CSRF-Token': self.token()})
+        return response.status_code, response.get_json()
+
+    def test_generate_save_reuse_and_stale(self):
+        ai = self.client.get('/body/api/report/ai?period=week').get_json()['ai']
+        self.assertEqual((ai['enabled'], ai['saved'], ai['has_data']), (True, None, True))
+        status, data = self.generate()
+        saved = data['ai']['saved']
+        self.assertEqual(status, 200)
+        self.assertEqual(saved['strengths'], ['槓鈴臥推 2 組。'])                    # 999% 被拿掉
+        self.assertEqual((saved['removed'], saved['model'], saved['stale']), (1, 'test-model', False))
+        self.assertEqual(len(self.server.requests), 1)
+        # 再讀一次：沿用存好的，不呼叫 LLM
+        ai = self.client.get('/body/api/report/ai?period=week').get_json()['ai']
+        self.assertEqual((ai['saved']['summary'], ai['saved']['stale'], len(self.server.requests)), ('本週完成 2 組。', False, 1))
+        # 資料變動 → 標示 stale
+        with closing(sqlite3.connect(self.db_path())) as c:
+            c.execute('INSERT INTO workout_sets(workout_id,exercise_id,set_no,weight_kg,reps) VALUES (1,1,3,60,6)')
+            c.commit()
+        self.assertTrue(self.client.get('/body/api/report/ai?period=week').get_json()['ai']['saved']['stale'])
+        # 送給 LLM 的只有摘要，沒有別人的資料
+        sent = self.server.requests[0]['body']['messages'][1]['content']
+        self.assertNotIn('別人的', sent)
+
+    def test_rate_limit_and_no_data(self):
+        from body import service
+        original, service.LLM_REPORT_PER_HOUR = service.LLM_REPORT_PER_HOUR, 1
+        try:
+            self.assertEqual(self.generate()[0], 200)
+            status, data = self.generate()
+            self.assertEqual(status, 400)
+            self.assertIn('每小時', data['error'])
+        finally:
+            service.LLM_REPORT_PER_HOUR = original
+        response = self.client.post('/body/api/report/ai', json={'period': 'week', 'd': '2020-01-01'},
+                                    headers={'X-CSRF-Token': self.token()})
+        self.assertEqual(response.status_code, 400)                                   # 沒有訓練紀錄
 
 
 if __name__ == '__main__':

@@ -21,6 +21,14 @@ def enabled(config):
     return str(config.get('EXAM_MODULAR_AI', os.getenv('EXAM_MODULAR_AI', 'false'))).lower() == 'true'
 
 
+def installation_ready():
+    python = Path(os.getenv('EXAM_CPU_PYTHON') or (ROOT / '.venv-exam-ai' / ('Scripts/python.exe' if os.name=='nt' else 'bin/python')))
+    return python.is_file() and all(
+        (ROOT/'models'/'exam'/name/'onnx'/filename).is_file()
+        and (ROOT/'models'/'exam'/name/'onnx'/filename).stat().st_size > 0
+        for name in ('embedding','nli') for filename in ('model.onnx','tokenizer.json','config.json'))
+
+
 def stop_worker():
     global _process
     if _process and _process.poll() is None:
@@ -43,15 +51,20 @@ def _read(process, responses):
 
 def cpu(op, **payload):
     global _process, _responses
-    if not _lock.acquire(timeout=60):
-        raise ExamModuleError('CPU 判斷模組忙碌，請稍後再試。')
+    from .jobs import active_job,read
+    job=active_job.get()
+    def cancelled():
+        return bool(job and read(job['app'],job['id'],job['user_id'])['cancel'])
+    while not _lock.acquire(timeout=1):
+        if cancelled(): raise RuntimeError('工作已取消。')
     try:
+        if cancelled(): raise RuntimeError('工作已取消。')
         if not _process or _process.poll() is not None:
             python = Path(os.getenv('EXAM_CPU_PYTHON') or (ROOT / '.venv-exam-ai' / ('Scripts/python.exe' if os.name=='nt' else 'bin/python')))
             if not python.is_file():
                 raise ExamModuleError('尚未安裝考題 CPU 執行環境，請執行 tools/setup_exam_ai.ps1。')
             env = dict(os.environ, PYTHONUTF8='1', TOKENIZERS_PARALLELISM='false')
-            _process = subprocess.Popen([str(python), str(ROOT / 'tools' / 'exam_cpu_worker.py')],
+            _process = subprocess.Popen([str(python), '-X', 'utf8', str(ROOT / 'tools' / 'exam_cpu_worker.py')],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, encoding='utf-8', env=env,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -59,11 +72,15 @@ def cpu(op, **payload):
             threading.Thread(target=_read, args=(_process, _responses), daemon=True).start()
         _process.stdin.write(json.dumps(dict(op=op, **payload), ensure_ascii=False) + '\n')
         _process.stdin.flush()
-        try:
-            line = _responses.get(timeout=60)
-        except queue.Empty:
-            stop_worker()
-            raise ExamModuleError('CPU 判斷超過 60 秒，已停止此 CPU 工作。請減少單批題數。') from None
+        while True:
+            if cancelled():
+                stop_worker()
+                raise RuntimeError('工作已取消。')
+            try:
+                line=_responses.get(timeout=1)
+                break
+            except queue.Empty:
+                continue
         if line is None:
             stop_worker()
             raise ExamModuleError('CPU 判斷模組意外結束，請確認模型已完整下載。')

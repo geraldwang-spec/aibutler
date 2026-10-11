@@ -1,0 +1,8 @@
+{% extends 'live_base.html' %}
+{% import 'financial/_parts.html' as fin with context %}
+{% block content %}
+{{ fin.assets() }}
+{{ fin.period_cards(summary, 'income') }}
+{{ fin.entry_form(tx_key, tx_type, form, categories, labels, current_date) }}
+{{ fin.records_table(records, labels, '收入紀錄', url_for('financial.income'), show_type=false) }}
+{% endblock %}

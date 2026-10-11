@@ -174,7 +174,7 @@ class AppTests(unittest.TestCase):
 
     def test_profile_workouts_plan_and_record_persistence(self):
         self.register();self.login()
-        response=self.post('/profile',{'gender':'other','birth_date':'2000-01-01','height_cm':170,'activity_level':'中','goal_type':'維持','workout_days_per_week':3,'minutes_per_session':30,'initial_weight':65})
+        response=self.post('/profile',{'gender':'男','birth_date':'2000-01-01','height_cm':170,'activity_level':'中','goal_type':'維持','workout_days_per_week':3,'minutes_per_session':30,'initial_weight':65})
         self.assertEqual(response.status_code,302)
         self.assertEqual(self.sql('SELECT weight_kg FROM body_metrics')[0]['weight_kg'],65)
         response=self.post('/records/exercises',{'exercise_name':'深蹲','muscle_group':'腿','equipment':'槓鈴','is_cardio':'0'})
@@ -205,8 +205,18 @@ class AppTests(unittest.TestCase):
             client.login.assert_called_once_with('sender@example.com','test-key')
             message=client.send_message.call_args.args[0]
             self.assertEqual(message['To'],'recipient@example.com')
-            self.assertIn('012345',message.get_content())
-            self.assertIn('30',message.get_content())
+            self.assertEqual(message.get_content_type(),'multipart/alternative')
+            self.assertIn('012345',message.get_body(preferencelist=('plain',)).get_content())
+            self.assertIn('30',message.get_body(preferencelist=('plain',)).get_content())
+            html=message.get_body(preferencelist=('html',)).get_content()
+            self.assertIn('012345',html)
+            self.assertIn('recipient@example.com',html)
+            self.assertIn('30 分鐘',html)
+            self.assertNotIn('<script',html)
+            send_code('recipient@example.com','123456',preview=True)
+            preview=client.send_message.call_args.args[0]
+            self.assertIn('樣板預覽',preview['Subject'])
+            self.assertIn('不能用於註冊',preview.get_body(preferencelist=('html',)).get_content())
             client.send_message.return_value={'recipient@example.com':(550,'refused')}
             with self.assertRaises(smtplib.SMTPException):
                 send_code('recipient@example.com','012345')

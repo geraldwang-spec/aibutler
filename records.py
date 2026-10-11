@@ -31,7 +31,7 @@ def ref(name, label, table, required=True):
 CATALOG = {
  'subjects': ('科目管理', 'book', [f('subject_name','科目名稱',limit=80)]),
  'chapters': ('章節管理', 'list', [ref('subject_id','科目','subjects'), ref('parent_chapter_id','上層章節（留空為主章節）','chapters',False), f('chapter_name','章節名稱',limit=120), f('order_no','排序','number',maximum=999)]),
- 'questions': ('我的題庫', 'question-circle', [ref('chapter_id','章節','chapters'), choice('q_type','題型','單選','多選','是非','填空'), f('content','題目','textarea',limit=10000), f('answer_key','正確答案（選項代號 / 是、否 / 填空文字）',limit=50), f('explanation','解析','textarea',required=False,limit=10000), f('difficulty','難度 1–5','number',minimum=1,maximum=5)]),
+ 'questions': ('我的題庫', 'question-circle', [ref('chapter_id','章節','chapters'), choice('q_type','題型','單選','多選','是非','填空'), f('content','題目','textarea',limit=20000), f('answer_key','正確答案（選項代號 / 是、否 / 填空文字）',limit=50), f('explanation','解析','textarea',required=False,limit=20000), f('difficulty','難度 1–5','number',minimum=1,maximum=5)]),
  'summaries': ('重點摘要與筆記', 'file-text-o', [ref('chapter_id','章節','chapters'), choice('summary_type','類型','overview','card'), f('title','標題',limit=120), f('content','手動筆記內容','textarea',limit=20000), choice('mastery','熟練度','未讀','複習中','已熟')]),
  'exam_plans': ('考試準備設定', 'calendar', [ref('subject_id','科目','subjects'), f('exam_date','考試日期','date'), f('weekday_minutes','平日每日讀書分鐘','number',maximum=1440), f('weekend_minutes','週末每日讀書分鐘','number',maximum=1440), f('review_days','考前複習天數','number',maximum=90), choice('status','狀態','進行中','已完成','已放棄')]),
  'study_plans': ('讀書與運動計畫', 'calendar-check-o', [f('plan_date','日期','date'), choice('plan_type','類型','study','workout'), f('title','任務名稱',limit=120), ref('chapter_id','相關章節','chapters',False), f('target_value','目標量','number',minimum=1), f('target_unit','單位（分鐘、題、組）',limit=20), choice('status','狀態','planned','done','missed')]),
@@ -45,7 +45,7 @@ CATALOG = {
  'chat_messages': ('我的提問紀錄', 'comment-o', [ref('chat_id','對話主題','chat_sessions'), f('content','提問內容（目前只儲存，不產生 AI 回答）','textarea',limit=10000), choice('intent','主題','learning','diet','workout','rag')]),
 }
 
-PROFILE_FIELDS = [choice('gender','性別','m','f','other'), f('birth_date','生日','date'), f('height_cm','身高 cm','decimal',minimum=30,maximum=260), choice('activity_level','日常活動量','低','中','高'), choice('goal_type','運動目標','減脂','增肌','維持','體能'), f('workout_days_per_week','一週可運動天數','number',maximum=7), f('minutes_per_session','每次運動分鐘','number',minimum=1,maximum=1440)]
+PROFILE_FIELDS = [choice('gender','性別','男','女'), f('birth_date','生日','date'), f('height_cm','身高 cm','decimal',minimum=30,maximum=260), choice('activity_level','日常活動量','低','中','高'), choice('goal_type','運動目標','減脂','增肌','維持','體能'), f('workout_days_per_week','一週可運動天數','number',maximum=7), f('minutes_per_session','每次運動分鐘','number',minimum=1,maximum=1440)]
 
 OWNER = {
  'subjects': 'created_by=?', 'exercises': 'created_by=?',

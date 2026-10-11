@@ -1,0 +1,14 @@
+{% extends 'live_base.html' %}
+{% import 'financial/_parts.html' as fin with context %}
+{% block content %}
+{{ fin.assets() }}
+<nav class="fin-actions" aria-label="財務小幫手">
+  <a class="action" href="{{ url_for('financial.income') }}"><i class="fa fa-arrow-circle-up" aria-hidden="true"></i> 記一筆收入</a>
+  <a class="outline-button" href="{{ url_for('financial.expense') }}"><i class="fa fa-arrow-circle-down" aria-hidden="true"></i> 記一筆支出</a>
+</nav>
+{{ fin.period_cards(summary) }}
+<div class="fin-columns">
+  {{ fin.breakdown_card(breakdown, labels) }}
+  {{ fin.records_table(records, labels, '最近 10 筆紀錄', url_for('financial.overview')) }}
+</div>
+{% endblock %}
