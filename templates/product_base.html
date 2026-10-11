@@ -40,6 +40,7 @@
       {{nav_item('results','成績與錯題','bar-chart',endpoint=='results')}}
       {{nav_item('analysis','章節分析','pie-chart',endpoint=='analysis')}}
       {{nav_item('personal_ai.concept_weakness','概念弱項','line-chart',endpoint=='personal_ai.concept_weakness')}}
+      {{nav_item('admission.placement','學測落點分析','university',endpoint=='admission.placement')}}
       <details class="workspace-tools" {% if endpoint=='personal_ai.ai_status' %}open{% endif %}>
         <summary><i class="fa fa-sliders" aria-hidden="true"></i> 進階管理 <span>⌄</span></summary>
         {{nav_item('personal_ai.ai_status','AI 環境','cog',endpoint=='personal_ai.ai_status')}}
