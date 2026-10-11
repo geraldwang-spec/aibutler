@@ -72,6 +72,8 @@ def create_app(test_config=None):
     register_tye_exam(flask_app)
     register_personal_ai(flask_app)
     register_financial(flask_app)  # 財務小幫手（David）
+    from admission import register_admission
+    register_admission(flask_app)
     from workspace_ui import register_workspace_ui
     register_workspace_ui(flask_app)
     if not flask_app.config.get('TESTING') and not flask_app.config.get('DB_READ_ONLY') and str(flask_app.config.get('APP_MODE','dev')).lower() == 'dev' and flask_app.config.get('DB_TYPE') == 'sqlite':

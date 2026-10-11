@@ -99,7 +99,9 @@ def create_app(test_config=None):
         TTS_MODEL=os.getenv('TTS_MODEL','hexgrad/Kokoro-82M-v1.1-zh'),
         TTS_LANGUAGE=os.getenv('TTS_LANGUAGE','z'),
         SECRET_KEY=os.getenv('SECRET_KEY',''),
-        MAX_CONTENT_LENGTH=5*1024*1024,
+        MAX_CONTENT_LENGTH=None,
+        MAX_FORM_MEMORY_SIZE=None,
+        MAX_FORM_PARTS=None,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE='Lax',
         SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE')=='true',
@@ -186,7 +188,7 @@ def create_app(test_config=None):
     @app.errorhandler(413)
     @app.errorhandler(503)
     def error_page(error):
-        message = '檔案不可超過 5 MB。' if error.code==413 else ('找不到此資料，或您沒有存取權限。' if error.code==404 else str(error.description))
+        message = '請求被伺服器或外部代理拒絕；系統沒有設定檔案大小上限。' if error.code==413 else ('找不到此資料，或您沒有存取權限。' if error.code==404 else str(error.description))
         return render_template('error.html',title='無法完成操作',message=message), error.code
 
     @app.get('/')
@@ -557,6 +559,25 @@ def register_learning(app):
         writer.writerow(['範例章節','單選','下列何者是關聯式資料庫？','A','SQLite 是關聯式資料庫。',1,'SQLite','HTML','',''])
         return Response('\ufeff'+output.getvalue(),mimetype='text/csv',headers={'Content-Disposition':'attachment; filename=questions-template.csv'})
 
+    @app.post('/imports/subjects')
+    @login_required
+    def import_create_subject():
+        try:
+            # Same validation and ownership as the subject management screen.
+            data=parse_fields(CATALOG['subjects'][2])
+            db().execute(locked_sql('SELECT id FROM users WHERE id=?'),(g.user['id'],)).fetchone()
+            existing=db().execute('SELECT id,subject_name FROM subjects WHERE created_by=? AND LOWER(TRIM(subject_name))=LOWER(?)',
+                                  (g.user['id'],data['subject_name'])).fetchone()
+            if existing:
+                db().commit()
+                return jsonify(ok=True,created=False,subject=dict(existing),message='已有同名科目，已選取現有科目。')
+            sid=insert('subjects',dict(data,created_by=g.user['id']))
+            db().commit()
+            return jsonify(ok=True,created=True,subject=dict(id=sid,subject_name=data['subject_name']),message='科目已建立，可直接繼續匯入。'),201
+        except (ValueError,sqlite3.IntegrityError,StorageIntegrityError) as exc:
+            db().rollback()
+            return jsonify(ok=False,message=str(exc) if isinstance(exc,ValueError) else '無法建立科目，請重新檢查名稱。'),400
+
     @app.route('/imports',methods=['GET','POST'])
     @login_required
     def imports():
@@ -574,7 +595,7 @@ def register_learning(app):
                 else:
                     if not upload or not upload.filename: raise ValueError('請選擇檔案。')
                     raw=upload.read(); filename=Path(upload.filename).name
-                if not raw or len(raw)>5*1024*1024: raise ValueError('檔案需為 1 byte–5 MB。')
+                if not raw: raise ValueError('檔案內容不可為空。')
                 folder=Path(app.instance_path)/'job_uploads'; folder.mkdir(parents=True,exist_ok=True)
                 path=folder/(secrets.token_hex(16)+Path(filename).suffix.lower()); path.write_bytes(raw)
                 try:
@@ -711,8 +732,6 @@ def process_import_file(app,form,upload):
     raw=upload.read()
     if not raw:
         raise ValueError('檔案內容為空。')
-    if len(raw)>5*1024*1024:
-        raise ValueError('題庫檔案上限 5 MB。')
 
     folder=Path(app.instance_path)/'imports'
     folder.mkdir(parents=True,exist_ok=True)
@@ -734,9 +753,6 @@ def process_import_file(app,form,upload):
             rows=None
     elif suffix in ('.xlsx','.xlsm'):
         from openpyxl import load_workbook
-        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
-            if sum(z.file_size for z in archive.infolist())>50*1024*1024:
-                raise ValueError('Excel 解壓後過大，請拆分檔案。')
         book=load_workbook(io.BytesIO(raw),read_only=True,data_only=True)
         try:
             iterator=book.active.iter_rows(values_only=True)
@@ -748,8 +764,6 @@ def process_import_file(app,form,upload):
                     for line in iterator:
                         if any(v is not None for v in line):
                             rows.append(dict(zip(keys,line)))
-                        if len(rows)>500:
-                            raise ValueError('每批最多 500 題。')
                     parser_name='結構化 Excel'
         finally:
             book.close()
@@ -764,10 +778,8 @@ def process_import_file(app,form,upload):
     if rows is None:
         rows,parser_name=extract_questions(path,default_chapter,app.config,parse_mode)
 
-    if not 1<=len(rows)<=500:
-        if not rows:
-            raise ValueError('沒有判讀到可匯入的完整考題。若是 PDF，可能是掃描檔或文字層編碼異常；請先 OCR 為可讀文字，或改用 CSV／文字題庫。')
-        raise ValueError('每批需為 1–500 題。')
+    if not rows:
+        raise ValueError('沒有判讀到可匯入的完整考題。若是 PDF，可能是掃描檔或文字層編碼異常；請先 OCR 為可讀文字，或改用 CSV／文字題庫。')
 
     clean=[]
     for i,row in enumerate(rows,1):
@@ -776,8 +788,6 @@ def process_import_file(app,form,upload):
             item['chapter_name']=default_chapter
         if not item.get('content') or not item.get('answer_key'):
             raise ValueError(f'第 {i} 題缺少題目或答案。')
-        if len(item['chapter_name'])>120 or len(item['content'])>10000 or len(item['answer_key'])>50 or len(item.get('explanation',''))>10000:
-            raise ValueError(f'第 {i} 題文字過長。')
         if item.get('q_type') not in ('單選','多選','是非','填空'):
             raise ValueError(f'第 {i} 題題型無效：{item.get("q_type") or "未辨識"}。')
         try:
@@ -787,28 +797,59 @@ def process_import_file(app,form,upload):
         if not 1<=item['difficulty']<=5:
             item['difficulty']=2
         item,_=validate_question(item,item)
+        if row.get('_question_no') is not None:
+            item['_question_no']=row['_question_no']
+        if row.get('_answer_source')=='ai_inferred':
+            item['_answer_source']='ai_inferred'
+            item['_answer_model']=str(row.get('_answer_model') or '')[:120]
+            if row.get('_answer_input_fingerprint'):
+                item['_answer_input_fingerprint']=row['_answer_input_fingerprint']
+        if row.get('_parser') in ('rules','llm-layout','local-vision-repair'):
+            for key in ('_shared_text','_question_stem','_shared_passage','_passage_range','_requires_vision','_source_material'):
+                if key in row: item[key]=row[key]
         clean.append(item)
 
     import_strategy=(form.get('import_strategy') or 'concept').strip().lower()
     if import_strategy not in {'concept','question_bank'}:
         import_strategy='concept'
     classifier_name='未使用'
+    from personal_ai import import_checkpoints as checkpoints
+    checkpoints.put('total',max(len(clean),checkpoints.get('total',0)))
+    checkpoints.put('questions',clean)
+    checkpoints.put('stage','題目與答案已完成，準備概念分類' if import_strategy=='concept' else '準備建立匯入預覽')
     if import_strategy=='concept':
-        if len(clean)>20: raise ValueError('概念型 AI 匯入每批最多 20 題；固定題庫規則解析仍可 500 題。')
         from personal_ai.concept_classifier import classify_question_batch, attach_classifications
-        classifications,classifier_name=classify_question_batch(clean,subject_id,app.config)
+        cached=checkpoints.get('classification_results',{})
+        def classification_key(item):
+            return checkpoints.fingerprint([subject_id,item.get('content'),item.get('q_type'),item.get('answer_key'),
+                *[item.get('option_'+k,'') for k in 'ABCD']])
+        keys=[classification_key(item) for item in clean]
+        pending=[item for item,key in zip(clean,keys) if key not in cached]
+        classifier_name=checkpoints.get('classification_model','已保存的概念分類')
+        if pending:
+            fresh,classifier_name=classify_question_batch(pending,subject_id,app.config)
+            if len(fresh)!=len(pending): raise ValueError('概念分類結果不完整，既有成果保留。')
+            cached.update({classification_key(item):result for item,result in zip(pending,fresh)})
+            checkpoints.put('classification_results',cached)
+            checkpoints.put('classification_model',classifier_name)
+        classifications=[cached[key] for key in keys]
         clean=attach_classifications(clean,classifications,'concept')
     else:
         for item in clean:
             item['_import_strategy']='question_bank'
 
+    failures=checkpoints.get('answer_failures',[])
+    warning=('；待補資料題號：'+ '、'.join(str(x['number']) for x in failures)) if failures else ''
     batch=insert('exam_imports',dict(
         user_id=g.user['id'],subject_id=subject_id,
         file_name=Path(upload.filename).name[:255],file_path=str(path),
         file_type=suffix[1:],status='待確認',total_rows=len(clean),
-        error_log=f'解析器：{parser_name}；概念分類：{classifier_name}'[:1000]))
+        error_log=(f'解析器：{parser_name}；概念分類：{classifier_name}'+warning)[:1000]))
     for item in clean:
         encoded=json.dumps(item,ensure_ascii=False)
         insert('import_items',dict(import_id=batch,raw_content=encoded,parsed_json=encoded))
+    checkpoints.put('final_batch_id',batch)
     db().commit()
+    checkpoints.put('questions',clean)
+    checkpoints.put('stage',f'已完成 {len(clean)} 題分析與預覽；{len(failures)} 題待補資料' if failures else '完整預覽已建立')
     return batch

@@ -2,7 +2,6 @@
 import re
 import unicodedata
 
-
 def normalize_answer(kind, value):
     value = unicodedata.normalize('NFKC', str(value or '')).strip()
     if kind in ('單選', '多選'):
@@ -17,18 +16,14 @@ def validate(data, options):
         raise ValueError('題型不正確。')
     content = str(data.get('content') or '').strip()
     answer = normalize_answer(kind,data.get('answer_key'))
-    if not content or len(content) > 10000 or not answer or len(answer) > 50:
-        raise ValueError('題目需為 1–10000 字，答案需為 1–50 字。')
+    if not content or not answer:
+        raise ValueError('題目及答案不可為空。')
     explanation = str(data.get('explanation') or '').strip()
-    if len(explanation) > 10000:
-        raise ValueError('解析不可超過 10000 字。')
     difficulty = int(data.get('difficulty') or 2)
     if not 1 <= difficulty <= 5:
         raise ValueError('難度需為 1–5。')
     pairs = [(label,str(options.get(label) or '').strip()) for label in 'ABCD']
     pairs = [(label,text) for label,text in pairs if text]
-    if any(len(text)>2000 for _,text in pairs):
-        raise ValueError('每個選項不可超過 2000 字。')
     if kind in ('單選','多選'):
         labels = set(answer.split(','))
         if len(pairs)<2 or not labels.issubset({k for k,_ in pairs}) or (kind=='單選' and len(labels)!=1):

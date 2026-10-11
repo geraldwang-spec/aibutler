@@ -205,8 +205,18 @@ class AppTests(unittest.TestCase):
             client.login.assert_called_once_with('sender@example.com','test-key')
             message=client.send_message.call_args.args[0]
             self.assertEqual(message['To'],'recipient@example.com')
-            self.assertIn('012345',message.get_content())
-            self.assertIn('30',message.get_content())
+            self.assertEqual(message.get_content_type(),'multipart/alternative')
+            self.assertIn('012345',message.get_body(preferencelist=('plain',)).get_content())
+            self.assertIn('30',message.get_body(preferencelist=('plain',)).get_content())
+            html=message.get_body(preferencelist=('html',)).get_content()
+            self.assertIn('012345',html)
+            self.assertIn('recipient@example.com',html)
+            self.assertIn('30 分鐘',html)
+            self.assertNotIn('<script',html)
+            send_code('recipient@example.com','123456',preview=True)
+            preview=client.send_message.call_args.args[0]
+            self.assertIn('樣板預覽',preview['Subject'])
+            self.assertIn('不能用於註冊',preview.get_body(preferencelist=('html',)).get_content())
             client.send_message.return_value={'recipient@example.com':(550,'refused')}
             with self.assertRaises(smtplib.SMTPException):
                 send_code('recipient@example.com','012345')

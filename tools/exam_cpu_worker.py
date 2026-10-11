@@ -1,6 +1,7 @@
 """Local JSON-lines worker; ONNX sessions explicitly use CPU, never CUDA."""
 import json
 import sys
+import traceback
 from collections import OrderedDict
 from pathlib import Path
 import numpy as np
@@ -103,8 +104,11 @@ for line in sys.stdin:
                         index=int(probabilities.argmax())
                         result[field]={'label':str(estimator.classes_[index]),'raw_score':float(probabilities[index]),
                                        'status':'trained_unvalidated'}
+        elif request['op'] == 'status':
+            result = {name: session[0].get_providers() for name, session in sessions.items()}
         else:
             raise ValueError('Unsupported CPU operation')
         print(json.dumps({'ok': True, 'result': result}, ensure_ascii=False), flush=True)
     except Exception as exc:
+        traceback.print_exc(file=sys.stderr)
         print(json.dumps({'ok': False, 'error': str(exc)}, ensure_ascii=False), flush=True)

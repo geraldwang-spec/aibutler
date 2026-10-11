@@ -1,7 +1,6 @@
 """Persistent, user-owned AI jobs. One bounded worker; no model call during boot."""
 import contextvars
 import json
-import os
 import sqlite3
 import threading
 import time
@@ -24,6 +23,7 @@ def ledger(app):
     con=sqlite3.connect(path,timeout=15)
     con.row_factory=sqlite3.Row
     con.execute('CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY,user_id INTEGER,kind TEXT,payload TEXT,status TEXT,created REAL,updated REAL,cancel INTEGER DEFAULT 0,calls INTEGER DEFAULT 0,input_tokens INTEGER DEFAULT 0,output_tokens INTEGER DEFAULT 0,result TEXT,error TEXT)')
+    con.execute('CREATE TABLE IF NOT EXISTS import_checkpoints (job_id TEXT,user_id INTEGER,key TEXT,value TEXT,PRIMARY KEY(job_id,key))')
     con.commit()
     try:
         yield con
@@ -53,7 +53,7 @@ def submit(app,user_id,kind,payload):
         if not isinstance(data,dict): return data
         result=dict(data)
         for key,value in result.items():
-            if key in ('question','followup','focus') and isinstance(value,str):
+            if key in ('question','followup','focus','interest') and isinstance(value,str):
                 validate_user_text(value)
                 result[key]=redact_text(value)
             elif isinstance(value,dict): result[key]=protect_fields(value)
@@ -61,15 +61,22 @@ def submit(app,user_id,kind,payload):
     payload=protect_fields(payload)
     if read_only(): raise ValueError('唯讀備援無法新增 AI 工作。')
     with _lock,ledger(app) as con:
-        daily=con.execute('SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,COALESCE(SUM(calls),0) calls FROM jobs WHERE user_id=? AND created>?',(user_id,time.time()-86400)).fetchone()
-        if daily['tokens']>=int(os.getenv('AI_DAILY_MAX_TOKENS','100000')) or daily['calls']>=int(os.getenv('AI_DAILY_MAX_CALLS','100')):
-            raise ValueError('已達此帳號 24 小時 AI 用量上限，請稍後再試。')
         rows=con.execute("SELECT id FROM jobs WHERE user_id=? AND status IN ('queued','running')",(user_id,)).fetchall()
         if rows: raise ValueError('已有 AI 工作等待或執行中，請先完成或取消。')
         job_id=uuid.uuid4().hex
         now=time.time()
         con.execute('INSERT INTO jobs(id,user_id,kind,payload,status,created,updated) VALUES (?,?,?,?,?,?,?)',
                     (job_id,user_id,kind,json.dumps(payload,ensure_ascii=False),'queued',now,now))
+        if payload.get('resume_from') and kind=='import':
+            source=con.execute("SELECT id,status FROM jobs WHERE id=? AND user_id=? AND kind='import' AND status IN ('failed','cancelled','completed')",(payload['resume_from'],user_id)).fetchone()
+            if not source: raise ValueError('只能接續您自己的已中斷匯入工作。')
+            if source['status']=='completed':
+                pending=con.execute("SELECT value FROM import_checkpoints WHERE job_id=? AND user_id=? AND key='answer_failures'",(source['id'],user_id)).fetchone()
+                if not pending or not json.loads(pending['value']):
+                    raise ValueError('此工作已全部完成，無需接續。')
+            con.execute('INSERT INTO import_checkpoints(job_id,user_id,key,value) '
+                        'SELECT ?,user_id,key,value FROM import_checkpoints WHERE job_id=? AND user_id=?',
+                        (job_id,payload['resume_from'],user_id))
     (_chat_executor if kind=='chat' else _executor).submit(run,app,job_id,user_id)
     return job_id
 
@@ -88,13 +95,6 @@ def guard(reserve=0):
     if not job: return
     row=read(job['app'],job['id'],job['user_id'])
     if row['cancel']: raise RuntimeError('工作已取消；已送出的單次 API 請求仍需等待結束。')
-    if time.monotonic()>job['deadline']: raise RuntimeError('AI 工作超過總時限，已停止後續呼叫。')
-    with ledger(job['app']) as con:
-        daily=con.execute('SELECT COALESCE(SUM(input_tokens+output_tokens),0) tokens,COALESCE(SUM(calls),0) calls FROM jobs WHERE user_id=? AND created>?',(job['user_id'],time.time()-86400)).fetchone()
-    if daily['tokens']+reserve>int(os.getenv('AI_DAILY_MAX_TOKENS','100000')) or daily['calls']>=int(os.getenv('AI_DAILY_MAX_CALLS','100')):
-        raise RuntimeError('已達此帳號 24 小時 AI 用量上限，停止後續呼叫。')
-    if row['calls']>=job['max_calls'] or row['input_tokens']+row['output_tokens']+reserve>job['max_tokens']:
-        raise RuntimeError('AI 工作已達總請求數或 token 額度，請減少題數／範圍。')
     update(job['app'],job['id'],calls=row['calls']+1)
 
 
@@ -121,8 +121,9 @@ def run(app,job_id,user_id):
     from storage import db, read_only
     with app.app_context():
         row=read(app,job_id,user_id)
-        token=active_job.set(dict(app=app,id=job_id,user_id=user_id,deadline=time.monotonic()+(90 if row['kind']=='chat' else 600),
-              max_calls=int(os.getenv('AI_JOB_MAX_CALLS','40')),max_tokens=int(os.getenv('AI_JOB_MAX_TOKENS','32000'))))
+        # No application-imposed quota or total deadline; individual API requests
+        # still have connection timeouts and bounded retries. Cancellation remains.
+        token=active_job.set(dict(app=app,id=job_id,user_id=user_id,kind=row['kind']))
         try:
             if row['cancel']:
                 update(app,job_id,status='cancelled'); return
@@ -175,19 +176,34 @@ def dispatch(app,user_id,kind,p):
         from smartlife import process_import_file
         from werkzeug.datastructures import MultiDict,FileStorage
         path=Path(p['path'])
-        try:
-            with path.open('rb') as f:
-                batch=process_import_file(app,MultiDict(p['form']),FileStorage(f,filename=p['filename']))
-            return dict(message='解析已完成，請確認',url=f'/imports/{batch}')
-        except Exception:
-            path.unlink(missing_ok=True)
-            raise
-        finally:
-            path.unlink(missing_ok=True)
+        from .import_checkpoints import get
+        previous=get('final_batch_id')
+        if previous and not get('answer_failures',[]):
+            saved=db().execute('SELECT id FROM exam_imports WHERE id=? AND user_id=?',(previous,user_id)).fetchone()
+            if saved:
+                path.unlink(missing_ok=True)
+                return dict(message='已有完整預覽，不重複建立',url=f'/imports/{previous}')
+        with path.open('rb') as f:
+            batch=process_import_file(app,MultiDict(p['form']),FileStorage(f,filename=p['filename']))
+        missing=get('answer_failures',[])
+        if not missing: path.unlink(missing_ok=True)
+        message=f'可用題目分析已完成（{len(missing)} 題待補資料），請確認' if missing else '解析已完成，請確認'
+        return dict(message=message,url=f'/imports/{batch}')
     if kind=='classify_fixed':
         from .concept_admin import classify_fixed
         count=classify_fixed(user_id,p['subject_id'],app.config)
         return dict(message=f'已補標 {count} 題概念',url='/ai/concepts?subject_id='+str(p['subject_id']))
+    if kind=='admission_advice':
+        from urllib.parse import urlencode
+        from admission.advice import generate_advice
+        advice=generate_advice(p)
+        return dict(message='落點解讀已完成',url='/admission?'+urlencode(dict(p,advice=active_job.get()['id'])),advice=advice)
+    if kind=='admission_interest':
+        from urllib.parse import urlencode
+        from admission.interest import generate_interest
+        interest=generate_interest(p)
+        back={k:v for k,v in p.items() if k!='interest'}
+        return dict(message='興趣科系推薦已完成',url='/admission?'+urlencode(dict(back,interest=active_job.get()['id'])),interest=interest)
     if kind=='chat':
         from .chat import generate_reply
         reply=generate_reply(user_id,**p)

@@ -16,7 +16,7 @@ def load_module(path):
 class GroqTransportTests(unittest.TestCase):
     def test_clients_send_application_agent_and_authentication(self):
         root = Path(__file__).resolve().parents[1]
-        provider = load_module(root / 'personal_ai' / 'llm_provider.py')
+        from personal_ai import llm_provider as provider
         body = load_module(root / 'body' / 'llm_client.py')
         for name in ('personal_ai', 'body'):
             with self.subTest(client=name), patch('urllib.request.urlopen') as send:

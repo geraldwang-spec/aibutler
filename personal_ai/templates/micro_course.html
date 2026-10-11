@@ -11,13 +11,13 @@
   <p class="prewrap">{{st.content}}</p>
   {% if st.question %}<div class="notice"><strong>互動問題</strong><p>{{st.question}}</p>
     {% if st.status=='done' %}<p><b>你的回答：</b>{{st.user_answer}}</p><p><b>回饋：</b>{{st.feedback or st.explanation}}</p>
-    {% endif %}{% if not st.is_correct %}<form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="answer"><input type="hidden" name="step_id" value="{{st.id}}"><textarea name="answer" rows="3" maxlength="1000" required placeholder="依題目要求回答；答錯可以重新作答"></textarea><button class="action">{{'重新回答' if st.status=='done' else '送出回答'}}</button></form>{% endif %}
+    {% endif %}{% if not st.is_correct %}<form method="post"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="answer"><input type="hidden" name="step_id" value="{{st.id}}"><textarea name="answer" rows="3" required placeholder="依題目要求回答；答錯可以重新作答"></textarea><button class="action">{{'重新回答' if st.status=='done' else '送出回答'}}</button></form>{% endif %}
   </div>{% endif %}
 </article>{% endfor %}
 </section>
 <section class="panel-card chat-intro"><h2>和 AI 老師聊聊</h2><p>還有不清楚的地方嗎？老師會根據這堂課與教材陪你一起釐清。</p>
   {% for m in course.messages %}<article class="chat-message {{ 'chat-user' if m.role=='user' else 'chat-assistant' }}"><strong>{{'你' if m.role=='user' else 'AI 老師'}}</strong><p class="prewrap">{{m.content}}</p>{% if m.model_name and m.role=='assistant' %}<small>模型：{{m.model_name}}</small>{% endif %}</article>{% endfor %}
-  <form method="post" class="chat-composer"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="ask"><textarea name="question" rows="3" maxlength="1500" placeholder="例如：可以再換一個例子嗎？我為什麼會把 LEFT JOIN 當成 INNER JOIN？"></textarea><button class="action">問 AI 老師</button></form>
+  <form method="post" class="chat-composer"><input type="hidden" name="csrf_token" value="{{csrf_token}}"><input type="hidden" name="action" value="ask"><textarea name="question" rows="3" placeholder="例如：可以再換一個例子嗎？我為什麼會把 LEFT JOIN 當成 INNER JOIN？"></textarea><button class="action">問 AI 老師</button></form>
 </section>
 <section class="panel-card course-tools"><h2>課程依據與學習資訊</h2><div class="pipeline-view">
   <span class="pill">弱項 {{course.weakness.mastery if course.weakness.mastery is not none else '未測驗'}}{% if course.weakness.mastery is not none %}%{% endif %}</span> → <span class="pill">Concept {{course.concept_name}}</span> → <span class="pill">RAG {{course.evidence|length}} chunks</span> → <span class="pill">{{course.generation_model}}</span> → <span class="pill">互動教學</span> → <span class="pill">Checkpoint / 再測</span>

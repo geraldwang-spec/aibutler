@@ -7,6 +7,7 @@
 | 通用文字 LLM | Groq API | `qwen/qwen3.8-27b` | 實際使用，單一 `GROQ_API_KEY` |
 | 題目知識概念／Concept 分類 | Groq API | `qwen/qwen3.8-27b` | 實際使用，單一 `GROQ_API_KEY` |
 | 文件 / 題庫 LLM 解析 | Groq API | `qwen/qwen3.8-27b` | 實際使用，單一 `GROQ_API_KEY` |
+| PDF 圖片／閱讀題組缺答推定 | Groq API | `qwen/qwen3.8-27b` | 新增；`VISION_MODEL` 可覆寫，共用 `GROQ_API_KEY`；結果需人工核對 |
 | Embedding / RAG / 相似度 | Ollama | `bge-m3` | 實際使用 |
 | 動態出題 | Groq | `qwen/qwen3.8-27b` | 有 API Key 時使用 |
 | 出題審核 | Groq | `qwen/qwen3.8-27b` | 有 API Key 時使用 |
@@ -16,6 +17,10 @@
 | 中文語音輸出 | Local | Kokoro `Kokoro-82M-v1.1-zh` | 安裝後可用 |
 
 ## Fallback 規則
+
+實際角色模型以本機 `.env` 為準。2026-10-10 測試時文字解析為
+`openai/gpt-oss-20b`，新增視覺推定預設為 `qwen/qwen3.8-27b`；CPU OCR
+使用 RapidOCR。視覺失敗不會改用不支援圖片的文字模型猜測圖像。
 
 Groq 未設定、逾時或不可用時，Generator / Reviewer / Course / Tutor 依目前設定回退到本機 Ollama `qwen3.5:4b`。Embedding 使用 `bge-m3`。
 

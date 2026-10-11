@@ -72,7 +72,7 @@ def limited(bucket, maximum, seconds):
     return False
 
 
-def send_code(email, code):
+def send_code(email, code, preview=False):
     config = current_app.config
     if not all(config.get(k) for k in ('SMTP_HOST','SMTP_PORT','SMTP_USERNAME','SMTP_PASSWORD','SMTP_FROM_EMAIL')):
         raise ValueError('無法發送：管理員尚未設定寄信信箱與 SMTP 金鑰。')
@@ -84,11 +84,16 @@ def send_code(email, code):
     except (ValueError, TypeError):
         raise ValueError('無法發送：SMTP 連接埠、寄件信箱或加密設定有誤。')
     message = EmailMessage()
-    message['Subject'] = '考試智伴｜註冊驗證碼'
+    message['Subject'] = ('樣板預覽｜' if preview else '')+'考試智伴｜註冊驗證碼'
     from email.utils import formataddr
     message['From'] = formataddr((config['SMTP_FROM_NAME'], sender))
     message['To'] = email
     message.set_content(f'您的註冊驗證碼為：{code}\n\n有效時間為 30 分鐘，請勿將驗證碼交給他人。\n若您未申請註冊，請忽略此信。')
+    if preview:
+        message.set_content(f'這是驗證信的樣板預覽，展示碼 {code} 不能用於註冊，並未建立驗證紀錄。\n正式驗證碼的有效時間為 30 分鐘。')
+    # Email rendering must not depend on browser session/context processors.
+    html=current_app.jinja_env.get_template('emails/verification.html').render(code=code,email=email,preview=preview)
+    message.add_alternative(html,subtype='html')
     context = ssl.create_default_context()
     if config['SMTP_SECURITY'] == 'ssl':
         client = smtplib.SMTP_SSL(config['SMTP_HOST'], port, timeout=15, context=context)

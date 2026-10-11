@@ -103,8 +103,11 @@ def render_subject_workspace(table, values, error, edit_id):
         (SELECT COUNT(*) FROM source_question_items sc WHERE sc.chapter_id=c.id) AS source_count
         FROM chapters c WHERE c.subject_id=? ORDER BY c.order_no,c.id''',(sid,)).fetchall() if sid else []
     tree=chapter_tree(chapters)
+    by_id={row['id']:row for row in tree}
     for chapter in tree:
         chapter['scope_ids']=[chapter['id']]+[row['id'] for row in tree if str(chapter['id']) in row['ancestors'].split()]
+        chapter['path_label']=' / '.join([by_id[int(cid)]['chapter_name'] for cid in chapter['ancestors'].split()]+[chapter['chapter_name']])
+    excluded_parents=set(next((row['scope_ids'] for row in tree if row['id']==active_edit),[])) if table=='chapters' else set()
     chapter_values=values if table=='chapters' and values else {
         'subject_id':sid,'parent_chapter_id':request.args.get('parent_id',type=int),
         'order_no':min(999,max((r['order_no'] or 0 for r in chapters),default=0)+1)}
@@ -114,10 +117,10 @@ def render_subject_workspace(table, values, error, edit_id):
         subject_values=values if table=='subjects' else {},chapter_values=chapter_values,
         subject_edit_id=active_edit if table=='subjects' else None,
         chapter_edit_id=active_edit if table=='chapters' else None,
-        subject_form_open=table=='subjects' and (active_edit or error),
-        chapter_form_open=(table=='chapters' and (active_edit or error)) or request.args.get('parent_id'),
+        subject_form_open=table=='subjects' and (active_edit or error or request.args.get('new_subject')),
+        chapter_form_open=(table=='chapters' and (active_edit or error)) or request.args.get('parent_id') or request.args.get('new_chapter'),
         choices={'subject_id':[(r['id'],r['subject_name']) for r in subjects],
-                 'parent_chapter_id':[(r['id'],'　'*min(r['depth'],5)+r['chapter_name']) for r in tree if table!='chapters' or r['id']!=active_edit]},
+                 'parent_chapter_id':[(r['id'],r['path_label']) for r in tree if r['id'] not in excluded_parents]},
         question_total=sum(r['question_count'] for r in tree),source_total=sum(r['source_count'] for r in tree))
 
 

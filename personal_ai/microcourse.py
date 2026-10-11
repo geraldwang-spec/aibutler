@@ -346,8 +346,6 @@ def ask_course_tutor(user_id: int, course_id: int, question: str):
     question = (question or "").strip()
     if not question:
         raise ValueError("請輸入問題。")
-    if len(question) > 1500:
-        raise ValueError("問題不可超過 1500 字。")
     validate_user_text(question)
     question=redact_text(question)
     from .rag import related
