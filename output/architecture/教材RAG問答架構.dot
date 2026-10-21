@@ -1,0 +1,41 @@
+digraph rag {
+
+graph [bgcolor="white", pad="0.45", nodesep="0.42", ranksep="0.58", splines=polyline, fontname="Microsoft JhengHei", fontsize=25, fontcolor="#24324B", labelloc=t];
+node [shape=box, style="rounded,filled", fillcolor="#F3F0FF", color="#A99BD0", penwidth=1.5, fontname="Microsoft JhengHei", fontsize=21, fontcolor="#24324B", margin="0.22,0.17"];
+edge [color="#738399", penwidth=1.65, arrowsize=0.8, fontname="Microsoft JhengHei", fontsize=15, fontcolor="#506078"];
+
+rankdir=TB;
+label="核心：教材 RAG 問答架構
+依使用者、科目與章節限定教材來源";
+subgraph cluster_ingest {
+  label="教材建立"; color="#BDCFDF"; bgcolor="#FAFCFF"; style="rounded"; margin=20;
+  FILE [label="使用者上傳教材
+PDF／Word／文字", fillcolor="#EAF2FF", color="#8AAAD2", fixedsize=true, width=3.153, height=1.236];
+  PARSE [label="本機解析與必要 OCR
+保留原檔、頁碼與來源資訊", fixedsize=true, width=4.167, height=1.236];
+  CHUNK [label="切成知識片段
+保留片段與教材的對應關係", fixedsize=true, width=4.167, height=1.236];
+  DB [label="MariaDB
+教材、片段及來源定位", shape=cylinder, fillcolor="#EAF7F1", color="#8CB8A2", fixedsize=true, width=3.583, height=1.236];
+  FILE -> PARSE -> CHUNK -> DB;
+}
+ASK [label="使用者提出問題
+指定科目／章節", fillcolor="#EAF2FF", color="#8AAAD2", fixedsize=true, width=2.708, height=1.236];
+{rank=same; DB; ASK;}
+FILTER [label="範圍檢索
+先限制使用者、科目與章節", fixedsize=true, width=4.167, height=1.236];
+DB -> FILTER [label="範圍內教材", fixedsize=true, width=2.125, height=0.799];
+ASK -> FILTER [label="問題與選取範圍", fixedsize=true, width=2.708, height=0.799];
+RANK [label="詞彙檢索＋CPU E5 語意重排
+選出相關教材片段", fixedsize=true, width=4.347, height=1.236];
+LLM [label="LLM 整理回答
+根據片段說明並附來源編號", fillcolor="#FFF5E7", color="#D3B387", fixedsize=true, width=4.167, height=1.236];
+CHECK [label="引用檢查與教材支持複核
+依據不足時不顯示無支持答案", fillcolor="#FFF5E7", color="#D3B387", fixedsize=true, width=4.458, height=1.236];
+ANSWER [label="呈現回答與教材來源
+保存對話紀錄", fillcolor="#EAF7F1", color="#8CB8A2", fixedsize=true, width=3.292, height=1.236];
+FILTER -> RANK -> LLM -> CHECK -> ANSWER;
+NOTE [label="RAG 負責檢索與限縮依據；LLM 負責理解與整理，不是重新訓練模型。
+目前為 MariaDB 文字儲存＋本機混合檢索，非獨立向量資料庫。", shape=plain, fillcolor="white", fontsize=17, fontcolor="#596780"];
+ANSWER -> NOTE [style=invis];
+}
